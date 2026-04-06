@@ -468,6 +468,174 @@ static void test_superblock() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Test 6: Warp-Parallel Counter (Strength Reduction)
+// ═══════════════════════════════════════════════════════════════
+
+static void test_warp_counter() {
+    printf("\n╔═══════════════════════════════════════╗\n");
+    printf("║  TEST 6: Warp Counter (strength-reduce) ║\n");
+    printf("╚═══════════════════════════════════════╝\n");
+
+    const uint64_t base = 0x10000;
+    const uint32_t ITERATIONS = 1000000;  // 1M iterations
+
+    uint8_t prog[32] = {};
+    // li r3, 0
+    { uint32_t i = ppc_dform(14, 3, 0, 0); uint32_t be = bswap32_h(i); memcpy(prog, &be, 4); }
+    // lis r4, hi(ITERATIONS) + ori r4, r4, lo(ITERATIONS)
+    {
+      uint16_t hi = (uint16_t)(ITERATIONS >> 16);
+      uint16_t lo = (uint16_t)(ITERATIONS & 0xFFFF);
+      uint32_t i1 = ppc_dform(15, 4, 0, (int16_t)hi);
+      uint32_t i2 = ppc_dform(24, 4, 4, (int16_t)lo);
+      uint32_t b1 = bswap32_h(i1); memcpy(prog + 4, &b1, 4);
+      uint32_t b2 = bswap32_h(i2); memcpy(prog + 8, &b2, 4);
+    }
+    // addi r3, r3, 1
+    { uint32_t i = ppc_dform(14, 3, 3, 1); uint32_t be = bswap32_h(i); memcpy(prog + 12, &be, 4); }
+    // cmpw cr0, r3, r4
+    { uint32_t i = ppc_xform(31, 0, 3, 4, 0, 0); uint32_t be = bswap32_h(i); memcpy(prog + 16, &be, 4); }
+    // blt cr0, -8
+    { uint32_t i = ppc_bform(16, 12, 0, -8, 0, 0); uint32_t be = bswap32_h(i); memcpy(prog + 20, &be, 4); }
+    // sc
+    { uint32_t i = ppc_sc(); uint32_t be = bswap32_h(i); memcpy(prog + 24, &be, 4); }
+
+    uint8_t* d_mem;
+    cudaMalloc(&d_mem, PS3_SANDBOX_SIZE);
+    cudaMemset(d_mem, 0, PS3_SANDBOX_SIZE);
+    cudaMemcpy(d_mem + base, prog, sizeof(prog), cudaMemcpyHostToDevice);
+
+    PPCJITState jitState;
+    ppc_jit_init(&jitState);
+    PPEState state = {};
+    state.pc = base;
+
+    // First run: compiles + caches
+    float ms1 = 0;
+    uint32_t cycles = 0;
+    ppc_jit_run_warp(&jitState, &state, d_mem, ITERATIONS * 4 + 100, &ms1, &cycles);
+
+    // Second run: cached cubin — true sustained throughput
+    state = {};
+    state.pc = base;
+    float ms2 = 0;
+    ppc_jit_run_warp(&jitState, &state, d_mem, ITERATIONS * 4 + 100, &ms2, &cycles);
+
+    uint64_t totalInsns = (uint64_t)ITERATIONS * 3 + 4;
+    double mips_cold = (double)totalInsns / (ms1 * 1000.0);
+    double mips_cached = (double)totalInsns / (ms2 * 1000.0);
+    printf("  Warp counter: r3=%llu (expect %u)\n",
+           (unsigned long long)state.gpr[3], ITERATIONS);
+    printf("  Cold (compile): %.2f ms → %.1f MIPS\n", ms1, mips_cold);
+    printf("  Cached (cubin): %.2f ms → %.1f MIPS\n", ms2, mips_cached);
+
+    bool pass = (state.gpr[3] == ITERATIONS);
+    if (pass) {
+        printf("  Result: ✅ PASS (%.1f MIPS cached, %.0f%% of real PS3 PPE)\n",
+               mips_cached, mips_cached / 3200.0 * 100.0);
+        total_pass++;
+    } else {
+        printf("  Result: ❌ FAIL (r3=%llu)\n", (unsigned long long)state.gpr[3]);
+        total_fail++;
+    }
+    ppc_jit_shutdown(&jitState);
+    cudaFree(d_mem);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Test 7: Warp-Parallel Array Sum (Memory Loop)
+// ═══════════════════════════════════════════════════════════════
+
+static void test_warp_array_sum() {
+    printf("\n╔═══════════════════════════════════════╗\n");
+    printf("║  TEST 7: Warp Array Sum (32-thread)     ║\n");
+    printf("╚═══════════════════════════════════════╝\n");
+
+    const uint64_t base = 0x10000;    // code
+    const uint64_t arr  = 0x200000;   // array data
+    const uint32_t N    = 100000;     // 100K elements
+    const uint64_t arrEnd = arr + (uint64_t)N * 4;
+
+    // Fill array: elem[i] = i+1 → expected sum = N*(N+1)/2
+    uint32_t* h_arr = (uint32_t*)malloc(N * 4);
+    for (uint32_t i = 0; i < N; i++) {
+        uint32_t val = i + 1;
+        h_arr[i] = bswap32_h(val);
+    }
+
+    // PPC program: array sum
+    uint8_t prog[64] = {};
+    int off = 0;
+    // li r3, 0 (accumulator)
+    { uint32_t i = ppc_dform(14, 3, 0, 0); uint32_t be = bswap32_h(i); memcpy(prog+off, &be, 4); off+=4; }
+    // lis r6, hi(arr)
+    { uint32_t i = ppc_dform(15, 6, 0, (int16_t)(arr >> 16)); uint32_t be = bswap32_h(i); memcpy(prog+off, &be, 4); off+=4; }
+    // ori r6, r6, lo(arr)
+    { uint32_t i = ppc_dform(24, 6, 6, (int16_t)(arr & 0xFFFF)); uint32_t be = bswap32_h(i); memcpy(prog+off, &be, 4); off+=4; }
+    // lis r7, hi(arrEnd)
+    { uint32_t i = ppc_dform(15, 7, 0, (int16_t)(arrEnd >> 16)); uint32_t be = bswap32_h(i); memcpy(prog+off, &be, 4); off+=4; }
+    // ori r7, r7, lo(arrEnd)
+    { uint32_t i = ppc_dform(24, 7, 7, (int16_t)(arrEnd & 0xFFFF)); uint32_t be = bswap32_h(i); memcpy(prog+off, &be, 4); off+=4; }
+    // loop: lwz r5, 0(r6)
+    { uint32_t i = ppc_dform(32, 5, 6, 0); uint32_t be = bswap32_h(i); memcpy(prog+off, &be, 4); off+=4; }
+    // add r3, r3, r5 (XO=266)
+    { uint32_t i = ppc_xform(31, 3, 3, 5, 266, 0); uint32_t be = bswap32_h(i); memcpy(prog+off, &be, 4); off+=4; }
+    // addi r6, r6, 4
+    { uint32_t i = ppc_dform(14, 6, 6, 4); uint32_t be = bswap32_h(i); memcpy(prog+off, &be, 4); off+=4; }
+    // cmpw cr0, r6, r7
+    { uint32_t i = ppc_xform(31, 0, 6, 7, 0, 0); uint32_t be = bswap32_h(i); memcpy(prog+off, &be, 4); off+=4; }
+    // blt cr0, -16
+    { uint32_t i = ppc_bform(16, 12, 0, -16, 0, 0); uint32_t be = bswap32_h(i); memcpy(prog+off, &be, 4); off+=4; }
+    // sc
+    { uint32_t i = ppc_sc(); uint32_t be = bswap32_h(i); memcpy(prog+off, &be, 4); off+=4; }
+
+    uint8_t* d_mem;
+    cudaMalloc(&d_mem, PS3_SANDBOX_SIZE);
+    cudaMemset(d_mem, 0, PS3_SANDBOX_SIZE);
+    cudaMemcpy(d_mem + base, prog, off, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_mem + arr, h_arr, N * 4, cudaMemcpyHostToDevice);
+    free(h_arr);
+
+    PPCJITState jitState;
+    ppc_jit_init(&jitState);
+    PPEState state = {};
+    state.pc = base;
+
+    // First run: compiles + caches
+    float ms1 = 0;
+    uint32_t cycles = 0;
+    ppc_jit_run_warp(&jitState, &state, d_mem, N * 6 + 100, &ms1, &cycles);
+
+    uint64_t expected_sum = (uint64_t)N * (uint64_t)(N + 1) / 2;
+
+    // Second run: cached cubin
+    state = {};
+    state.pc = base;
+    float ms2 = 0;
+    ppc_jit_run_warp(&jitState, &state, d_mem, N * 6 + 100, &ms2, &cycles);
+
+    uint64_t totalInsns = (uint64_t)N * 5 + 6;
+    double mips_cold = (double)totalInsns / (ms1 * 1000.0);
+    double mips_cached = (double)totalInsns / (ms2 * 1000.0);
+    printf("  Array sum: r3=%llu (expect %llu)\n",
+           (unsigned long long)state.gpr[3], (unsigned long long)expected_sum);
+    printf("  Cold (compile): %.2f ms → %.1f MIPS\n", ms1, mips_cold);
+    printf("  Cached (cubin): %.2f ms → %.1f MIPS\n", ms2, mips_cached);
+
+    bool pass = (state.gpr[3] == expected_sum);
+    if (pass) {
+        printf("  Result: ✅ PASS (%.1f MIPS cached, 32-thread warp)\n", mips_cached);
+        total_pass++;
+    } else {
+        printf("  Result: ❌ FAIL (got %llu, expected %llu)\n",
+               (unsigned long long)state.gpr[3], (unsigned long long)expected_sum);
+        total_fail++;
+    }
+    ppc_jit_shutdown(&jitState);
+    cudaFree(d_mem);
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Main
 // ═══════════════════════════════════════════════════════════════
 
@@ -483,6 +651,8 @@ int main() {
     test_memory_loadstore();
     test_benchmark();
     test_superblock();
+    test_warp_counter();
+    test_warp_array_sum();
 
     printf("\n═══════════════════════════════════════════\n");
     printf("  Results: %d passed, %d failed\n", total_pass, total_fail);

@@ -2398,6 +2398,641 @@ static int emit_insn(char* buf, size_t bufSize, size_t* pos,
     return (int)(*pos - start);
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Warp-Parallel JIT: 32 GPU threads for loop distribution
+// Strength-reduces pure counter loops, distributes memory loops.
+// ═══════════════════════════════════════════════════════════════
+
+struct WarpLoopInfo {
+    bool canOptimize;
+    bool strengthReduce;  // pure counter → compute directly, no loop
+    bool warpParallel;    // memory loop → distribute across 32 threads
+    int inductReg;        // counter register (induction variable)
+    int64_t inductStep;   // increment per iteration
+    int boundReg;         // -1 if immediate
+    int64_t boundVal;     // immediate bound value
+    int cmpField;         // CR field for comparison
+    int cmpCond;          // 0=LT, 1=GT
+    // Memory loop specifics
+    int loadReg;          // register loaded from memory (-1 if none)
+    int loadBase;         // base register for load
+    int16_t loadOffset;   // displacement for load
+    int accumReg;         // accumulator register (-1 if none)
+    int ptrReg;           // pointer induction register
+    int64_t ptrStep;      // pointer step per iteration
+    int bodyInsns;        // total PPC insns per iteration (including cmp+branch)
+};
+
+static bool analyzeWarpLoop(const PPCBasicBlock& blk, WarpLoopInfo* w) {
+    memset(w, 0, sizeof(*w));
+    w->inductReg = w->loadReg = w->accumReg = w->ptrReg = w->boundReg = -1;
+    if (blk.numInsns < 2) return false;
+
+    const PPCDecodedInsn& bc = blk.insns[blk.numInsns - 1];
+    if (bc.opcd != OP_BC) return false;
+
+    // Find compare instruction
+    int ci = -1;
+    for (int i = (int)blk.numInsns - 2; i >= 0; i--) {
+        auto& d = blk.insns[i];
+        if (d.opcd == OP_CMPI || d.opcd == OP_CMPLI ||
+            (d.opcd == OP_GRP31 && (d.xo == XO_CMP || d.xo == XO_CMPL))) {
+            ci = i; break;
+        }
+    }
+    if (ci < 0) return false;
+
+    auto& cmp = blk.insns[ci];
+    w->cmpField = cmp.rd >> 2;
+    int cc = cmp.ra;
+
+    if (cmp.opcd == OP_CMPI || cmp.opcd == OP_CMPLI) {
+        w->boundReg = -1;
+        w->boundVal = cmp.imm;
+    } else {
+        w->boundReg = cmp.rb;
+    }
+
+    int crBit = bc.bi % 4;
+    bool onSet = (bc.bo & 0x08) != 0;
+    if (crBit == 0 && onSet) w->cmpCond = 0;       // loop while LT
+    else if (crBit == 1 && onSet) w->cmpCond = 1;   // loop while GT
+    else return false;
+
+    // Analyze body instructions (before compare)
+    bool hasLoad = false, hasStore = false;
+    bool isInduct[32] = {};
+    int64_t indStep[32] = {};
+
+    for (int i = 0; i < ci; i++) {
+        auto& di = blk.insns[i];
+        switch (di.opcd) {
+        case OP_ADDI:
+            if (di.ra == di.rd && di.ra != 0) {
+                isInduct[di.rd] = true;
+                indStep[di.rd] = di.imm;
+            }
+            break;
+        case OP_GRP31:
+            if (di.xo == XO_ADD) {
+                // add rD, rA, rB — check if rD == rA (accumulator pattern)
+                if (di.rd == di.ra && di.rb != di.rd)
+                    w->accumReg = di.rd;
+                else if (di.rd == di.rb && di.ra != di.rd)
+                    w->accumReg = di.rd;
+            }
+            break;
+        case OP_LWZ: case OP_LHZ: case OP_LBZ:
+            hasLoad = true;
+            w->loadReg = di.rd;
+            w->loadBase = di.ra;
+            w->loadOffset = (int16_t)di.imm;
+            break;
+        case OP_STW: case OP_STH: case OP_STB:
+            hasStore = true; break;
+        default: break;
+        }
+    }
+
+    if (!isInduct[cc]) return false;
+    w->inductReg = cc;
+    w->inductStep = indStep[cc];
+    w->bodyInsns = blk.numInsns;
+
+    if (!hasLoad && !hasStore) {
+        w->strengthReduce = true;
+        w->canOptimize = true;
+    } else if (hasLoad && w->accumReg >= 0 && !hasStore) {
+        // Memory load-accumulate loop
+        int lb = w->loadBase;
+        if (lb > 0 && isInduct[lb]) {
+            w->ptrReg = lb;
+            w->ptrStep = indStep[lb];
+            w->warpParallel = true;
+            w->canOptimize = true;
+        } else if (lb == cc) {
+            w->ptrReg = cc;
+            w->ptrStep = w->inductStep;
+            w->warpParallel = true;
+            w->canOptimize = true;
+        }
+    }
+    return w->canOptimize;
+}
+
+int ppc_jit_run_warp(PPCJITState* state, ppc::PPEState* h_state,
+                     uint8_t* d_mem, uint32_t maxCycles,
+                     float* outMs, uint32_t* outCycles) {
+    cudaEvent_t tStart, tStop;
+    cudaEventCreate(&tStart); cudaEventCreate(&tStop);
+    cudaEventRecord(tStart);
+
+    CUfunction cuFunc = nullptr;
+    bool cached = false;
+
+    // ── Check cubin cache ──
+    for (uint32_t i = 0; i < state->numEntries; i++) {
+        if (state->cache[i].valid && state->cache[i].entryPC == h_state->pc) {
+            cuFunc = (CUfunction)state->cache[i].cuFunction;
+            cached = true;
+            state->cacheHits++;
+            state->cache[i].hitCount++;
+            break;
+        }
+    }
+
+    if (!cached) {
+    size_t copySize = 64 * 1024 * 1024;
+    if (copySize > PS3_SANDBOX_SIZE) copySize = PS3_SANDBOX_SIZE;
+    uint8_t* h_mem = (uint8_t*)malloc(copySize);
+    cudaMemcpy(h_mem, d_mem, copySize, cudaMemcpyDeviceToHost);
+
+    // Phase 1: Block discovery (same BFS as superblock)
+    PPCBasicBlock blocks[MAX_SUPERBLOCKS];
+    int numBlocks = 0;
+    uint64_t queue[MAX_SUPERBLOCKS * 2];
+    int qH = 0, qT = 0;
+    queue[qT++] = h_state->pc;
+
+    while (qH < qT && numBlocks < MAX_SUPERBLOCKS) {
+        uint64_t pc = queue[qH++];
+        bool dup = false;
+        for (int i = 0; i < numBlocks; i++)
+            if (blocks[i].entryPC == pc) { dup = true; break; }
+        if (dup || pc >= copySize) continue;
+
+        PPCBasicBlock& blk = blocks[numBlocks];
+        if (ppc_jit_discover_block(h_mem, pc, &blk) <= 0) continue;
+        numBlocks++;
+
+        const PPCDecodedInsn& last = blk.insns[blk.numInsns - 1];
+        if (last.isBranch) {
+            if (last.opcd == OP_B) {
+                int64_t d = LI26(last.raw);
+                uint64_t t = last.aa ? (uint64_t)d : last.pc + (uint64_t)d;
+                if (t < copySize && qT < MAX_SUPERBLOCKS*2) queue[qT++] = t;
+            } else if (last.opcd == OP_BC) {
+                int64_t d = BD16(last.raw);
+                uint64_t t = last.aa ? (uint64_t)d : last.pc + (uint64_t)d;
+                uint64_t f = last.pc + 4;
+                if (t < copySize && qT < MAX_SUPERBLOCKS*2) queue[qT++] = t;
+                if (f < copySize && qT < MAX_SUPERBLOCKS*2) queue[qT++] = f;
+            }
+            uint64_t f = last.pc + 4;
+            if (f < copySize && qT < MAX_SUPERBLOCKS*2) queue[qT++] = f;
+        }
+    }
+    if (numBlocks == 0) { free(h_mem); cudaEventDestroy(tStart); cudaEventDestroy(tStop); return 0; }
+
+    // Phase 2: Register merge + loop analysis
+    bool allGPR[32]={}, allFPR[32]={};
+    bool needCR=false, needLR=false, needCTR=false, needXER=false;
+    uint32_t totalInsns = 0;
+
+    bool isLoop[MAX_SUPERBLOCKS] = {};
+    uint64_t loopFall[MAX_SUPERBLOCKS] = {};
+    WarpLoopInfo warp[MAX_SUPERBLOCKS] = {};
+
+    for (int b = 0; b < numBlocks; b++) {
+        for (int i = 0; i < 32; i++) {
+            if (blocks[b].usesGPR[i]||blocks[b].writesGPR[i]) allGPR[i]=true;
+            if (blocks[b].usesFPR[i]||blocks[b].writesFPR[i]) allFPR[i]=true;
+        }
+        if (blocks[b].usesCR||blocks[b].writesCR) needCR=true;
+        if (blocks[b].usesLR||blocks[b].writesLR) needLR=true;
+        if (blocks[b].usesCTR||blocks[b].writesCTR) needCTR=true;
+        if (blocks[b].usesXER||blocks[b].writesXER) needXER=true;
+        totalInsns += blocks[b].numInsns;
+
+        const PPCDecodedInsn& last = blocks[b].insns[blocks[b].numInsns-1];
+        if (last.opcd == OP_BC) {
+            int64_t d = BD16(last.raw);
+            uint64_t t = last.aa ? (uint64_t)d : last.pc + (uint64_t)d;
+            if (t == blocks[b].entryPC) {
+                isLoop[b] = true;
+                loopFall[b] = last.pc + 4;
+                analyzeWarpLoop(blocks[b], &warp[b]);
+            }
+        }
+    }
+    if (needCR) needXER = true;
+
+    // Phase 3: Emit warp-parallel kernel
+    size_t srcSize = MAX_SOURCE_SIZE;
+    char* src = (char*)malloc(srcSize);
+    size_t pos = 0;
+
+    // Header + type defs
+    emit(src, srcSize, &pos,
+        "// PPE Warp-Parallel: %d blocks, %u insns\n"
+        "typedef unsigned int uint32_t;\ntypedef int int32_t;\n"
+        "typedef unsigned short uint16_t;\ntypedef short int16_t;\n"
+        "typedef unsigned char uint8_t;\ntypedef signed char int8_t;\n"
+        "typedef unsigned long long uint64_t;\ntypedef long long int64_t;\n\n",
+        numBlocks, totalInsns);
+
+    // Helpers (byte-swap, memory, CR, rotate) — same as superblock
+    emit(src, srcSize, &pos,
+        "__device__ __forceinline__ uint32_t bswap32(uint32_t x) { return __byte_perm(x, 0, 0x0123); }\n"
+        "__device__ __forceinline__ uint16_t bswap16(uint16_t x) { return (uint16_t)__byte_perm((uint32_t)x, 0, 0x0001); }\n"
+        "__device__ __forceinline__ uint64_t bswap64(uint64_t x) {\n"
+        "    uint32_t lo = (uint32_t)x, hi = (uint32_t)(x >> 32);\n"
+        "    return ((uint64_t)bswap32(lo) << 32) | (uint64_t)bswap32(hi);\n"
+        "}\n");
+    emit(src, srcSize, &pos,
+        "static const uint64_t SANDBOX = 0x%llxULL;\n"
+        "__device__ __forceinline__ uint32_t mem_rd32(const uint8_t* m, uint64_t a) { uint32_t r; memcpy(&r, m+(a&(SANDBOX-1)), 4); return bswap32(r); }\n"
+        "__device__ __forceinline__ uint16_t mem_rd16(const uint8_t* m, uint64_t a) { uint16_t r; memcpy(&r, m+(a&(SANDBOX-1)), 2); return bswap16(r); }\n"
+        "__device__ __forceinline__ uint8_t mem_rd8(const uint8_t* m, uint64_t a) { return m[a&(SANDBOX-1)]; }\n"
+        "__device__ __forceinline__ void mem_wr32(uint8_t* m, uint64_t a, uint32_t v) { uint32_t s=bswap32(v); memcpy(m+(a&(SANDBOX-1)),&s,4); }\n"
+        "__device__ __forceinline__ void mem_wr16(uint8_t* m, uint64_t a, uint16_t v) { uint16_t s=bswap16(v); memcpy(m+(a&(SANDBOX-1)),&s,2); }\n"
+        "__device__ __forceinline__ void mem_wr8(uint8_t* m, uint64_t a, uint8_t v) { m[a&(SANDBOX-1)]=v; }\n",
+        (unsigned long long)PS3_SANDBOX_SIZE);
+    emit(src, srcSize, &pos,
+        "__device__ __forceinline__ float mem_rdf32(const uint8_t* m, uint64_t a) { uint32_t b=mem_rd32(m,a); float f; memcpy(&f,&b,4); return f; }\n"
+        "__device__ __forceinline__ double mem_rdf64(const uint8_t* m, uint64_t a) { uint64_t b=bswap64(*(const uint64_t*)(m+(a&(SANDBOX-1)))); double d; memcpy(&d,&b,8); return d; }\n"
+        "__device__ __forceinline__ void mem_wrf32(uint8_t* m, uint64_t a, float f) { uint32_t b; memcpy(&b,&f,4); mem_wr32(m,a,b); }\n"
+        "__device__ __forceinline__ void mem_wrf64(uint8_t* m, uint64_t a, double d) { uint64_t b; memcpy(&b,&d,8); uint64_t s=bswap64(b); memcpy(m+(a&(SANDBOX-1)),&s,8); }\n\n");
+    emit(src, srcSize, &pos,
+        "__device__ __forceinline__ void setCR(uint32_t& cr, int field, int64_t result, uint64_t xer) {\n"
+        "    uint32_t val=0; if(result<0) val=0x8; else if(result>0) val=0x4; else val=0x2;\n"
+        "    if(xer&(1ULL<<31)) val|=0x1; int shift=(7-field)*4; cr=(cr&~(0xFu<<shift))|(val<<shift);\n"
+        "}\n"
+        "__device__ __forceinline__ bool getCRBit(uint32_t cr, int bit) { return (cr>>(31-bit))&1; }\n"
+        "__device__ __forceinline__ bool getCA(uint64_t xer) { return (xer>>29)&1; }\n"
+        "__device__ __forceinline__ void setCA(uint64_t& xer, bool ca) { xer=ca?(xer|(1ULL<<29)):(xer&~(1ULL<<29)); }\n"
+        "__device__ __forceinline__ uint32_t rotl32(uint32_t v, uint32_t n) { n&=31; return (v<<n)|(v>>(32-n)); }\n"
+        "__device__ __forceinline__ uint32_t rotateMask32(uint32_t mb, uint32_t me) {\n"
+        "    uint32_t mask=0;\n"
+        "    if(mb<=me) { for(uint32_t i=mb;i<=me;i++) mask|=(1u<<(31-i)); }\n"
+        "    else { for(uint32_t i=0;i<=me;i++) mask|=(1u<<(31-i)); for(uint32_t i=mb;i<=31;i++) mask|=(1u<<(31-i)); }\n"
+        "    return mask;\n"
+        "}\n\n");
+
+    // Warp shuffle helpers for 64-bit types
+    emit(src, srcSize, &pos,
+        "__device__ __forceinline__ uint64_t _shfl64(unsigned mask, uint64_t v, int src) {\n"
+        "    uint32_t lo = __shfl_sync(mask, (unsigned)(v), src);\n"
+        "    uint32_t hi = __shfl_sync(mask, (unsigned)(v >> 32), src);\n"
+        "    return ((uint64_t)hi << 32) | (uint64_t)lo;\n"
+        "}\n"
+        "__device__ __forceinline__ uint64_t _shfl64_down(unsigned mask, uint64_t v, int delta) {\n"
+        "    uint32_t lo = __shfl_down_sync(mask, (unsigned)(v), delta);\n"
+        "    uint32_t hi = __shfl_down_sync(mask, (unsigned)(v >> 32), delta);\n"
+        "    return ((uint64_t)hi << 32) | (uint64_t)lo;\n"
+        "}\n\n");
+
+    // Kernel signature — 32 threads (1 warp)
+    emit(src, srcSize, &pos,
+        "extern \"C\" __global__ void ppc_warp_superblock(\n"
+        "    uint64_t* __restrict__ gpr,\n"
+        "    double*   __restrict__ fpr,\n"
+        "    uint64_t* __restrict__ spr,\n"
+        "    uint32_t* __restrict__ cr_ptr,\n"
+        "    uint8_t*  __restrict__ mem)\n"
+        "{\n"
+        "    const int _tid = threadIdx.x;\n\n");
+
+    // Register promotion: declare all, thread 0 loads real values
+    for (int i = 0; i < 32; i++)
+        if (allGPR[i]) emit(src, srcSize, &pos, "    uint64_t r%d = 0;\n", i);
+    for (int i = 0; i < 32; i++)
+        if (allFPR[i]) emit(src, srcSize, &pos, "    double f%d = 0;\n", i);
+    if (needLR)  emit(src, srcSize, &pos, "    uint64_t lr = 0;\n");
+    if (needCTR) emit(src, srcSize, &pos, "    uint64_t ctr = 0;\n");
+    if (needXER) emit(src, srcSize, &pos, "    uint64_t xer = 0;\n");
+    if (needCR)  emit(src, srcSize, &pos, "    uint32_t cr = 0;\n");
+    emit(src, srcSize, &pos,
+        "    uint64_t pc = 0;\n"
+        "    uint32_t cycles = 0;\n"
+        "    const uint32_t MAX_CYC = %uu;\n\n", maxCycles);
+
+    // Thread 0 loads actual register state
+    emit(src, srcSize, &pos, "    if (_tid == 0) {\n");
+    for (int i = 0; i < 32; i++)
+        if (allGPR[i]) emit(src, srcSize, &pos, "        r%d = gpr[%d];\n", i, i);
+    for (int i = 0; i < 32; i++)
+        if (allFPR[i]) emit(src, srcSize, &pos, "        f%d = fpr[%d];\n", i, i);
+    if (needLR)  emit(src, srcSize, &pos, "        lr = spr[0];\n");
+    if (needCTR) emit(src, srcSize, &pos, "        ctr = spr[1];\n");
+    if (needXER) emit(src, srcSize, &pos, "        xer = spr[2];\n");
+    emit(src, srcSize, &pos, "        pc = spr[3];\n");
+    if (needCR)  emit(src, srcSize, &pos, "        cr = *cr_ptr;\n");
+    emit(src, srcSize, &pos, "    }\n\n");
+
+    // Broadcast initial state to all 32 threads
+    for (int i = 0; i < 32; i++)
+        if (allGPR[i]) emit(src, srcSize, &pos, "    r%d = _shfl64(0xffffffffu, r%d, 0);\n", i, i);
+    if (needLR)  emit(src, srcSize, &pos, "    lr = _shfl64(0xffffffffu, lr, 0);\n");
+    if (needCTR) emit(src, srcSize, &pos, "    ctr = _shfl64(0xffffffffu, ctr, 0);\n");
+    if (needXER) emit(src, srcSize, &pos, "    xer = _shfl64(0xffffffffu, xer, 0);\n");
+    emit(src, srcSize, &pos, "    pc = _shfl64(0xffffffffu, pc, 0);\n");
+    if (needCR) emit(src, srcSize, &pos, "    cr = __shfl_sync(0xffffffffu, cr, 0);\n");
+    emit(src, srcSize, &pos, "    cycles = __shfl_sync(0xffffffffu, cycles, 0);\n\n");
+
+    // Dispatch loop
+    emit(src, srcSize, &pos,
+        "    while (cycles < MAX_CYC) {\n"
+        "        uint64_t nextPC = pc + 4;\n"
+        "        switch (pc) {\n");
+
+    // Emit each block
+    for (int b = 0; b < numBlocks; b++) {
+        const PPCBasicBlock& blk = blocks[b];
+        emit(src, srcSize, &pos, "        case 0x%llxULL: {\n",
+             (unsigned long long)blk.entryPC);
+
+        if (isLoop[b] && warp[b].strengthReduce) {
+            // ── STRENGTH-REDUCED LOOP ──
+            // Compute result directly, no loop
+            emit(src, srcSize, &pos,
+                "            // STRENGTH-REDUCED (pure counter → direct compute)\n"
+                "            if (_tid == 0) {\n");
+
+            char bndExpr[128];
+            if (warp[b].boundReg >= 0)
+                snprintf(bndExpr, sizeof(bndExpr), "(int64_t)(int32_t)(uint32_t)r%d", warp[b].boundReg);
+            else
+                snprintf(bndExpr, sizeof(bndExpr), "(int64_t)%lldLL", (long long)warp[b].boundVal);
+
+            emit(src, srcSize, &pos,
+                "                int64_t _start = (int64_t)(int32_t)(uint32_t)r%d;\n"
+                "                int64_t _bound = %s;\n"
+                "                int64_t _step = %lldLL;\n",
+                warp[b].inductReg, bndExpr, (long long)warp[b].inductStep);
+
+            if (warp[b].cmpCond == 0) { // LT
+                emit(src, srcSize, &pos,
+                    "                int64_t _trip = (_bound > _start && _step > 0) ? ((_bound - _start + _step - 1) / _step) : 0;\n");
+            } else { // GT
+                emit(src, srcSize, &pos,
+                    "                int64_t _trip = (_start > _bound && _step < 0) ? ((_start - _bound + (-_step) - 1) / (-_step)) : 0;\n");
+            }
+
+            emit(src, srcSize, &pos,
+                "                r%d = (uint64_t)(_start + _trip * _step);\n"
+                "                setCR(cr, %d, (int64_t)(int32_t)(uint32_t)r%d - %s, xer);\n"
+                "                cycles += (uint32_t)_trip * %uu;\n"
+                "                pc = 0x%llxULL;\n"
+                "            }\n",
+                warp[b].inductReg,
+                warp[b].cmpField, warp[b].inductReg, bndExpr,
+                (unsigned)warp[b].bodyInsns,
+                (unsigned long long)loopFall[b]);
+
+            // Broadcast updated state
+            emit(src, srcSize, &pos,
+                "            pc = _shfl64(0xffffffffu, pc, 0);\n"
+                "            cycles = __shfl_sync(0xffffffffu, cycles, 0);\n"
+                "            r%d = _shfl64(0xffffffffu, r%d, 0);\n"
+                "            cr = __shfl_sync(0xffffffffu, cr, 0);\n",
+                warp[b].inductReg, warp[b].inductReg);
+
+        } else if (isLoop[b] && warp[b].warpParallel) {
+            // ── WARP-PARALLEL MEMORY LOOP ──
+            emit(src, srcSize, &pos,
+                "            // WARP-PARALLEL (32 threads, load-accumulate)\n"
+                "            {\n");
+
+            char bndExpr[128];
+            if (warp[b].boundReg >= 0)
+                snprintf(bndExpr, sizeof(bndExpr), "(int64_t)(int32_t)(uint32_t)r%d", warp[b].boundReg);
+            else
+                snprintf(bndExpr, sizeof(bndExpr), "(int64_t)%lldLL", (long long)warp[b].boundVal);
+
+            emit(src, srcSize, &pos,
+                "                int64_t _start = (int64_t)(int32_t)(uint32_t)r%d;\n"
+                "                int64_t _bound = %s;\n"
+                "                uint64_t _trip = (_bound > _start) ? (uint64_t)((_bound - _start) / %lldLL) : 0ULL;\n",
+                warp[b].inductReg, bndExpr, (long long)warp[b].inductStep);
+
+            // Save initial pointer and accumulator
+            emit(src, srcSize, &pos,
+                "                uint64_t _ptr_init = r%d;\n"
+                "                uint64_t _local_acc = 0;\n",
+                warp[b].ptrReg);
+
+            // Distribute iterations across 32 threads
+            emit(src, srcSize, &pos,
+                "                for (uint64_t _i = (uint64_t)_tid; _i < _trip; _i += 32ULL) {\n"
+                "                    uint64_t _addr = _ptr_init + _i * %lldULL;\n"
+                "                    _local_acc += (uint64_t)mem_rd32(mem, _addr + %dLL);\n"
+                "                }\n",
+                (long long)warp[b].ptrStep,
+                (int)warp[b].loadOffset);
+
+            // Warp reduction
+            emit(src, srcSize, &pos,
+                "                for (int _off = 16; _off > 0; _off >>= 1)\n"
+                "                    _local_acc += _shfl64_down(0xffffffffu, _local_acc, _off);\n");
+
+            // Thread 0 writes final results
+            emit(src, srcSize, &pos,
+                "                if (_tid == 0) {\n"
+                "                    r%d += _local_acc;\n"
+                "                    r%d = _ptr_init + _trip * %lldULL;\n"
+                "                    setCR(cr, %d, 0LL, xer);\n"
+                "                    cycles += (uint32_t)(_trip * %uULL);\n"
+                "                    pc = 0x%llxULL;\n"
+                "                }\n"
+                "            }\n",
+                warp[b].accumReg,
+                warp[b].ptrReg, (long long)warp[b].ptrStep,
+                warp[b].cmpField,
+                (unsigned)warp[b].bodyInsns,
+                (unsigned long long)loopFall[b]);
+
+            // Broadcast updated state
+            emit(src, srcSize, &pos,
+                "            pc = _shfl64(0xffffffffu, pc, 0);\n"
+                "            cycles = __shfl_sync(0xffffffffu, cycles, 0);\n"
+                "            r%d = _shfl64(0xffffffffu, r%d, 0);\n"
+                "            r%d = _shfl64(0xffffffffu, r%d, 0);\n"
+                "            cr = __shfl_sync(0xffffffffu, cr, 0);\n",
+                warp[b].accumReg, warp[b].accumReg,
+                warp[b].ptrReg, warp[b].ptrReg);
+
+        } else if (isLoop[b]) {
+            // ── SERIAL LOOP FALLBACK ──
+            emit(src, srcSize, &pos, "            // SERIAL LOOP (not parallelizable)\n");
+            emit(src, srcSize, &pos, "            if (_tid == 0) {\n");
+            emit(src, srcSize, &pos, "                do {\n");
+            for (uint32_t idx = 0; idx + 1 < blk.numInsns; idx++)
+                emit_insn(src, srcSize, &pos, blk.insns[idx], "                    ");
+            emit(src, srcSize, &pos, "                    cycles += %u;\n", blk.numInsns);
+
+            const PPCDecodedInsn& bc = blk.insns[blk.numInsns - 1];
+            uint32_t bo_val = bc.bo, bi_val = bc.bi;
+            bool useCTR = !(bo_val & 0x04);
+            bool useCond = !(bo_val & 0x10);
+            if (useCTR) emit(src, srcSize, &pos, "                    ctr--;\n");
+            emit(src, srcSize, &pos, "                } while (");
+            bool needAnd = false;
+            if (useCTR) { emit(src, srcSize, &pos, "(ctr %s 0)", (bo_val & 0x02)?"==":"!="); needAnd=true; }
+            if (useCond) {
+                if (needAnd) emit(src, srcSize, &pos, " && ");
+                emit(src, srcSize, &pos, "%sgetCRBit(cr,%u)", (bo_val & 0x08)?"":"!", bi_val);
+                needAnd=true;
+            }
+            if (!useCTR && !useCond) emit(src, srcSize, &pos, "true");
+            emit(src, srcSize, &pos, " && cycles < MAX_CYC);\n");
+            emit(src, srcSize, &pos, "                pc = 0x%llxULL;\n", (unsigned long long)loopFall[b]);
+            emit(src, srcSize, &pos, "            }\n");
+
+            // Broadcast
+            emit(src, srcSize, &pos,
+                "            pc = _shfl64(0xffffffffu, pc, 0);\n"
+                "            cycles = __shfl_sync(0xffffffffu, cycles, 0);\n");
+            for (int i = 0; i < 32; i++)
+                if (blk.writesGPR[i]) emit(src, srcSize, &pos, "            r%d = _shfl64(0xffffffffu, r%d, 0);\n", i, i);
+            if (blk.writesCR) emit(src, srcSize, &pos, "            cr = __shfl_sync(0xffffffffu, cr, 0);\n");
+
+        } else {
+            // ── SERIAL BLOCK (non-loop) ──
+            emit(src, srcSize, &pos, "            if (_tid == 0) {\n");
+            for (uint32_t idx = 0; idx < blk.numInsns; idx++)
+                emit_insn(src, srcSize, &pos, blk.insns[idx], "                ");
+            emit(src, srcSize, &pos, "                pc = nextPC;\n");
+            emit(src, srcSize, &pos, "                cycles += %u;\n", blk.numInsns);
+            emit(src, srcSize, &pos, "            }\n");
+
+            // Broadcast modified registers
+            emit(src, srcSize, &pos,
+                "            pc = _shfl64(0xffffffffu, pc, 0);\n"
+                "            cycles = __shfl_sync(0xffffffffu, cycles, 0);\n");
+            for (int i = 0; i < 32; i++)
+                if (blk.writesGPR[i]) emit(src, srcSize, &pos, "            r%d = _shfl64(0xffffffffu, r%d, 0);\n", i, i);
+            if (blk.writesCR) emit(src, srcSize, &pos, "            cr = __shfl_sync(0xffffffffu, cr, 0);\n");
+            if (blk.writesLR) emit(src, srcSize, &pos, "            lr = _shfl64(0xffffffffu, lr, 0);\n");
+            if (blk.writesCTR) emit(src, srcSize, &pos, "            ctr = _shfl64(0xffffffffu, ctr, 0);\n");
+        }
+
+        emit(src, srcSize, &pos, "            break;\n        }\n");
+    }
+
+    // Default: exit
+    emit(src, srcSize, &pos,
+        "        default:\n"
+        "            goto done;\n"
+        "        }\n"
+        "    }\n"
+        "done:\n");
+
+    // Epilogue: thread 0 writes back
+    emit(src, srcSize, &pos, "    if (_tid == 0) {\n");
+    for (int i = 0; i < 32; i++)
+        if (allGPR[i]) emit(src, srcSize, &pos, "        gpr[%d] = r%d;\n", i, i);
+    for (int i = 0; i < 32; i++)
+        if (allFPR[i]) emit(src, srcSize, &pos, "        fpr[%d] = f%d;\n", i, i);
+    if (needLR)  emit(src, srcSize, &pos, "        spr[0] = lr;\n");
+    if (needCTR) emit(src, srcSize, &pos, "        spr[1] = ctr;\n");
+    if (needXER) emit(src, srcSize, &pos, "        spr[2] = xer;\n");
+    emit(src, srcSize, &pos, "        spr[3] = pc;\n");
+    if (needCR)  emit(src, srcSize, &pos, "        *cr_ptr = cr;\n");
+    emit(src, srcSize, &pos, "        spr[4] = (cycles >= MAX_CYC) ? 0 : 1;\n");
+    emit(src, srcSize, &pos, "    }\n}\n");
+
+    // Phase 4: NVRTC compile
+    fprintf(stderr, "[PPC-WARP] %d blocks, %u insns, %zu bytes source\n",
+            numBlocks, totalInsns, pos);
+
+    nvrtcProgram prog;
+    nvrtcCreateProgram(&prog, src, "ppc_warp.cu", 0, NULL, NULL);
+    const char* opts[] = { "--gpu-architecture=sm_70", "-use_fast_math",
+                           "--extra-device-vectorization", "-w" };
+    nvrtcResult compRes = nvrtcCompileProgram(prog, 4, opts);
+
+    if (compRes != NVRTC_SUCCESS) {
+        size_t logSize;
+        nvrtcGetProgramLogSize(prog, &logSize);
+        char* log = (char*)malloc(logSize + 1);
+        nvrtcGetProgramLog(prog, log); log[logSize] = 0;
+        fprintf(stderr, "[PPC-WARP] Compile FAILED:\n%s\n", log);
+        free(log); nvrtcDestroyProgram(&prog);
+        free(src); free(h_mem);
+        cudaEventDestroy(tStart); cudaEventDestroy(tStop);
+        return 0;
+    }
+
+    size_t ptxSize;
+    nvrtcGetPTXSize(prog, &ptxSize);
+    char* ptx = (char*)malloc(ptxSize);
+    nvrtcGetPTX(prog, ptx);
+    nvrtcDestroyProgram(&prog);
+    free(src);
+
+    CUmodule cuMod;
+    cuModuleLoadData(&cuMod, ptx);
+    cuModuleGetFunction(&cuFunc, cuMod, "ppc_warp_superblock");
+    free(ptx);
+
+    // Store in cubin cache
+    if (state->numEntries < MAX_BLOCKS) {
+        PPCJITEntry& e = state->cache[state->numEntries++];
+        e.entryPC = h_state->pc;
+        e.cuModule = cuMod;
+        e.cuFunction = cuFunc;
+        e.valid = true;
+        e.hitCount = 0;
+    }
+    state->compileCount++;
+    free(h_mem);
+    fprintf(stderr, "[PPC-WARP] Compiled OK (cached)\n");
+    } // end !cached
+
+    // Phase 5: Execute with 32 threads (1 warp)
+    cudaEvent_t execStart, execStop;
+    cudaEventCreate(&execStart); cudaEventCreate(&execStop);
+
+    uint64_t* d_gpr;  double* d_fpr;  uint64_t* d_spr;  uint32_t* d_cr;
+    cudaMalloc(&d_gpr, 32*sizeof(uint64_t));
+    cudaMalloc(&d_fpr, 32*sizeof(double));
+    cudaMalloc(&d_spr, 5*sizeof(uint64_t));
+    cudaMalloc(&d_cr, sizeof(uint32_t));
+
+    cudaMemcpy(d_gpr, h_state->gpr, 32*sizeof(uint64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_fpr, h_state->fpr, 32*sizeof(double), cudaMemcpyHostToDevice);
+    uint64_t spr_host[5] = { h_state->lr, h_state->ctr, h_state->xer, h_state->pc, 0 };
+    cudaMemcpy(d_spr, spr_host, 5*sizeof(uint64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_cr, &h_state->cr, sizeof(uint32_t), cudaMemcpyHostToDevice);
+
+    cudaEventRecord(execStart);
+    void* args[] = { &d_gpr, &d_fpr, &d_spr, &d_cr, &d_mem };
+    CUresult err = cuLaunchKernel(cuFunc, 1,1,1, 32,1,1, 0,0, args, NULL);
+    if (err != CUDA_SUCCESS)
+        fprintf(stderr, "[PPC-WARP] Launch failed: %d\n", err);
+    cudaEventRecord(execStop);
+    cudaEventSynchronize(execStop);
+    float execMs = 0;
+    cudaEventElapsedTime(&execMs, execStart, execStop);
+    fprintf(stderr, "[PPC-WARP] Exec: %.3f ms (kernel only, 32 threads)\n", execMs);
+    cudaEventDestroy(execStart); cudaEventDestroy(execStop);
+
+    // Read back
+    cudaMemcpy(h_state->gpr, d_gpr, 32*sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_state->fpr, d_fpr, 32*sizeof(double), cudaMemcpyDeviceToHost);
+    cudaMemcpy(spr_host, d_spr, 5*sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&h_state->cr, d_cr, sizeof(uint32_t), cudaMemcpyDeviceToHost);
+
+    h_state->lr  = spr_host[0];
+    h_state->ctr = spr_host[1];
+    h_state->xer = spr_host[2];
+    h_state->pc  = spr_host[3];
+    if (spr_host[4] != 0) h_state->halted = (uint32_t)spr_host[4];
+
+    cudaFree(d_gpr); cudaFree(d_fpr); cudaFree(d_spr); cudaFree(d_cr);
+
+    cudaEventRecord(tStop);
+    cudaEventSynchronize(tStop);
+    float ms = 0;
+    cudaEventElapsedTime(&ms, tStart, tStop);
+    cudaEventDestroy(tStart); cudaEventDestroy(tStop);
+
+    if (outMs) *outMs = ms;
+    if (outCycles) *outCycles = maxCycles;
+    return 1;
+}
+
 void ppc_jit_print_stats(const PPCJITState* state) {
     fprintf(stderr,
         "╔═══════════════════════════════════════╗\n"

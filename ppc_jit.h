@@ -136,6 +136,13 @@ int  ppc_jit_run_fast(PPCJITState* state, ppc::PPEState* h_state,
                       uint8_t* d_mem, uint32_t maxCycles,
                       float* outMs, uint32_t* outCycles);
 
+// Warp-parallel JIT: 32 GPU threads for loop parallelism.
+// Strength-reduces pure counter loops (infinite IPC),
+// distributes memory loops across 32 warp lanes (32× speedup).
+int  ppc_jit_run_warp(PPCJITState* state, ppc::PPEState* h_state,
+                      uint8_t* d_mem, uint32_t maxCycles,
+                      float* outMs, uint32_t* outCycles);
+
 void ppc_jit_print_stats(const PPCJITState* state);
 
 void ppc_jit_shutdown(PPCJITState* state);
