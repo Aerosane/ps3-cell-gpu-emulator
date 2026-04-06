@@ -1,0 +1,293 @@
+#pragma once
+// rsx_defs.h — RSX Reality Synthesizer definitions
+//
+// NV47-class GPU (G70/GeForce 7800 GTX derivative) as used in PlayStation 3.
+// Defines command FIFO format, NV4097 3D methods, and GPU state structures.
+
+#include <cstdint>
+
+namespace rsx {
+
+// ═══════════════════════════════════════════════════════════════════
+// PS3 Memory Map for RSX
+// ═══════════════════════════════════════════════════════════════════
+
+static constexpr uint64_t VRAM_BASE       = 0x10000000ULL;  // 256MB VRAM
+static constexpr uint64_t VRAM_SIZE       = 256ULL * 1024 * 1024;
+static constexpr uint64_t RSX_CTRL_BASE   = 0x40000000ULL;  // Control registers
+static constexpr uint32_t FIFO_SIZE       = 1024 * 1024;    // 1MB command buffer
+
+// ═══════════════════════════════════════════════════════════════════
+// FIFO Control Registers (offsets from RSX_CTRL_BASE)
+// ═══════════════════════════════════════════════════════════════════
+
+static constexpr uint32_t CTRL_PUT = 0x10;  // Write pointer
+static constexpr uint32_t CTRL_GET = 0x14;  // Read pointer
+static constexpr uint32_t CTRL_REF = 0x18;  // Reference value
+
+// ═══════════════════════════════════════════════════════════════════
+// NV4097 3D Engine Methods (subchannel 0)
+// ═══════════════════════════════════════════════════════════════════
+
+// Object / control
+static constexpr uint32_t NV4097_SET_OBJECT              = 0x00000000;
+static constexpr uint32_t NV4097_NO_OPERATION             = 0x00000100;
+static constexpr uint32_t NV4097_SET_CONTEXT_DMA_NOTIFIES = 0x00000180;
+static constexpr uint32_t NV4097_SET_CONTEXT_DMA_COLOR_A  = 0x00000184;
+
+// Surface (render target) configuration
+static constexpr uint32_t NV4097_SET_SURFACE_FORMAT       = 0x00000200;
+static constexpr uint32_t NV4097_SET_SURFACE_CLIP_HORIZONTAL = 0x00000204;
+static constexpr uint32_t NV4097_SET_SURFACE_CLIP_VERTICAL   = 0x00000208;
+static constexpr uint32_t NV4097_SET_SURFACE_PITCH_A         = 0x0000020C;
+static constexpr uint32_t NV4097_SET_SURFACE_COLOR_AOFFSET   = 0x00000210;
+static constexpr uint32_t NV4097_SET_SURFACE_COLOR_BOFFSET   = 0x00000214;
+static constexpr uint32_t NV4097_SET_SURFACE_COLOR_TARGET    = 0x00000228;
+
+// Viewport / Scissor
+static constexpr uint32_t NV4097_SET_VIEWPORT_HORIZONTAL  = 0x00000A00;
+static constexpr uint32_t NV4097_SET_VIEWPORT_VERTICAL    = 0x00000A04;
+static constexpr uint32_t NV4097_SET_SCISSOR_HORIZONTAL   = 0x00000A08;
+static constexpr uint32_t NV4097_SET_SCISSOR_VERTICAL     = 0x00000A0C;
+
+// Depth / stencil state
+static constexpr uint32_t NV4097_SET_DEPTH_FUNC               = 0x00000300;
+static constexpr uint32_t NV4097_SET_DEPTH_TEST_ENABLE        = 0x00000304;
+static constexpr uint32_t NV4097_SET_BLEND_ENABLE             = 0x00000310;
+
+// Cull face
+static constexpr uint32_t NV4097_SET_CULL_FACE_ENABLE         = 0x00000B44;
+static constexpr uint32_t NV4097_SET_CULL_FACE                = 0x00000B48;
+
+// Shader programs
+static constexpr uint32_t NV4097_SET_SHADER_PROGRAM          = 0x000008E4;
+
+// Transform program (vertex shader)
+static constexpr uint32_t NV4097_SET_TRANSFORM_CONSTANT      = 0x00000A20;
+static constexpr uint32_t NV4097_SET_TRANSFORM_PROGRAM       = 0x00000B80;
+
+// Vertex arrays (16 slots, stride 4 per slot)
+static constexpr uint32_t NV4097_SET_VERTEX_DATA_ARRAY_OFFSET = 0x00001680;
+static constexpr uint32_t NV4097_SET_VERTEX_DATA_ARRAY_FORMAT = 0x00001740;
+
+// Draw commands
+static constexpr uint32_t NV4097_SET_BEGIN_END               = 0x00001808;
+static constexpr uint32_t NV4097_DRAW_ARRAYS               = 0x00001814;
+static constexpr uint32_t NV4097_DRAW_INDEX_ARRAY           = 0x0000181C;
+
+// Texture (16 units, stride 0x20 per unit)
+static constexpr uint32_t NV4097_SET_TEXTURE_OFFSET          = 0x00001A00;
+static constexpr uint32_t NV4097_SET_TEXTURE_FORMAT           = 0x00001A04;
+static constexpr uint32_t NV4097_SET_TEXTURE_CONTROL0         = 0x00001A0C;
+
+// Clear / present
+static constexpr uint32_t NV4097_SET_COLOR_CLEAR_VALUE       = 0x00001D90;
+static constexpr uint32_t NV4097_CLEAR_SURFACE               = 0x00001D94;
+
+// Transform program start address
+static constexpr uint32_t NV4097_SET_TRANSFORM_PROGRAM_START = 0x00001E94;
+
+// Flip (surface A offset for display flip)
+static constexpr uint32_t NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP = 0x00000E20;
+
+// Reference register
+static constexpr uint32_t NV4097_SET_REFERENCE               = 0x00000050;
+
+// ═══════════════════════════════════════════════════════════════════
+// Enumerations
+// ═══════════════════════════════════════════════════════════════════
+
+// Primitive types
+enum PrimitiveType : uint32_t {
+    PRIM_POINTS         = 1,
+    PRIM_LINES          = 2,
+    PRIM_LINE_STRIP     = 3,
+    PRIM_TRIANGLES      = 4,
+    PRIM_TRIANGLE_STRIP = 5,
+    PRIM_TRIANGLE_FAN   = 6,
+    PRIM_QUADS          = 7,
+    PRIM_QUAD_STRIP     = 8,
+};
+
+// Surface color formats
+enum SurfaceFormat : uint32_t {
+    SURFACE_R5G6B5         = 3,
+    SURFACE_X8R8G8B8       = 5,
+    SURFACE_A8R8G8B8       = 8,
+    SURFACE_F_W16Z16Y16X16 = 11,
+    SURFACE_F_W32Z32Y32X32 = 12,
+};
+
+// Depth buffer formats
+enum DepthFormat : uint32_t {
+    DEPTH_Z16   = 1,
+    DEPTH_Z24S8 = 2,
+};
+
+// Vertex attribute types
+enum VertexType : uint32_t {
+    VERTEX_S1     = 1,  // signed normalized 16-bit
+    VERTEX_F      = 2,  // 32-bit float
+    VERTEX_SF     = 3,  // 16-bit float
+    VERTEX_UB     = 4,  // unsigned byte
+    VERTEX_S32K   = 5,  // signed 16-bit
+    VERTEX_CMP    = 6,  // compressed (11/11/10)
+    VERTEX_UB256  = 7,  // unsigned byte (unscaled)
+};
+
+// Comparison functions (depth / alpha test)
+enum CompareFunc : uint32_t {
+    CMP_NEVER    = 0x0200,
+    CMP_LESS     = 0x0201,
+    CMP_EQUAL    = 0x0202,
+    CMP_LEQUAL   = 0x0203,
+    CMP_GREATER  = 0x0204,
+    CMP_NOTEQUAL = 0x0205,
+    CMP_GEQUAL   = 0x0206,
+    CMP_ALWAYS   = 0x0207,
+};
+
+// Clear surface mask bits
+static constexpr uint32_t CLEAR_COLOR   = 0x01;
+static constexpr uint32_t CLEAR_DEPTH   = 0x02;
+static constexpr uint32_t CLEAR_STENCIL = 0x04;
+
+// ═══════════════════════════════════════════════════════════════════
+// RSX GPU State — software shadow of hardware registers
+// ═══════════════════════════════════════════════════════════════════
+
+struct RSXState {
+    // FIFO control
+    uint32_t put;
+    uint32_t get;
+    uint32_t ref;
+
+    // Surface (render target)
+    uint32_t surfaceFormat;
+    uint32_t surfaceWidth;
+    uint32_t surfaceHeight;
+    uint32_t surfacePitchA;
+    uint32_t surfacePitchB;
+    uint32_t surfaceOffsetA;   // color buffer A offset in VRAM
+    uint32_t surfaceOffsetB;   // color buffer B
+    uint32_t surfaceColorTarget;
+    uint32_t depthOffset;
+    uint32_t depthPitch;
+    uint32_t depthFormat;
+
+    // Viewport / Scissor
+    uint16_t viewportX, viewportY, viewportW, viewportH;
+    uint16_t scissorX, scissorY, scissorW, scissorH;
+
+    // Clear
+    uint32_t colorClearValue;
+
+    // Depth / Stencil
+    bool     depthTestEnable;
+    uint32_t depthFunc;
+
+    // Blend
+    bool     blendEnable;
+
+    // Cull
+    bool     cullFaceEnable;
+    uint32_t cullFace;
+
+    // Vertex arrays (16 slots)
+    struct VertexArray {
+        uint32_t offset;
+        uint32_t format;    // type | (size << 4) | (stride << 8)
+        bool     enabled;
+    } vertexArrays[16];
+
+    // Vertex program (transform program)
+    uint32_t vpStart;           // start instruction index
+    uint32_t vpData[512 * 4];  // up to 512 instructions × 4 words each
+    uint32_t vpLoadOffset;      // current upload offset
+
+    // Fragment program
+    uint32_t fpOffset;   // VRAM offset of fragment program
+    uint32_t fpControl;
+
+    // Transform constants (256 × vec4)
+    float    vpConstants[256][4];
+
+    // Textures (16 units)
+    struct TextureUnit {
+        uint32_t offset;
+        uint32_t format;
+        uint32_t width, height;
+        uint32_t control0;
+        bool     enabled;
+    } textures[16];
+
+    // Draw state
+    PrimitiveType currentPrim;
+    bool          inBeginEnd;
+
+    // Statistics
+    uint32_t drawCallCount;
+    uint32_t triangleCount;
+    uint32_t cmdCount;
+    uint32_t frameCount;
+};
+
+// ═══════════════════════════════════════════════════════════════════
+// FIFO Command Header Parsing (NV47 format)
+// ═══════════════════════════════════════════════════════════════════
+
+struct FIFOCommand {
+    uint32_t method;       // register / method offset
+    uint32_t subchannel;   // 0-7
+    uint32_t count;        // number of data words following
+    bool     isJump;
+    bool     isCall;
+    bool     isReturn;
+    bool     isNonIncr;    // non-incrementing method
+    uint32_t jumpTarget;   // for jump / call
+};
+
+// NV47 header encoding:
+//   Bits [31:29] = type (0 = incrementing, 2 = non-incrementing)
+//   Bits [28:18] = count
+//   Bits [17:13] = subchannel
+//   Bits [12:2]  = method offset >> 2
+//   Bits [1:0]   = 0 for normal methods
+inline FIFOCommand parseFIFOHeader(uint32_t header) {
+    FIFOCommand cmd = {};
+
+    // Old-style jump (bit 29 set, bits [1:0] == 0)
+    if ((header & 0x20000003) == 0x20000000) {
+        cmd.isJump = true;
+        cmd.jumpTarget = header & 0x1FFFFFFC;
+        return cmd;
+    }
+    // New-style jump (bits [1:0] == 1)
+    if ((header & 0x00000003) == 0x00000001) {
+        cmd.isJump = true;
+        cmd.jumpTarget = header & 0xFFFFFFFC;
+        return cmd;
+    }
+    // Call (bits [1:0] == 2)
+    if ((header & 0x00000003) == 0x00000002) {
+        cmd.isCall = true;
+        cmd.jumpTarget = header & 0xFFFFFFFC;
+        return cmd;
+    }
+    // Return
+    if (header == 0x00020000) {
+        cmd.isReturn = true;
+        return cmd;
+    }
+
+    // Normal method header
+    uint32_t type  = (header >> 29) & 0x7;
+    cmd.count      = (header >> 18) & 0x7FF;
+    cmd.subchannel = (header >> 13) & 0x1F;
+    cmd.method     = ((header >> 2) & 0x7FF) << 2;
+    cmd.isNonIncr  = (type == 2);
+
+    return cmd;
+}
+
+} // namespace rsx
