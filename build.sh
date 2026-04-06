@@ -37,13 +37,19 @@ $NVCC $NVCC_FLAGS \
   -lnvrtc -lcuda \
   -o jit_test
 
-echo "[6/6] Building SPU Megakernel JIT..."
+echo "[6/7] Building SPU Megakernel JIT..."
 $NVCC $NVCC_FLAGS \
   test_mega_jit.cu spu_jit_mega.cu spu_interpreter.o \
   -lnvrtc -lcuda \
   -o mega_jit_test
 
+echo "[7/7] Building SPU Turbo JIT (register promotion + SPURS)..."
+$NVCC $NVCC_FLAGS \
+  test_turbo_jit.cu spu_jit_turbo.cu spu_jit_mega.cu spu_interpreter.o \
+  -lnvrtc -lcuda \
+  -o turbo_test
+
 echo ""
 echo "═══════════════════════════════════════════"
-echo "  ✅ Build complete: ./cell_test  ./jit_test  ./mega_jit_test"
+echo "  ✅ Build complete: ./cell_test  ./jit_test  ./mega_jit_test  ./turbo_test"
 echo "═══════════════════════════════════════════"

@@ -42,7 +42,13 @@ HBM2, with 512 MB of PS3 address space living in GPU global memory.
 | `spu_defs.h` | SPU 128-bit QWord registers, MFC DMA structures, channel enums, instruction format opcodes |
 | `spu_interpreter.cu` | CUDA SPU interpreter — ~80 instructions across all formats, MFC DMA, SHUFB, Local Store |
 | `cell_megakernel.cu` | Cooperative Cell BE hypervisor — PPE + 6×SPU via `cooperative_groups::grid`, atomic IPC |
+| `spu_jit.cu` | Phase 2a per-block NVRTC JIT compiler (superseded by mega) |
+| `spu_jit_mega.cu` | Phase 2b persistent megakernel JIT — BFS block discovery → single CUDA kernel |
+| `spu_jit_turbo.cu` | **Phase 2c turbo JIT** — register promotion + unrolled SIMD + multi-instance SPURS |
 | `test_cell.cu` | 5-test validation suite + PPE throughput benchmark |
+| `test_jit.cu` | Per-block JIT tests |
+| `test_mega_jit.cu` | Megakernel JIT tests (4/4 pass) |
+| `test_turbo_jit.cu` | Turbo JIT tests + SPURS multi-instance scaling (3/3 pass) |
 | `build.sh` | Build script targeting `sm_70` (V100) with relocatable device code |
 
 ## Building
@@ -58,13 +64,31 @@ bash build.sh
 ## Test Results (V100-PCIE-16GB)
 
 ```
-✅ Test 1: PPE Integer ALU          — add, mulli, store verified
-✅ Test 2: PPE Branch + Loop        — sum(1..10) = 55
-✅ Test 3: SPU 128-bit SIMD Integer — 4-wide add/sub across all lanes
-✅ Test 4: SPU Float4 SIMD          — fa, fm, fma on {1,2,3,4}×{5,6,7,8}
-✅ Test 5: Cell Cooperative Kernel   — PPE + SPU0 cross-block with grid.sync()
+Phase 1 — Interpreter:
+  ✅ Test 1: PPE Integer ALU          — add, mulli, store verified
+  ✅ Test 2: PPE Branch + Loop        — sum(1..10) = 55
+  ✅ Test 3: SPU 128-bit SIMD Integer — 4-wide add/sub across all lanes
+  ✅ Test 4: SPU Float4 SIMD          — fa, fm, fma on {1,2,3,4}×{5,6,7,8}
+  ✅ Test 5: Cell Cooperative Kernel   — PPE + SPU0 cross-block with grid.sync()
+  Benchmark: 1.3 MIPS (interpreter baseline)
 
-Benchmark: 2.5 MIPS (interpreter mode) = 0.1% of PS3 PPE @ 3200 MHz
+Phase 2b — Megakernel JIT:
+  ✅ 4/4 tests, 12.9 MIPS (10.1× over interpreter)
+
+Phase 2c — Turbo JIT (register promotion + SPURS):
+  ✅ Test 1: Turbo Correctness — float SIMD fa, fm, fma verified
+  ✅ Test 2: Triple Benchmark:
+    ┌─────────────────────────────────────────┐
+    │ Interpreter:   1.3 MIPS  (baseline)     │
+    │ MegaJIT:      12.9 MIPS  (10.1× interp) │
+    │ TurboJIT:     52.2 MIPS  (41.0× interp) │
+    │ Turbo/Mega:    4.0×                      │
+    └─────────────────────────────────────────┘
+  ✅ Test 3: SPURS Multi-Instance Scaling:
+      1 thread:    42.5 MIPS
+     80 threads:  3,364 MIPS   (79× scale)
+    640 threads: 26,074 MIPS  (613× scale)
+   5120 threads: 204,337 MIPS (4807× scale) ← 200 GIPS from 5120 CUDA cores!
 ```
 
 ## Key Design Decisions
@@ -79,12 +103,14 @@ Benchmark: 2.5 MIPS (interpreter mode) = 0.1% of PS3 PPE @ 3200 MHz
 
 ## Roadmap
 
-| Phase | Target | Approach |
-|---|---|---|
-| ✅ Phase 1 | Interpreter (2.5 MIPS) | Switch-dispatch loop, global mem fetch per insn |
-| 🔜 Phase 2 | SPU JIT (~500 MIPS) | Basic-block → native CUDA kernels, LS in shared mem |
-| Phase 3 | PPE AOT (~1000 MIPS) | LLVM IR → PTX for hot PPE blocks |
-| Phase 4 | RSX GPU | Vulkan command translation via VK_RT layer patterns |
+| Phase | Target | Approach | Status |
+|---|---|---|---|
+| Phase 1 | Interpreter (1.3 MIPS) | Switch-dispatch loop, global mem fetch per insn | ✅ Done |
+| Phase 2a | Per-block JIT (2.4×) | NVRTC basic-block → kernel per block | ✅ Done (superseded) |
+| Phase 2b | Megakernel JIT (12.9 MIPS) | All blocks → single persistent kernel | ✅ Done |
+| Phase 2c | Turbo JIT (52 MIPS / 204 GIPS) | Register promotion + SPURS multi-instance | ✅ Done |
+| Phase 3 | PPE AOT (~1000 MIPS) | LLVM IR → PTX for hot PPE blocks | 🔜 Next |
+| Phase 4 | RSX GPU | Vulkan command translation via VK_RT layer patterns | Planned |
 
 ## Lineage
 
