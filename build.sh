@@ -25,13 +25,19 @@ $NVCC $NVCC_FLAGS -c spu_interpreter.cu -o spu_interpreter.o
 echo "[3/4] Building Cell cooperative megakernel..."
 $NVCC $NVCC_FLAGS -rdc=true -c cell_megakernel.cu -o cell_megakernel.o
 
-echo "[4/4] Building test harness..."
+echo "[4/5] Building test harness..."
 $NVCC $NVCC_FLAGS -rdc=true \
   test_cell.cu ppc_interpreter.o spu_interpreter.o cell_megakernel.o \
   -lcudadevrt \
   -o cell_test
 
+echo "[5/5] Building SPU JIT compiler + tests..."
+$NVCC $NVCC_FLAGS \
+  test_jit.cu spu_jit.cu spu_interpreter.o \
+  -lnvrtc -lcuda \
+  -o jit_test
+
 echo ""
 echo "═══════════════════════════════════════════"
-echo "  ✅ Build complete: ./cell_test"
+echo "  ✅ Build complete: ./cell_test  ./jit_test"
 echo "═══════════════════════════════════════════"
