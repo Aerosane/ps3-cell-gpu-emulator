@@ -31,13 +31,19 @@ $NVCC $NVCC_FLAGS -rdc=true \
   -lcudadevrt \
   -o cell_test
 
-echo "[5/5] Building SPU JIT compiler + tests..."
+echo "[5/6] Building SPU JIT compiler + tests..."
 $NVCC $NVCC_FLAGS \
   test_jit.cu spu_jit.cu spu_interpreter.o \
   -lnvrtc -lcuda \
   -o jit_test
 
+echo "[6/6] Building SPU Megakernel JIT..."
+$NVCC $NVCC_FLAGS \
+  test_mega_jit.cu spu_jit_mega.cu spu_interpreter.o \
+  -lnvrtc -lcuda \
+  -o mega_jit_test
+
 echo ""
 echo "═══════════════════════════════════════════"
-echo "  ✅ Build complete: ./cell_test  ./jit_test"
+echo "  ✅ Build complete: ./cell_test  ./jit_test  ./mega_jit_test"
 echo "═══════════════════════════════════════════"
