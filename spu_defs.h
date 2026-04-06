@@ -303,6 +303,15 @@ namespace op11 {
     constexpr uint32_t RCHCNT   = 0x00F;  // Read Channel Count
     constexpr uint32_t WRCH     = 0x10D;  // Write Channel
 
+    // Sign extension
+    constexpr uint32_t XSBH     = 0x1B6;  // Extend Sign Byte to Halfword
+    constexpr uint32_t XSHW     = 0x1AE;  // Extend Sign Halfword to Word
+    constexpr uint32_t XSWD     = 0x1A6;  // Extend Sign Word to Doubleword
+
+    // Load/Store indexed (RR form)
+    constexpr uint32_t LQX      = 0x1C4;  // Load Quadword (rA+rB index)
+    constexpr uint32_t STQX     = 0x144;  // Store Quadword (rA+rB index)
+
     // Special
     constexpr uint32_t STOPD    = 0x140;  // Stop and Signal (debug)
     constexpr uint32_t NOP      = 0x201;  // No Operation (execute)
