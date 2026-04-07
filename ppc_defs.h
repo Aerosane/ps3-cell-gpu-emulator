@@ -341,32 +341,165 @@ static constexpr uint64_t PS3_SANDBOX_SIZE = PS3_RAM_SIZE + PS3_VRAM_SIZE;
 // ═══════════════════════════════════════════════════════════════
 
 enum LV2Syscall : uint32_t {
-    SYS_PROCESS_EXIT         = 1,
-    SYS_PROCESS_GETPID       = 2,
-    SYS_THREAD_CREATE        = 24,
-    SYS_THREAD_EXIT          = 25,
-    SYS_THREAD_JOIN          = 26,
-    SYS_MUTEX_CREATE         = 100,
-    SYS_MUTEX_LOCK           = 101,
-    SYS_MUTEX_UNLOCK         = 103,
-    SYS_COND_CREATE          = 110,
-    SYS_COND_WAIT            = 114,
-    SYS_COND_SIGNAL          = 115,
-    SYS_MEMORY_ALLOCATE      = 348,
-    SYS_MEMORY_FREE          = 349,
-    SYS_MEMORY_GET_PAGE_SIZE = 352,
-    SYS_SPU_THREAD_GROUP_CREATE  = 170,
+    // Process management
+    SYS_PROCESS_EXIT            = 1,
+    SYS_PROCESS_GETPID          = 2,
+    SYS_PROCESS_EXIT2           = 22,
+    SYS_PROCESS_EXIT3           = 3,
+    SYS_PROCESS_GET_SDK_VERSION = 25,
+    SYS_PROCESS_GET_PARAMSFO    = 30,
+
+    // PPU Thread management
+    SYS_PPU_THREAD_EXIT         = 41,
+    SYS_PPU_THREAD_YIELD        = 43,
+    SYS_PPU_THREAD_JOIN         = 44,
+    SYS_PPU_THREAD_DETACH       = 45,
+    SYS_PPU_THREAD_GET_JOIN_STATE = 46,
+    SYS_PPU_THREAD_SET_PRIORITY = 47,
+    SYS_PPU_THREAD_GET_PRIORITY = 48,
+    SYS_PPU_THREAD_GET_STACK_INFO = 49,
+    SYS_PPU_THREAD_CREATE       = 52,
+    SYS_PPU_THREAD_START        = 53,
+    SYS_PPU_THREAD_RENAME       = 56,
+
+    // Timer
+    SYS_TIMER_CREATE            = 70,
+    SYS_TIMER_DESTROY           = 71,
+    SYS_TIMER_GET_INFO          = 72,
+    SYS_TIMER_START             = 73,
+    SYS_TIMER_STOP              = 74,
+    SYS_TIMER_CONNECT_EVENT_QUEUE   = 75,
+    SYS_TIMER_DISCONNECT_EVENT_QUEUE = 76,
+
+    // Event flags
+    SYS_EVENT_FLAG_CREATE       = 82,
+    SYS_EVENT_FLAG_DESTROY      = 83,
+    SYS_EVENT_FLAG_WAIT         = 85,
+    SYS_EVENT_FLAG_TRYWAIT      = 86,
+    SYS_EVENT_FLAG_SET          = 87,
+    SYS_EVENT_FLAG_CLEAR        = 88,
+    SYS_EVENT_FLAG_CANCEL       = 89,
+
+    // Semaphore
+    SYS_SEMAPHORE_CREATE        = 90,
+    SYS_SEMAPHORE_DESTROY       = 91,
+    SYS_SEMAPHORE_WAIT          = 92,
+    SYS_SEMAPHORE_TRYWAIT       = 93,
+    SYS_SEMAPHORE_POST          = 94,
+    SYS_SEMAPHORE_GET_VALUE     = 114,
+
+    // Lightweight mutex
+    SYS_LWMUTEX_CREATE          = 95,
+    SYS_LWMUTEX_DESTROY         = 96,
+    SYS_LWMUTEX_LOCK            = 97,
+    SYS_LWMUTEX_UNLOCK          = 98,
+    SYS_LWMUTEX_TRYLOCK         = 99,
+
+    // Mutex
+    SYS_MUTEX_CREATE            = 100,
+    SYS_MUTEX_DESTROY           = 101,
+    SYS_MUTEX_LOCK              = 102,
+    SYS_MUTEX_TRYLOCK           = 103,
+    SYS_MUTEX_UNLOCK            = 104,
+
+    // Condition variable
+    SYS_COND_CREATE             = 105,
+    SYS_COND_DESTROY            = 106,
+    SYS_COND_WAIT               = 107,
+    SYS_COND_SIGNAL             = 108,
+    SYS_COND_SIGNAL_ALL         = 109,
+    SYS_COND_SIGNAL_TO          = 110,
+
+    // Lightweight condition variable
+    SYS_LWCOND_CREATE           = 111,
+    SYS_LWCOND_DESTROY          = 112,
+    SYS_LWCOND_QUEUE_WAIT       = 113,
+    SYS_LWCOND_SIGNAL           = 115,
+    SYS_LWCOND_SIGNAL_ALL       = 116,
+
+    // Event queue
+    SYS_EVENT_QUEUE_CREATE      = 128,
+    SYS_EVENT_QUEUE_DESTROY     = 129,
+    SYS_EVENT_QUEUE_RECEIVE     = 130,
+    SYS_EVENT_QUEUE_TRYRECEIVE  = 131,
+    SYS_EVENT_QUEUE_DRAIN       = 133,
+    SYS_EVENT_PORT_CREATE       = 134,
+    SYS_EVENT_PORT_DESTROY      = 135,
+    SYS_EVENT_PORT_CONNECT      = 136,
+    SYS_EVENT_PORT_DISCONNECT   = 137,
+
+    // Timebase
+    SYS_TICKS_GET               = 141,
+    SYS_TIME_GET_CURRENT_TIME   = 145,
+    SYS_TIME_GET_TIMEBASE_FREQUENCY = 147,
+
+    // SPU management
+    SYS_RAW_SPU_CREATE          = 160,
+    SYS_RAW_SPU_DESTROY         = 161,
+    SYS_SPU_THREAD_GET_EXIT_STATUS = 165,
+    SYS_SPU_THREAD_SET_ARGUMENT = 166,
+    SYS_SPU_THREAD_GROUP_CREATE = 170,
+    SYS_SPU_THREAD_GROUP_DESTROY = 171,
     SYS_SPU_THREAD_INITIALIZE   = 172,
-    SYS_SPU_THREAD_GROUP_START   = 173,
-    SYS_SPU_THREAD_GROUP_JOIN    = 178,
+    SYS_SPU_THREAD_GROUP_START  = 173,
+    SYS_SPU_THREAD_GROUP_SUSPEND = 174,
+    SYS_SPU_THREAD_GROUP_RESUME = 175,
+    SYS_SPU_THREAD_GROUP_TERMINATE = 177,
+    SYS_SPU_THREAD_GROUP_JOIN   = 178,
     SYS_SPU_THREAD_WRITE_LS     = 181,
     SYS_SPU_THREAD_READ_LS      = 182,
-    SYS_FS_OPEN              = 801,
-    SYS_FS_CLOSE             = 804,
-    SYS_FS_READ              = 802,
-    SYS_FS_WRITE             = 803,
-    SYS_FS_STAT              = 818,
-    SYS_TICKS_GET            = 141,
+    SYS_SPU_THREAD_WRITE_SNR    = 184,
+    SYS_SPU_THREAD_CONNECT_EVENT = 191,
+    SYS_SPU_THREAD_DISCONNECT_EVENT = 192,
+    SYS_SPU_THREAD_BIND_QUEUE   = 193,
+    SYS_SPU_THREAD_UNBIND_QUEUE = 194,
+    SYS_SPU_IMAGE_OPEN          = 156,
+    SYS_SPU_IMAGE_IMPORT        = 157,
+    SYS_SPU_IMAGE_CLOSE         = 158,
+
+    // Memory management
+    SYS_MEMORY_ALLOCATE         = 348,
+    SYS_MEMORY_FREE             = 349,
+    SYS_MEMORY_GET_PAGE_SIZE    = 352,
+    SYS_MMAPPER_ALLOCATE_ADDRESS = 330,
+    SYS_MMAPPER_ALLOCATE_SHARED_MEMORY = 332,
+    SYS_MMAPPER_MAP_SHARED_MEMORY = 333,
+    SYS_MMAPPER_UNMAP_SHARED_MEMORY = 334,
+    SYS_MMAPPER_FREE_SHARED_MEMORY = 335,
+
+    // PRX (shared library) management
+    SYS_PRX_LOAD_MODULE        = 480,
+    SYS_PRX_START_MODULE       = 481,
+    SYS_PRX_STOP_MODULE        = 482,
+    SYS_PRX_UNLOAD_MODULE      = 483,
+    SYS_PRX_REGISTER_MODULE    = 484,
+    SYS_PRX_GET_MODULE_LIST    = 494,
+    SYS_PRX_GET_MODULE_INFO    = 495,
+    SYS_PRX_GET_MODULE_ID_BY_NAME = 496,
+
+    // Filesystem
+    SYS_FS_OPEN                = 801,
+    SYS_FS_READ                = 802,
+    SYS_FS_WRITE               = 803,
+    SYS_FS_CLOSE               = 804,
+    SYS_FS_LSEEK               = 805,
+    SYS_FS_FSTAT               = 809,
+    SYS_FS_STAT                = 818,
+    SYS_FS_MKDIR               = 811,
+    SYS_FS_RENAME              = 812,
+    SYS_FS_RMDIR               = 813,
+    SYS_FS_UNLINK              = 814,
+    SYS_FS_OPENDIR             = 815,
+    SYS_FS_READDIR             = 816,
+    SYS_FS_CLOSEDIR            = 817,
+
+    // RSX (GPU) management
+    SYS_RSX_DEVICE_MAP         = 670,
+    SYS_RSX_DEVICE_UNMAP       = 671,
+    SYS_RSX_CONTEXT_ALLOCATE   = 672,
+    SYS_RSX_CONTEXT_FREE       = 673,
+    SYS_RSX_CONTEXT_IOMAP      = 674,
+    SYS_RSX_CONTEXT_ATTRIBUTE  = 676,
 };
 
 // ═══════════════════════════════════════════════════════════════

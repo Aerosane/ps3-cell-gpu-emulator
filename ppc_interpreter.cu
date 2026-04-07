@@ -106,30 +106,257 @@ __device__ __forceinline__ void mem_write64(uint8_t* mem, uint64_t addr, uint64_
 // HLE Syscall Handler
 // ═══════════════════════════════════════════════════════════════
 
+// HLE object ID counter (simple incrementing IDs for kernel objects)
+static __device__ uint32_t g_hle_next_id = 0x100;
+static __device__ uint64_t g_heapPtr = 0x10000000ULL; // bump allocator start at 256MB
+
+__device__ static uint32_t hle_alloc_id() {
+    return atomicAdd(&g_hle_next_id, 1);
+}
+
 __device__ static void handleSyscall(PPEState& s, uint8_t* mem, uint32_t* hle_log,
                                       volatile uint32_t* hle_signal) {
     uint32_t sc_num = (uint32_t)s.gpr[11]; // r11 = syscall number on CellOS
 
     switch (sc_num) {
+
+    // ─── Process management ──────────────────────────────────────
     case SYS_PROCESS_EXIT:
+    case SYS_PROCESS_EXIT2:
+    case SYS_PROCESS_EXIT3:
         s.halted = 1;
         break;
 
-    case SYS_TICKS_GET:
-        // Return a fake timebase tick (monotonic, 79.8 MHz on PS3)
-        s.gpr[3] = s.cycles * 10;  // rough approximation
+    case SYS_PROCESS_GETPID:
+        s.gpr[3] = 0x01000500ULL; // fake PID
         break;
 
+    case SYS_PROCESS_GET_SDK_VERSION:
+        s.gpr[3] = 0;             // CELL_OK
+        s.gpr[4] = 0x00470000ULL; // SDK 4.70
+        break;
+
+    case SYS_PROCESS_GET_PARAMSFO:
+        s.gpr[3] = 0; // CELL_OK (no SFO data)
+        break;
+
+    // ─── PPU Thread management ───────────────────────────────────
+    case SYS_PPU_THREAD_CREATE: {
+        // r3 = thread_id_ptr, r4 = entry, r5 = arg, r6 = prio, r7 = stacksize, r8 = flags
+        uint32_t tid = hle_alloc_id();
+        uint64_t tid_ptr = s.gpr[3];
+        if (tid_ptr && tid_ptr < PS3_SANDBOX_SIZE - 8)
+            mem_write64(mem, tid_ptr, tid);
+        s.gpr[3] = 0; // CELL_OK
+        if (hle_signal) atomicAdd((uint32_t*)hle_signal, 1);
+        break;
+    }
+    case SYS_PPU_THREAD_START:
+    case SYS_PPU_THREAD_DETACH:
+    case SYS_PPU_THREAD_RENAME:
+    case SYS_PPU_THREAD_SET_PRIORITY:
+        s.gpr[3] = 0; // CELL_OK
+        break;
+
+    case SYS_PPU_THREAD_EXIT:
+        s.halted = 1;
+        break;
+
+    case SYS_PPU_THREAD_YIELD:
+        s.gpr[3] = 0;
+        break;
+
+    case SYS_PPU_THREAD_JOIN:
+        s.gpr[3] = 0; // CELL_OK (single-thread: join returns immediately)
+        break;
+
+    case SYS_PPU_THREAD_GET_JOIN_STATE:
+        s.gpr[3] = 0;
+        s.gpr[4] = 0; // not joinable
+        break;
+
+    case SYS_PPU_THREAD_GET_PRIORITY:
+        s.gpr[3] = 0;
+        s.gpr[4] = 1000; // default priority
+        break;
+
+    case SYS_PPU_THREAD_GET_STACK_INFO:
+        // r3 = sp_info_ptr; write {addr, size}
+        if (s.gpr[3] && s.gpr[3] < PS3_SANDBOX_SIZE - 16) {
+            mem_write64(mem, s.gpr[3], 0x0D000000ULL);     // stack bottom
+            mem_write64(mem, s.gpr[3] + 8, 0x00100000ULL); // 1MB stack
+        }
+        s.gpr[3] = 0;
+        break;
+
+    // ─── Time ────────────────────────────────────────────────────
+    case SYS_TICKS_GET:
+        s.gpr[3] = s.cycles * 10; // ~79.8 MHz approximation
+        break;
+
+    case SYS_TIME_GET_CURRENT_TIME: {
+        // r3 = sec_ptr, r4 = nsec_ptr
+        uint64_t fake_sec = 1700000000ULL + s.cycles / 79800000ULL;
+        if (s.gpr[3] && s.gpr[3] < PS3_SANDBOX_SIZE - 8)
+            mem_write64(mem, s.gpr[3], fake_sec);
+        if (s.gpr[4] && s.gpr[4] < PS3_SANDBOX_SIZE - 8)
+            mem_write64(mem, s.gpr[4], 0);
+        s.gpr[3] = 0;
+        break;
+    }
+
+    case SYS_TIME_GET_TIMEBASE_FREQUENCY:
+        s.gpr[3] = 0;
+        s.gpr[4] = 79800000ULL; // 79.8 MHz
+        break;
+
+    // ─── Timer ───────────────────────────────────────────────────
+    case SYS_TIMER_CREATE:
+        s.gpr[3] = 0;
+        s.gpr[4] = hle_alloc_id();
+        break;
+    case SYS_TIMER_DESTROY:
+    case SYS_TIMER_GET_INFO:
+    case SYS_TIMER_START:
+    case SYS_TIMER_STOP:
+    case SYS_TIMER_CONNECT_EVENT_QUEUE:
+    case SYS_TIMER_DISCONNECT_EVENT_QUEUE:
+        s.gpr[3] = 0;
+        break;
+
+    // ─── Mutex ───────────────────────────────────────────────────
+    case SYS_MUTEX_CREATE: {
+        uint32_t id = hle_alloc_id();
+        if (s.gpr[3] && s.gpr[3] < PS3_SANDBOX_SIZE - 4)
+            mem_write32(mem, s.gpr[3], id);
+        s.gpr[3] = 0;
+        break;
+    }
+    case SYS_MUTEX_DESTROY:
+    case SYS_MUTEX_LOCK:
+    case SYS_MUTEX_TRYLOCK:
+    case SYS_MUTEX_UNLOCK:
+        s.gpr[3] = 0;
+        break;
+
+    // ─── Lightweight mutex ───────────────────────────────────────
+    case SYS_LWMUTEX_CREATE: {
+        uint32_t id = hle_alloc_id();
+        if (s.gpr[3] && s.gpr[3] < PS3_SANDBOX_SIZE - 4)
+            mem_write32(mem, s.gpr[3], id);
+        s.gpr[3] = 0;
+        break;
+    }
+    case SYS_LWMUTEX_DESTROY:
+    case SYS_LWMUTEX_LOCK:
+    case SYS_LWMUTEX_UNLOCK:
+    case SYS_LWMUTEX_TRYLOCK:
+        s.gpr[3] = 0;
+        break;
+
+    // ─── Condition variable ──────────────────────────────────────
+    case SYS_COND_CREATE: {
+        uint32_t id = hle_alloc_id();
+        if (s.gpr[3] && s.gpr[3] < PS3_SANDBOX_SIZE - 4)
+            mem_write32(mem, s.gpr[3], id);
+        s.gpr[3] = 0;
+        break;
+    }
+    case SYS_COND_DESTROY:
+    case SYS_COND_WAIT:
+    case SYS_COND_SIGNAL:
+    case SYS_COND_SIGNAL_ALL:
+    case SYS_COND_SIGNAL_TO:
+        s.gpr[3] = 0;
+        break;
+
+    // ─── Lightweight condition variable ──────────────────────────
+    case SYS_LWCOND_CREATE: {
+        uint32_t id = hle_alloc_id();
+        if (s.gpr[3] && s.gpr[3] < PS3_SANDBOX_SIZE - 4)
+            mem_write32(mem, s.gpr[3], id);
+        s.gpr[3] = 0;
+        break;
+    }
+    case SYS_LWCOND_DESTROY:
+    case SYS_LWCOND_QUEUE_WAIT:
+    case SYS_LWCOND_SIGNAL:
+    case SYS_LWCOND_SIGNAL_ALL:
+        s.gpr[3] = 0;
+        break;
+
+    // ─── Semaphore ───────────────────────────────────────────────
+    case SYS_SEMAPHORE_CREATE: {
+        uint32_t id = hle_alloc_id();
+        if (s.gpr[3] && s.gpr[3] < PS3_SANDBOX_SIZE - 4)
+            mem_write32(mem, s.gpr[3], id);
+        s.gpr[3] = 0;
+        break;
+    }
+    case SYS_SEMAPHORE_DESTROY:
+    case SYS_SEMAPHORE_WAIT:
+    case SYS_SEMAPHORE_TRYWAIT:
+    case SYS_SEMAPHORE_POST:
+        s.gpr[3] = 0;
+        break;
+    case SYS_SEMAPHORE_GET_VALUE:
+        s.gpr[3] = 0;
+        s.gpr[4] = 1; // value = 1
+        break;
+
+    // ─── Event flags ─────────────────────────────────────────────
+    case SYS_EVENT_FLAG_CREATE: {
+        uint32_t id = hle_alloc_id();
+        if (s.gpr[3] && s.gpr[3] < PS3_SANDBOX_SIZE - 4)
+            mem_write32(mem, s.gpr[3], id);
+        s.gpr[3] = 0;
+        break;
+    }
+    case SYS_EVENT_FLAG_DESTROY:
+    case SYS_EVENT_FLAG_WAIT:
+    case SYS_EVENT_FLAG_TRYWAIT:
+    case SYS_EVENT_FLAG_SET:
+    case SYS_EVENT_FLAG_CLEAR:
+    case SYS_EVENT_FLAG_CANCEL:
+        s.gpr[3] = 0;
+        break;
+
+    // ─── Event queue ─────────────────────────────────────────────
+    case SYS_EVENT_QUEUE_CREATE: {
+        uint32_t id = hle_alloc_id();
+        if (s.gpr[3] && s.gpr[3] < PS3_SANDBOX_SIZE - 4)
+            mem_write32(mem, s.gpr[3], id);
+        s.gpr[3] = 0;
+        break;
+    }
+    case SYS_EVENT_QUEUE_DESTROY:
+    case SYS_EVENT_QUEUE_DRAIN:
+        s.gpr[3] = 0;
+        break;
+    case SYS_EVENT_QUEUE_RECEIVE:
+    case SYS_EVENT_QUEUE_TRYRECEIVE:
+        s.gpr[3] = 0;
+        s.gpr[4] = 0; // no events (0 received)
+        break;
+    case SYS_EVENT_PORT_CREATE:
+        s.gpr[3] = 0;
+        s.gpr[4] = hle_alloc_id();
+        break;
+    case SYS_EVENT_PORT_DESTROY:
+    case SYS_EVENT_PORT_CONNECT:
+    case SYS_EVENT_PORT_DISCONNECT:
+        s.gpr[3] = 0;
+        break;
+
+    // ─── Memory management ───────────────────────────────────────
     case SYS_MEMORY_ALLOCATE: {
-        // r3 = size, r4 = alignment
-        // Bump allocator in upper RAM region
-        static __device__ uint64_t heapPtr = 0x10000000ULL; // start at 256MB
         uint64_t size = s.gpr[3];
         uint64_t align = s.gpr[4] ? s.gpr[4] : 4096;
-        heapPtr = (heapPtr + align - 1) & ~(align - 1);
-        s.gpr[3] = 0;           // CELL_OK
-        s.gpr[4] = heapPtr;     // allocated address
-        heapPtr += size;
+        uint64_t ptr = g_heapPtr;
+        ptr = (ptr + align - 1) & ~(align - 1);
+        s.gpr[3] = 0;       // CELL_OK
+        s.gpr[4] = ptr;     // allocated address
+        g_heapPtr = ptr + size;
         break;
     }
 
@@ -138,17 +365,143 @@ __device__ static void handleSyscall(PPEState& s, uint8_t* mem, uint32_t* hle_lo
         break;
 
     case SYS_MEMORY_GET_PAGE_SIZE:
-        s.gpr[3] = 0;      // CELL_OK
-        s.gpr[4] = 4096;   // 4KB pages
+        s.gpr[3] = 0;
+        s.gpr[4] = 4096; // 4KB
         break;
 
+    case SYS_MMAPPER_ALLOCATE_ADDRESS: {
+        // r3 = size, r4 = flags, r5 = alignment, r6 = alloc_addr_ptr
+        uint64_t size = s.gpr[3];
+        uint64_t align = s.gpr[5] ? s.gpr[5] : 0x100000;
+        uint64_t ptr = g_heapPtr;
+        ptr = (ptr + align - 1) & ~(align - 1);
+        if (s.gpr[6] && s.gpr[6] < PS3_SANDBOX_SIZE - 8)
+            mem_write64(mem, s.gpr[6], ptr);
+        g_heapPtr = ptr + size;
+        s.gpr[3] = 0;
+        break;
+    }
+    case SYS_MMAPPER_ALLOCATE_SHARED_MEMORY: {
+        uint32_t id = hle_alloc_id();
+        if (s.gpr[6] && s.gpr[6] < PS3_SANDBOX_SIZE - 4)
+            mem_write32(mem, s.gpr[6], id);
+        s.gpr[3] = 0;
+        break;
+    }
+    case SYS_MMAPPER_MAP_SHARED_MEMORY:
+    case SYS_MMAPPER_UNMAP_SHARED_MEMORY:
+    case SYS_MMAPPER_FREE_SHARED_MEMORY:
+        s.gpr[3] = 0;
+        break;
+
+    // ─── SPU management ──────────────────────────────────────────
     case SYS_SPU_THREAD_GROUP_CREATE:
+    case SYS_SPU_THREAD_GROUP_DESTROY:
     case SYS_SPU_THREAD_INITIALIZE:
     case SYS_SPU_THREAD_GROUP_START:
+    case SYS_SPU_THREAD_GROUP_SUSPEND:
+    case SYS_SPU_THREAD_GROUP_RESUME:
+    case SYS_SPU_THREAD_GROUP_TERMINATE:
     case SYS_SPU_THREAD_GROUP_JOIN:
-        // SPU management — signal host for cooperative dispatch
+    case SYS_SPU_THREAD_SET_ARGUMENT:
+    case SYS_SPU_THREAD_GET_EXIT_STATUS:
+    case SYS_SPU_THREAD_WRITE_LS:
+    case SYS_SPU_THREAD_READ_LS:
+    case SYS_SPU_THREAD_WRITE_SNR:
+    case SYS_SPU_THREAD_CONNECT_EVENT:
+    case SYS_SPU_THREAD_DISCONNECT_EVENT:
+    case SYS_SPU_THREAD_BIND_QUEUE:
+    case SYS_SPU_THREAD_UNBIND_QUEUE:
+    case SYS_RAW_SPU_CREATE:
+    case SYS_RAW_SPU_DESTROY:
         if (hle_signal) atomicAdd((uint32_t*)hle_signal, 1);
-        s.gpr[3] = 0; // CELL_OK
+        s.gpr[3] = 0;
+        break;
+
+    case SYS_SPU_IMAGE_OPEN:
+    case SYS_SPU_IMAGE_IMPORT:
+    case SYS_SPU_IMAGE_CLOSE:
+        s.gpr[3] = 0;
+        break;
+
+    // ─── PRX (shared libraries) ──────────────────────────────────
+    case SYS_PRX_LOAD_MODULE:
+    case SYS_PRX_START_MODULE:
+    case SYS_PRX_STOP_MODULE:
+    case SYS_PRX_UNLOAD_MODULE:
+    case SYS_PRX_REGISTER_MODULE:
+    case SYS_PRX_GET_MODULE_LIST:
+    case SYS_PRX_GET_MODULE_INFO:
+    case SYS_PRX_GET_MODULE_ID_BY_NAME:
+        s.gpr[3] = 0;
+        break;
+
+    // ─── Filesystem (stubs) ──────────────────────────────────────
+    case SYS_FS_OPEN: {
+        uint32_t fd = hle_alloc_id();
+        // r5 = fd_ptr
+        if (s.gpr[5] && s.gpr[5] < PS3_SANDBOX_SIZE - 4)
+            mem_write32(mem, s.gpr[5], fd);
+        s.gpr[3] = 0;
+        break;
+    }
+    case SYS_FS_CLOSE:
+        s.gpr[3] = 0;
+        break;
+    case SYS_FS_READ:
+        s.gpr[3] = 0;
+        // r5 = nread_ptr → 0 bytes read
+        if (s.gpr[5] && s.gpr[5] < PS3_SANDBOX_SIZE - 8)
+            mem_write64(mem, s.gpr[5], 0);
+        break;
+    case SYS_FS_WRITE:
+        s.gpr[3] = 0;
+        if (s.gpr[5] && s.gpr[5] < PS3_SANDBOX_SIZE - 8)
+            mem_write64(mem, s.gpr[5], s.gpr[4]); // pretend all bytes written
+        break;
+    case SYS_FS_LSEEK:
+        s.gpr[3] = 0;
+        if (s.gpr[4] && s.gpr[4] < PS3_SANDBOX_SIZE - 8)
+            mem_write64(mem, s.gpr[4], 0);
+        break;
+    case SYS_FS_STAT:
+    case SYS_FS_FSTAT:
+        // Zero-fill stat buffer (r4 = buf_ptr)
+        if (s.gpr[4] && s.gpr[4] < PS3_SANDBOX_SIZE - 128) {
+            for (int i = 0; i < 128; i += 8)
+                mem_write64(mem, s.gpr[4] + i, 0);
+        }
+        s.gpr[3] = 0;
+        break;
+    case SYS_FS_MKDIR:
+    case SYS_FS_RENAME:
+    case SYS_FS_RMDIR:
+    case SYS_FS_UNLINK:
+        s.gpr[3] = 0;
+        break;
+    case SYS_FS_OPENDIR: {
+        uint32_t fd = hle_alloc_id();
+        if (s.gpr[4] && s.gpr[4] < PS3_SANDBOX_SIZE - 4)
+            mem_write32(mem, s.gpr[4], fd);
+        s.gpr[3] = 0;
+        break;
+    }
+    case SYS_FS_READDIR:
+        s.gpr[3] = -1; // CELL_FS_ENOENT (end of directory)
+        break;
+    case SYS_FS_CLOSEDIR:
+        s.gpr[3] = 0;
+        break;
+
+    // ─── RSX (GPU) management ────────────────────────────────────
+    case SYS_RSX_DEVICE_MAP:
+    case SYS_RSX_DEVICE_UNMAP:
+    case SYS_RSX_CONTEXT_ALLOCATE:
+    case SYS_RSX_CONTEXT_FREE:
+    case SYS_RSX_CONTEXT_IOMAP:
+    case SYS_RSX_CONTEXT_ATTRIBUTE:
+        if (hle_signal) atomicAdd((uint32_t*)hle_signal, 1);
+        s.gpr[3] = 0;
         break;
 
     default:
