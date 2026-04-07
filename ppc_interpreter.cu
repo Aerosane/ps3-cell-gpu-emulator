@@ -7,6 +7,7 @@
 #include "ppc_defs.h"
 #include <cuda_runtime.h>
 #include <cstdio>
+#include <cmath>
 
 using namespace ppc;
 
@@ -87,6 +88,18 @@ __device__ __forceinline__ void mem_writef64(uint8_t* mem, uint64_t addr, double
     memcpy(&bits, &d, 8);
     uint64_t swapped = bswap64(bits);
     memcpy(mem + (addr & (PS3_SANDBOX_SIZE - 1)), &swapped, 8);
+}
+
+// 64-bit memory read/write (big-endian)
+__device__ __forceinline__ uint64_t mem_read64(const uint8_t* mem, uint64_t addr) {
+    uint64_t raw;
+    memcpy(&raw, mem + (addr & (PS3_SANDBOX_SIZE - 1)), 8);
+    return bswap64(raw);
+}
+
+__device__ __forceinline__ void mem_write64(uint8_t* mem, uint64_t addr, uint64_t val) {
+    uint64_t be = bswap64(val);
+    memcpy(mem + (addr & (PS3_SANDBOX_SIZE - 1)), &be, 8);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -197,6 +210,55 @@ __device__ __forceinline__ uint32_t rotl32(uint32_t v, uint32_t n) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// 64-bit Rotate and Mask Helpers (for PPC64 rotate instructions)
+// ═══════════════════════════════════════════════════════════════
+
+__device__ __forceinline__ uint64_t rotl64(uint64_t v, uint32_t n) {
+    n &= 63;
+    return (n == 0) ? v : (v << n) | (v >> (64 - n));
+}
+
+// PPC64 mask: bit b to bit e (0=MSB=bit63 in uint64_t)
+// If b <= e: contiguous mask. If b > e: wrapping mask.
+__device__ __forceinline__ uint64_t mask64(uint32_t b, uint32_t e) {
+    uint64_t mb = (~0ULL) >> b;
+    uint64_t me = (~0ULL) << (63 - e);
+    return (b <= e) ? (mb & me) : (mb | me);
+}
+
+// Extract 6-bit sh field for GRP30: sh(0:4) = bits 16:20, sh5 = bit 30
+__device__ __forceinline__ uint32_t SH64(uint32_t inst) {
+    return ((inst >> 11) & 0x1F) | (((inst >> 1) & 1) << 5);
+}
+
+// Extract 6-bit mb/me field for GRP30: mb(0:4) = bits 21:25, mb5 = bit 26
+__device__ __forceinline__ uint32_t MB64(uint32_t inst) {
+    return ((inst >> 6) & 0x1F) | (((inst >> 5) & 1) << 5);
+}
+
+// Extract FP register C (frC) field: bits 21:25 in standard notation = bits 6:10 from LSB
+__device__ __forceinline__ uint32_t FRC(uint32_t inst) {
+    return (inst >> 6) & 0x1F;
+}
+
+// CR field update for 64-bit comparison
+__device__ __forceinline__ void setCRField64(uint32_t& cr, int field, int64_t result, uint64_t xer) {
+    uint32_t val = 0;
+    if (result < 0)       val = 0x8;
+    else if (result > 0)  val = 0x4;
+    else                  val = 0x2;
+    if (xer & (1ULL << 31)) val |= 0x1;
+    int shift = (7 - field) * 4;
+    cr = (cr & ~(0xFU << shift)) | (val << shift);
+}
+
+// Set/clear a single CR bit
+__device__ __forceinline__ void setCRBit(uint32_t& cr, int bit, bool val) {
+    if (val) cr |=  (1U << (31 - bit));
+    else     cr &= ~(1U << (31 - bit));
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Single-Step Execute — decode and run one PPC instruction
 // Returns 0 = ok, 1 = halted, 2 = unimplemented
 // ═══════════════════════════════════════════════════════════════
@@ -269,20 +331,34 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
 
     case OP_CMPI: {
         uint32_t bf = RD(inst) >> 2;
+        uint32_t L = (RD(inst) >> 1) & 1;
         uint32_t ra = RA(inst);
         int64_t imm = SIMM16(inst);
-        int32_t a = (int32_t)(uint32_t)s.gpr[ra];
-        setCRField(s.cr, bf, (int64_t)a - imm, s.xer);
+        if (L) {
+            int64_t a = (int64_t)s.gpr[ra];
+            int64_t diff = (a > imm) ? 1 : (a < imm) ? -1 : 0;
+            setCRField(s.cr, bf, diff, s.xer);
+        } else {
+            int32_t a = (int32_t)(uint32_t)s.gpr[ra];
+            setCRField(s.cr, bf, (int64_t)a - imm, s.xer);
+        }
         break;
     }
 
     case OP_CMPLI: {
         uint32_t bf = RD(inst) >> 2;
+        uint32_t L = (RD(inst) >> 1) & 1;
         uint32_t ra = RA(inst);
         uint64_t imm = UIMM16(inst);
-        uint32_t a = (uint32_t)s.gpr[ra];
-        int64_t diff = (a > (uint32_t)imm) ? 1 : (a < (uint32_t)imm) ? -1 : 0;
-        setCRField(s.cr, bf, diff, s.xer);
+        if (L) {
+            uint64_t a = s.gpr[ra];
+            int64_t diff = (a > imm) ? 1 : (a < imm) ? -1 : 0;
+            setCRField(s.cr, bf, diff, s.xer);
+        } else {
+            uint32_t a = (uint32_t)s.gpr[ra];
+            int64_t diff = (a > (uint32_t)imm) ? 1 : (a < (uint32_t)imm) ? -1 : 0;
+            setCRField(s.cr, bf, diff, s.xer);
+        }
         break;
     }
 
@@ -403,32 +479,60 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             if (LK(inst)) s.lr = s.pc + 4;
             break;
         }
+        case XO_MCRF: {
+            uint32_t bf = RD(inst) >> 2;
+            uint32_t bfa = RA(inst) >> 2;
+            int src_shift = (7 - bfa) * 4;
+            int dst_shift = (7 - bf) * 4;
+            uint32_t val = (s.cr >> src_shift) & 0xF;
+            s.cr = (s.cr & ~(0xFU << dst_shift)) | (val << dst_shift);
+            break;
+        }
         case XO_CROR: {
             uint32_t bt = RD(inst), ba = RA(inst), bb = RB(inst);
-            bool a = getCRBit(s.cr, ba), b = getCRBit(s.cr, bb);
-            if (a | b) s.cr |=  (1U << (31 - bt));
-            else       s.cr &= ~(1U << (31 - bt));
+            setCRBit(s.cr, bt, getCRBit(s.cr, ba) | getCRBit(s.cr, bb));
             break;
         }
         case XO_CRXOR: {
             uint32_t bt = RD(inst), ba = RA(inst), bb = RB(inst);
-            bool a = getCRBit(s.cr, ba), b = getCRBit(s.cr, bb);
-            if (a ^ b) s.cr |=  (1U << (31 - bt));
-            else       s.cr &= ~(1U << (31 - bt));
+            setCRBit(s.cr, bt, getCRBit(s.cr, ba) ^ getCRBit(s.cr, bb));
             break;
         }
         case XO_CRAND: {
             uint32_t bt = RD(inst), ba = RA(inst), bb = RB(inst);
-            bool a = getCRBit(s.cr, ba), b = getCRBit(s.cr, bb);
-            if (a & b) s.cr |=  (1U << (31 - bt));
-            else       s.cr &= ~(1U << (31 - bt));
+            setCRBit(s.cr, bt, getCRBit(s.cr, ba) & getCRBit(s.cr, bb));
+            break;
+        }
+        case XO_CRNOR: {
+            uint32_t bt = RD(inst), ba = RA(inst), bb = RB(inst);
+            setCRBit(s.cr, bt, !(getCRBit(s.cr, ba) | getCRBit(s.cr, bb)));
+            break;
+        }
+        case XO_CRANDC: {
+            uint32_t bt = RD(inst), ba = RA(inst), bb = RB(inst);
+            setCRBit(s.cr, bt, getCRBit(s.cr, ba) & !getCRBit(s.cr, bb));
+            break;
+        }
+        case XO_CREQV: {
+            uint32_t bt = RD(inst), ba = RA(inst), bb = RB(inst);
+            setCRBit(s.cr, bt, getCRBit(s.cr, ba) == getCRBit(s.cr, bb));
+            break;
+        }
+        case XO_CRNAND: {
+            uint32_t bt = RD(inst), ba = RA(inst), bb = RB(inst);
+            setCRBit(s.cr, bt, !(getCRBit(s.cr, ba) & getCRBit(s.cr, bb)));
+            break;
+        }
+        case XO_CRORC: {
+            uint32_t bt = RD(inst), ba = RA(inst), bb = RB(inst);
+            setCRBit(s.cr, bt, getCRBit(s.cr, ba) | !getCRBit(s.cr, bb));
             break;
         }
         case XO_ISYNC:
-            __threadfence(); // GPU memory fence as isync approximation
+            __threadfence();
             break;
         default:
-            return 2; // unimplemented group 19
+            return 2;
         }
         break;
     }
@@ -532,12 +636,28 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
         break;
     }
 
+    case OP_LHAU: {
+        uint32_t rd = RD(inst), ra = RA(inst);
+        uint64_t ea = SIMM16(inst) + s.gpr[ra];
+        s.gpr[rd] = (uint64_t)(int64_t)(int16_t)mem_read16(mem, ea);
+        s.gpr[ra] = ea;
+        break;
+    }
+
     // ─── FP Load/Store ────────────────────────────────────────
 
     case OP_LFS: {
         uint32_t frd = RD(inst), ra = RA(inst);
         uint64_t ea = SIMM16(inst) + ((ra == 0) ? 0 : s.gpr[ra]);
         s.fpr[frd] = (double)mem_readf32(mem, ea);
+        break;
+    }
+
+    case OP_LFSU: {
+        uint32_t frd = RD(inst), ra = RA(inst);
+        uint64_t ea = SIMM16(inst) + s.gpr[ra];
+        s.fpr[frd] = (double)mem_readf32(mem, ea);
+        s.gpr[ra] = ea;
         break;
     }
 
@@ -548,6 +668,14 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
         break;
     }
 
+    case OP_LFDU: {
+        uint32_t frd = RD(inst), ra = RA(inst);
+        uint64_t ea = SIMM16(inst) + s.gpr[ra];
+        s.fpr[frd] = mem_readf64(mem, ea);
+        s.gpr[ra] = ea;
+        break;
+    }
+
     case OP_STFS: {
         uint32_t frs = RS(inst), ra = RA(inst);
         uint64_t ea = SIMM16(inst) + ((ra == 0) ? 0 : s.gpr[ra]);
@@ -555,10 +683,26 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
         break;
     }
 
+    case OP_STFSU: {
+        uint32_t frs = RS(inst), ra = RA(inst);
+        uint64_t ea = SIMM16(inst) + s.gpr[ra];
+        mem_writef32(mem, ea, (float)s.fpr[frs]);
+        s.gpr[ra] = ea;
+        break;
+    }
+
     case OP_STFD: {
         uint32_t frs = RS(inst), ra = RA(inst);
         uint64_t ea = SIMM16(inst) + ((ra == 0) ? 0 : s.gpr[ra]);
         mem_writef64(mem, ea, s.fpr[frs]);
+        break;
+    }
+
+    case OP_STFDU: {
+        uint32_t frs = RS(inst), ra = RA(inst);
+        uint64_t ea = SIMM16(inst) + s.gpr[ra];
+        mem_writef64(mem, ea, s.fpr[frs]);
+        s.gpr[ra] = ea;
         break;
     }
 
@@ -570,7 +714,7 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
 
         switch (xo) {
 
-        // Arithmetic
+        // ── 32-bit Arithmetic ──────────────────────────────────
         case XO_ADD: {
             s.gpr[rd] = (uint32_t)((uint32_t)s.gpr[ra] + (uint32_t)s.gpr[rb]);
             if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[rd], s.xer);
@@ -605,9 +749,41 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[rd], s.xer);
             break;
         }
+        case XO_SUBFE: {
+            uint32_t a = (uint32_t)s.gpr[ra], b = (uint32_t)s.gpr[rb];
+            uint64_t result = (uint64_t)(~a) + (uint64_t)b + (getCA(s.xer) ? 1ULL : 0ULL);
+            s.gpr[rd] = (uint32_t)result;
+            setCA(s.xer, result >> 32);
+            if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[rd], s.xer);
+            break;
+        }
         case XO_ADDZE: {
             uint32_t a = (uint32_t)s.gpr[ra];
             uint64_t result = (uint64_t)a + (getCA(s.xer) ? 1ULL : 0ULL);
+            s.gpr[rd] = (uint32_t)result;
+            setCA(s.xer, result >> 32);
+            if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[rd], s.xer);
+            break;
+        }
+        case XO_SUBFZE: {
+            uint32_t a = (uint32_t)s.gpr[ra];
+            uint64_t result = (uint64_t)(~a) + (getCA(s.xer) ? 1ULL : 0ULL);
+            s.gpr[rd] = (uint32_t)result;
+            setCA(s.xer, result >> 32);
+            if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[rd], s.xer);
+            break;
+        }
+        case XO_ADDME: {
+            uint32_t a = (uint32_t)s.gpr[ra];
+            uint64_t result = (uint64_t)a + (getCA(s.xer) ? 1ULL : 0ULL) + 0xFFFFFFFFULL;
+            s.gpr[rd] = (uint32_t)result;
+            setCA(s.xer, result >> 32);
+            if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[rd], s.xer);
+            break;
+        }
+        case XO_SUBFME: {
+            uint32_t a = (uint32_t)s.gpr[ra];
+            uint64_t result = (uint64_t)(~a) + (getCA(s.xer) ? 1ULL : 0ULL) + 0xFFFFFFFFULL;
             s.gpr[rd] = (uint32_t)result;
             setCA(s.xer, result >> 32);
             if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[rd], s.xer);
@@ -621,7 +797,7 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
         case XO_MULLW: {
             int32_t a = (int32_t)(uint32_t)s.gpr[ra];
             int32_t b = (int32_t)(uint32_t)s.gpr[rb];
-            s.gpr[rd] = (uint32_t)(uint64_t)(int64_t)((int64_t)a * (int64_t)b);
+            s.gpr[rd] = (uint64_t)(int64_t)((int64_t)a * (int64_t)b);
             if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[rd], s.xer);
             break;
         }
@@ -654,9 +830,41 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             break;
         }
 
-        // Logical
+        // ── 64-bit Arithmetic ──────────────────────────────────
+        case XO_MULLD: {
+            s.gpr[rd] = (uint64_t)((int64_t)s.gpr[ra] * (int64_t)s.gpr[rb]);
+            if (RC(inst)) setCRField64(s.cr, 0, (int64_t)s.gpr[rd], s.xer);
+            break;
+        }
+        case XO_MULHD: {
+            __int128 result = (__int128)(int64_t)s.gpr[ra] * (__int128)(int64_t)s.gpr[rb];
+            s.gpr[rd] = (uint64_t)(result >> 64);
+            if (RC(inst)) setCRField64(s.cr, 0, (int64_t)s.gpr[rd], s.xer);
+            break;
+        }
+        case XO_MULHDU: {
+            unsigned __int128 result = (unsigned __int128)s.gpr[ra] * (unsigned __int128)s.gpr[rb];
+            s.gpr[rd] = (uint64_t)(result >> 64);
+            if (RC(inst)) setCRField64(s.cr, 0, (int64_t)s.gpr[rd], s.xer);
+            break;
+        }
+        case XO_DIVD: {
+            int64_t a = (int64_t)s.gpr[ra], b = (int64_t)s.gpr[rb];
+            s.gpr[rd] = (b != 0 && !(a == (int64_t)0x8000000000000000LL && b == -1))
+                         ? (uint64_t)(a / b) : 0;
+            if (RC(inst)) setCRField64(s.cr, 0, (int64_t)s.gpr[rd], s.xer);
+            break;
+        }
+        case XO_DIVDU: {
+            uint64_t a = s.gpr[ra], b = s.gpr[rb];
+            s.gpr[rd] = (b != 0) ? (a / b) : 0;
+            if (RC(inst)) setCRField64(s.cr, 0, (int64_t)s.gpr[rd], s.xer);
+            break;
+        }
+
+        // ── Logical ────────────────────────────────────────────
         case XO_AND: {
-            s.gpr[ra] = s.gpr[rd] & s.gpr[rb];  // note: rS=rD field in logical ops
+            s.gpr[ra] = s.gpr[rd] & s.gpr[rb];
             if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[ra], s.xer);
             break;
         }
@@ -690,6 +898,11 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[ra], s.xer);
             break;
         }
+        case XO_EQV: {
+            s.gpr[ra] = ~(s.gpr[rd] ^ s.gpr[rb]);
+            if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[ra], s.xer);
+            break;
+        }
         case XO_EXTSB: {
             s.gpr[ra] = (uint64_t)(int64_t)(int8_t)(uint8_t)s.gpr[rd];
             if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[ra], s.xer);
@@ -700,14 +913,25 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[ra], s.xer);
             break;
         }
+        case XO_EXTSW: {
+            s.gpr[ra] = (uint64_t)(int64_t)(int32_t)(uint32_t)s.gpr[rd];
+            if (RC(inst)) setCRField64(s.cr, 0, (int64_t)s.gpr[ra], s.xer);
+            break;
+        }
         case XO_CNTLZW: {
-            uint32_t val = (uint32_t)s.gpr[rd]; // rS
+            uint32_t val = (uint32_t)s.gpr[rd];
             s.gpr[ra] = val ? __clz(val) : 32;
             if (RC(inst)) setCRField(s.cr, 0, (int32_t)(uint32_t)s.gpr[ra], s.xer);
             break;
         }
+        case XO_CNTLZD: {
+            uint64_t val = s.gpr[rd];
+            s.gpr[ra] = val ? __clzll(val) : 64;
+            if (RC(inst)) setCRField64(s.cr, 0, (int64_t)s.gpr[ra], s.xer);
+            break;
+        }
 
-        // Shifts
+        // ── 32-bit Shifts ──────────────────────────────────────
         case XO_SLW: {
             uint32_t sh = (uint32_t)s.gpr[rb] & 0x3F;
             s.gpr[ra] = (sh < 32) ? ((uint32_t)s.gpr[rd] << sh) : 0;
@@ -752,26 +976,91 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             break;
         }
 
-        // Compare
+        // ── 64-bit Shifts ──────────────────────────────────────
+        case XO_SLD: {
+            uint32_t sh = (uint32_t)s.gpr[rb] & 0x7F;
+            s.gpr[ra] = (sh < 64) ? (s.gpr[rd] << sh) : 0;
+            if (RC(inst)) setCRField64(s.cr, 0, (int64_t)s.gpr[ra], s.xer);
+            break;
+        }
+        case XO_SRD: {
+            uint32_t sh = (uint32_t)s.gpr[rb] & 0x7F;
+            s.gpr[ra] = (sh < 64) ? (s.gpr[rd] >> sh) : 0;
+            if (RC(inst)) setCRField64(s.cr, 0, (int64_t)s.gpr[ra], s.xer);
+            break;
+        }
+        case XO_SRAD: {
+            uint32_t sh = (uint32_t)s.gpr[rb] & 0x7F;
+            int64_t val = (int64_t)s.gpr[rd];
+            if (sh == 0) {
+                s.gpr[ra] = (uint64_t)val;
+                setCA(s.xer, false);
+            } else if (sh < 64) {
+                bool carry = (val < 0) && ((val & ((1LL << sh) - 1)) != 0);
+                s.gpr[ra] = (uint64_t)(val >> sh);
+                setCA(s.xer, carry);
+            } else {
+                s.gpr[ra] = (val < 0) ? ~0ULL : 0;
+                setCA(s.xer, val < 0);
+            }
+            if (RC(inst)) setCRField64(s.cr, 0, (int64_t)s.gpr[ra], s.xer);
+            break;
+        }
+        case 826: case 827: { // SRADI: XO_9=413, XO_10 = 826|827 (bit 30 = sh5)
+            uint32_t sh = ((inst >> 11) & 0x1F) | (((inst >> 1) & 1) << 5);
+            int64_t val = (int64_t)s.gpr[rd];
+            if (sh == 0) {
+                s.gpr[ra] = (uint64_t)val;
+                setCA(s.xer, false);
+            } else {
+                bool carry = (val < 0) && ((val & ((1ULL << sh) - 1)) != 0);
+                s.gpr[ra] = (uint64_t)(val >> sh);
+                setCA(s.xer, carry);
+            }
+            if (RC(inst)) setCRField64(s.cr, 0, (int64_t)s.gpr[ra], s.xer);
+            break;
+        }
+
+        // ── Compare ────────────────────────────────────────────
         case XO_CMP: {
             uint32_t bf = rd >> 2;
-            int32_t a = (int32_t)(uint32_t)s.gpr[ra];
-            int32_t b = (int32_t)(uint32_t)s.gpr[rb];
-            setCRField(s.cr, bf, (int64_t)a - (int64_t)b, s.xer);
+            uint32_t L = (rd >> 1) & 1;
+            if (L) {
+                int64_t a = (int64_t)s.gpr[ra], b = (int64_t)s.gpr[rb];
+                int64_t diff = (a > b) ? 1 : (a < b) ? -1 : 0;
+                setCRField(s.cr, bf, diff, s.xer);
+            } else {
+                int32_t a = (int32_t)(uint32_t)s.gpr[ra];
+                int32_t b = (int32_t)(uint32_t)s.gpr[rb];
+                setCRField(s.cr, bf, (int64_t)a - (int64_t)b, s.xer);
+            }
             break;
         }
         case XO_CMPL: {
             uint32_t bf = rd >> 2;
-            uint32_t a = (uint32_t)s.gpr[ra], b = (uint32_t)s.gpr[rb];
-            int64_t diff = (a > b) ? 1 : (a < b) ? -1 : 0;
-            setCRField(s.cr, bf, diff, s.xer);
+            uint32_t L = (rd >> 1) & 1;
+            if (L) {
+                uint64_t a = s.gpr[ra], b = s.gpr[rb];
+                int64_t diff = (a > b) ? 1 : (a < b) ? -1 : 0;
+                setCRField(s.cr, bf, diff, s.xer);
+            } else {
+                uint32_t a = (uint32_t)s.gpr[ra], b = (uint32_t)s.gpr[rb];
+                int64_t diff = (a > b) ? 1 : (a < b) ? -1 : 0;
+                setCRField(s.cr, bf, diff, s.xer);
+            }
             break;
         }
 
-        // Indexed load/store
+        // ── Indexed Load/Store (32-bit) ────────────────────────
         case XO_LWZX: {
             uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
             s.gpr[rd] = mem_read32(mem, ea);
+            break;
+        }
+        case XO_LWZUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            s.gpr[rd] = mem_read32(mem, ea);
+            s.gpr[ra] = ea;
             break;
         }
         case XO_LBZX: {
@@ -779,9 +1068,32 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             s.gpr[rd] = mem_read8(mem, ea);
             break;
         }
+        case XO_LBZUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            s.gpr[rd] = mem_read8(mem, ea);
+            s.gpr[ra] = ea;
+            break;
+        }
         case XO_LHZX: {
             uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
             s.gpr[rd] = mem_read16(mem, ea);
+            break;
+        }
+        case XO_LHZUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            s.gpr[rd] = mem_read16(mem, ea);
+            s.gpr[ra] = ea;
+            break;
+        }
+        case XO_LHAX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            s.gpr[rd] = (uint64_t)(int64_t)(int16_t)mem_read16(mem, ea);
+            break;
+        }
+        case XO_LHAUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            s.gpr[rd] = (uint64_t)(int64_t)(int16_t)mem_read16(mem, ea);
+            s.gpr[ra] = ea;
             break;
         }
         case XO_STWX: {
@@ -789,9 +1101,21 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             mem_write32(mem, ea, (uint32_t)s.gpr[rd]);
             break;
         }
+        case XO_STWUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            mem_write32(mem, ea, (uint32_t)s.gpr[rd]);
+            s.gpr[ra] = ea;
+            break;
+        }
         case XO_STBX: {
             uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
             mem_write8(mem, ea, (uint8_t)s.gpr[rd]);
+            break;
+        }
+        case XO_STBUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            mem_write8(mem, ea, (uint8_t)s.gpr[rd]);
+            s.gpr[ra] = ea;
             break;
         }
         case XO_STHX: {
@@ -799,8 +1123,159 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             mem_write16(mem, ea, (uint16_t)s.gpr[rd]);
             break;
         }
+        case XO_STHUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            mem_write16(mem, ea, (uint16_t)s.gpr[rd]);
+            s.gpr[ra] = ea;
+            break;
+        }
 
-        // SPR access
+        // ── Indexed Load/Store (64-bit) ────────────────────────
+        case XO_LDX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            s.gpr[rd] = mem_read64(mem, ea);
+            break;
+        }
+        case XO_LDUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            s.gpr[rd] = mem_read64(mem, ea);
+            s.gpr[ra] = ea;
+            break;
+        }
+        case XO_STDX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            mem_write64(mem, ea, s.gpr[rd]);
+            break;
+        }
+        case XO_STDUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            mem_write64(mem, ea, s.gpr[rd]);
+            s.gpr[ra] = ea;
+            break;
+        }
+        case XO_LWAX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            s.gpr[rd] = (uint64_t)(int64_t)(int32_t)mem_read32(mem, ea);
+            break;
+        }
+        case XO_LWAUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            s.gpr[rd] = (uint64_t)(int64_t)(int32_t)mem_read32(mem, ea);
+            s.gpr[ra] = ea;
+            break;
+        }
+
+        // ── Indexed FP Load/Store ──────────────────────────────
+        case XO_LFSX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            s.fpr[rd] = (double)mem_readf32(mem, ea);
+            break;
+        }
+        case XO_LFSUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            s.fpr[rd] = (double)mem_readf32(mem, ea);
+            s.gpr[ra] = ea;
+            break;
+        }
+        case XO_LFDX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            s.fpr[rd] = mem_readf64(mem, ea);
+            break;
+        }
+        case XO_LFDUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            s.fpr[rd] = mem_readf64(mem, ea);
+            s.gpr[ra] = ea;
+            break;
+        }
+        case XO_STFSX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            mem_writef32(mem, ea, (float)s.fpr[rd]);
+            break;
+        }
+        case XO_STFSUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            mem_writef32(mem, ea, (float)s.fpr[rd]);
+            s.gpr[ra] = ea;
+            break;
+        }
+        case XO_STFDX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            mem_writef64(mem, ea, s.fpr[rd]);
+            break;
+        }
+        case XO_STFDUX: {
+            uint64_t ea = s.gpr[ra] + s.gpr[rb];
+            mem_writef64(mem, ea, s.fpr[rd]);
+            s.gpr[ra] = ea;
+            break;
+        }
+        case XO_STFIWX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            uint64_t bits;
+            memcpy(&bits, &s.fpr[rd], 8);
+            mem_write32(mem, ea, (uint32_t)bits);
+            break;
+        }
+
+        // ── Byte-Reversed Load/Store ───────────────────────────
+        case XO_LWBRX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            uint32_t raw;
+            memcpy(&raw, mem + (ea & (PS3_SANDBOX_SIZE - 1)), 4);
+            s.gpr[rd] = raw; // no swap — byte-reversed from BE = native LE
+            break;
+        }
+        case XO_STWBRX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            uint32_t val = (uint32_t)s.gpr[rd];
+            memcpy(mem + (ea & (PS3_SANDBOX_SIZE - 1)), &val, 4); // store as LE
+            break;
+        }
+        case XO_LHBRX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            uint16_t raw;
+            memcpy(&raw, mem + (ea & (PS3_SANDBOX_SIZE - 1)), 2);
+            s.gpr[rd] = raw;
+            break;
+        }
+        case XO_STHBRX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            uint16_t val = (uint16_t)s.gpr[rd];
+            memcpy(mem + (ea & (PS3_SANDBOX_SIZE - 1)), &val, 2);
+            break;
+        }
+
+        // ── Atomic Load/Store (single-thread: simplified) ──────
+        case XO_LWARX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            s.gpr[rd] = mem_read32(mem, ea);
+            break;
+        }
+        case XO_STWCX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            mem_write32(mem, ea, (uint32_t)s.gpr[rd]);
+            // Always succeed in single-thread: set CR0 = EQ
+            uint32_t cr0 = 0x2; // EQ
+            if (s.xer & (1ULL << 31)) cr0 |= 0x1; // SO
+            s.cr = (s.cr & 0x0FFFFFFF) | (cr0 << 28);
+            break;
+        }
+        case XO_LDARX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            s.gpr[rd] = mem_read64(mem, ea);
+            break;
+        }
+        case XO_STDCX: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            mem_write64(mem, ea, s.gpr[rd]);
+            uint32_t cr0 = 0x2;
+            if (s.xer & (1ULL << 31)) cr0 |= 0x1;
+            s.cr = (s.cr & 0x0FFFFFFF) | (cr0 << 28);
+            break;
+        }
+
+        // ── SPR access ─────────────────────────────────────────
         case XO_MFSPR: {
             uint32_t spr = SPR(inst);
             switch (spr) {
@@ -812,7 +1287,7 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             case SPR_DEC:  s.gpr[rd] = s.dec; break;
             case SPR_SRR0: s.gpr[rd] = s.srr0; break;
             case SPR_SRR1: s.gpr[rd] = s.srr1; break;
-            case SPR_PVR:  s.gpr[rd] = 0x00700000; break;  // Cell PPE
+            case SPR_PVR:  s.gpr[rd] = 0x00700000; break;
             default:
                 if (spr >= SPR_SPRG0 && spr <= SPR_SPRG3)
                     s.gpr[rd] = s.sprg[spr - SPR_SPRG0];
@@ -822,7 +1297,6 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             }
             break;
         }
-
         case XO_MTSPR: {
             uint32_t spr = SPR(inst);
             switch (spr) {
@@ -839,31 +1313,86 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             }
             break;
         }
-
+        case XO_MFTB: {
+            uint32_t tbr = SPR(inst);
+            switch (tbr) {
+            case 268: s.gpr[rd] = s.tbl; break;
+            case 269: s.gpr[rd] = s.tbu; break;
+            default:  s.gpr[rd] = 0; break;
+            }
+            break;
+        }
         case XO_MFCR:
             s.gpr[rd] = s.cr;
             break;
 
         case XO_MTCRF: {
             uint32_t crm = CRM(inst);
-            uint32_t val = (uint32_t)s.gpr[rd]; // rS
+            uint32_t val = (uint32_t)s.gpr[rd];
             for (int i = 0; i < 8; i++) {
                 if (crm & (1 << (7 - i))) {
                     int shift = (7 - i) * 4;
-                    s.cr = (s.cr & ~(0xF << shift)) | (val & (0xF << shift));
+                    s.cr = (s.cr & ~(0xFU << shift)) | (val & (0xFU << shift));
                 }
             }
             break;
         }
 
-        // Synchronization (no-ops in single-threaded interpreter)
+        case XO_MFMSR:
+            s.gpr[rd] = s.msr;
+            break;
+
+        case XO_MTMSR:
+            s.msr = s.gpr[rd];
+            break;
+
+        // ── Trap ───────────────────────────────────────────────
+        case XO_TW: {
+            int32_t a = (int32_t)(uint32_t)s.gpr[ra];
+            int32_t b = (int32_t)(uint32_t)s.gpr[rb];
+            uint32_t to = rd;
+            bool trap = ((to & 0x10) && a < b) || ((to & 0x08) && a > b) ||
+                        ((to & 0x04) && a == b) ||
+                        ((to & 0x02) && (uint32_t)a < (uint32_t)b) ||
+                        ((to & 0x01) && (uint32_t)a > (uint32_t)b);
+            if (trap) s.halted = 1;
+            break;
+        }
+        case XO_TD: {
+            int64_t a = (int64_t)s.gpr[ra];
+            int64_t b = (int64_t)s.gpr[rb];
+            uint32_t to = rd;
+            bool trap = ((to & 0x10) && a < b) || ((to & 0x08) && a > b) ||
+                        ((to & 0x04) && a == b) ||
+                        ((to & 0x02) && (uint64_t)a < (uint64_t)b) ||
+                        ((to & 0x01) && (uint64_t)a > (uint64_t)b);
+            if (trap) s.halted = 1;
+            break;
+        }
+
+        // ── Cache hints (NOP on GPU) ───────────────────────────
+        case XO_DCBF:
+        case XO_DCBST:
+        case XO_DCBT:
+        case XO_DCBTST:
+        case XO_ICBI:
+            break;
+        case XO_DCBZ: {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            ea &= ~31ULL; // align to 32-byte cache line
+            for (int i = 0; i < 32; i += 4)
+                mem_write32(mem, ea + i, 0);
+            break;
+        }
+
+        // ── Synchronization ────────────────────────────────────
         case XO_SYNC:
         case XO_EIEIO:
             __threadfence();
             break;
 
         default:
-            return 2; // unimplemented group 31
+            return 2;
         }
         break;
     }
@@ -884,6 +1413,348 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
         uint64_t ea = SIMM16(inst) + ((ra == 0) ? 0 : s.gpr[ra]);
         for (uint32_t r = rs_start; r < 32; r++, ea += 4) {
             mem_write32(mem, ea, (uint32_t)s.gpr[r]);
+        }
+        break;
+    }
+
+    // ─── Trap Immediate ───────────────────────────────────────
+
+    case OP_TWI: {
+        uint32_t to = RD(inst), ra_field = RA(inst);
+        int32_t a = (int32_t)(uint32_t)s.gpr[ra_field];
+        int32_t b = (int32_t)(int16_t)(inst & 0xFFFF);
+        bool trap = ((to & 0x10) && a < b) || ((to & 0x08) && a > b) ||
+                    ((to & 0x04) && a == b) ||
+                    ((to & 0x02) && (uint32_t)a < (uint32_t)b) ||
+                    ((to & 0x01) && (uint32_t)a > (uint32_t)b);
+        if (trap) s.halted = 1;
+        break;
+    }
+
+    case OP_TDI: {
+        uint32_t to = RD(inst), ra_field = RA(inst);
+        int64_t a = (int64_t)s.gpr[ra_field];
+        int64_t b = (int64_t)(int16_t)(inst & 0xFFFF);
+        bool trap = ((to & 0x10) && a < b) || ((to & 0x08) && a > b) ||
+                    ((to & 0x04) && a == b) ||
+                    ((to & 0x02) && (uint64_t)a < (uint64_t)b) ||
+                    ((to & 0x01) && (uint64_t)a > (uint64_t)b);
+        if (trap) s.halted = 1;
+        break;
+    }
+
+    // ─── Group 30 (64-bit Rotate/Shift) ───────────────────────
+
+    case OP_GRP30: {
+        uint32_t rs = RS(inst), ra_field = RA(inst);
+        uint32_t xo4 = (inst >> 1) & 0xF;
+        uint32_t sh = SH64(inst);
+        uint32_t mb = MB64(inst);
+        bool rc = inst & 1;
+
+        switch (xo4) {
+        case 0: case 1: { // RLDICL: rA = ROTL64(rS, sh) & MASK(mb, 63)
+            sh = ((inst >> 11) & 0x1F) | ((xo4 & 1) << 5);
+            s.gpr[ra_field] = rotl64(s.gpr[rs], sh) & mask64(mb, 63);
+            if (rc) setCRField64(s.cr, 0, (int64_t)s.gpr[ra_field], s.xer);
+            break;
+        }
+        case 2: case 3: { // RLDICR: rA = ROTL64(rS, sh) & MASK(0, me)
+            sh = ((inst >> 11) & 0x1F) | ((xo4 & 1) << 5);
+            uint32_t me = MB64(inst);
+            s.gpr[ra_field] = rotl64(s.gpr[rs], sh) & mask64(0, me);
+            if (rc) setCRField64(s.cr, 0, (int64_t)s.gpr[ra_field], s.xer);
+            break;
+        }
+        case 4: case 5: { // RLDIC: rA = ROTL64(rS, sh) & MASK(mb, ~sh)
+            sh = ((inst >> 11) & 0x1F) | ((xo4 & 1) << 5);
+            uint32_t me = 63 - sh;
+            s.gpr[ra_field] = rotl64(s.gpr[rs], sh) & mask64(mb, me);
+            if (rc) setCRField64(s.cr, 0, (int64_t)s.gpr[ra_field], s.xer);
+            break;
+        }
+        case 6: case 7: { // RLDIMI: rA = (ROTL64(rS, sh) & mask) | (rA & ~mask)
+            sh = ((inst >> 11) & 0x1F) | ((xo4 & 1) << 5);
+            uint32_t me = 63 - sh;
+            uint64_t m = mask64(mb, me);
+            s.gpr[ra_field] = (rotl64(s.gpr[rs], sh) & m) | (s.gpr[ra_field] & ~m);
+            if (rc) setCRField64(s.cr, 0, (int64_t)s.gpr[ra_field], s.xer);
+            break;
+        }
+        case 8: { // RLDCL: rA = ROTL64(rS, rB&63) & MASK(mb, 63)
+            uint32_t rb_field = RB(inst);
+            uint32_t n = (uint32_t)s.gpr[rb_field] & 63;
+            s.gpr[ra_field] = rotl64(s.gpr[rs], n) & mask64(mb, 63);
+            if (rc) setCRField64(s.cr, 0, (int64_t)s.gpr[ra_field], s.xer);
+            break;
+        }
+        case 9: { // RLDCR: rA = ROTL64(rS, rB&63) & MASK(0, me)
+            uint32_t rb_field = RB(inst);
+            uint32_t n = (uint32_t)s.gpr[rb_field] & 63;
+            uint32_t me = MB64(inst);
+            s.gpr[ra_field] = rotl64(s.gpr[rs], n) & mask64(0, me);
+            if (rc) setCRField64(s.cr, 0, (int64_t)s.gpr[ra_field], s.xer);
+            break;
+        }
+        default:
+            return 2;
+        }
+        break;
+    }
+
+    // ─── Group 58 (LD / LDU / LWA) ───────────────────────────
+
+    case OP_GRP58: {
+        uint32_t rd_f = RD(inst), ra_f = RA(inst);
+        uint32_t ds_xo = inst & 3;
+        int64_t ds = (int64_t)(int16_t)(inst & 0xFFFC); // sign-extend bits 16:29, already <<2 by masking
+        uint64_t ea = ds + ((ra_f == 0) ? 0 : s.gpr[ra_f]);
+
+        switch (ds_xo) {
+        case 0: // LD
+            s.gpr[rd_f] = mem_read64(mem, ea);
+            break;
+        case 1: // LDU
+            s.gpr[rd_f] = mem_read64(mem, ea);
+            s.gpr[ra_f] = ea;
+            break;
+        case 2: // LWA (load word algebraic)
+            s.gpr[rd_f] = (uint64_t)(int64_t)(int32_t)mem_read32(mem, ea);
+            break;
+        default:
+            return 2;
+        }
+        break;
+    }
+
+    // ─── Group 62 (STD / STDU) ────────────────────────────────
+
+    case OP_GRP62: {
+        uint32_t rs_f = RS(inst), ra_f = RA(inst);
+        uint32_t ds_xo = inst & 3;
+        int64_t ds = (int64_t)(int16_t)(inst & 0xFFFC);
+        uint64_t ea = ds + ((ra_f == 0) ? 0 : s.gpr[ra_f]);
+
+        switch (ds_xo) {
+        case 0: // STD
+            mem_write64(mem, ea, s.gpr[rs_f]);
+            break;
+        case 1: // STDU
+            mem_write64(mem, ea, s.gpr[rs_f]);
+            s.gpr[ra_f] = ea;
+            break;
+        default:
+            return 2;
+        }
+        break;
+    }
+
+    // ─── Group 59 (Single-Precision FP) ───────────────────────
+
+    case OP_GRP59: {
+        uint32_t frd = RD(inst), fra = RA(inst), frb = RB(inst);
+        uint32_t frc = FRC(inst);
+        uint32_t xo5 = (inst >> 1) & 0x1F;
+        bool rc = inst & 1;
+
+        switch (xo5) {
+        case 18: // FDIVS
+            s.fpr[frd] = (double)((float)s.fpr[fra] / (float)s.fpr[frb]);
+            break;
+        case 20: // FSUBS
+            s.fpr[frd] = (double)((float)s.fpr[fra] - (float)s.fpr[frb]);
+            break;
+        case 21: // FADDS
+            s.fpr[frd] = (double)((float)s.fpr[fra] + (float)s.fpr[frb]);
+            break;
+        case 22: // FSQRTS
+            s.fpr[frd] = (double)sqrtf((float)s.fpr[fra]);
+            break;
+        case 24: // FRES (reciprocal estimate, single)
+            s.fpr[frd] = (double)(1.0f / (float)s.fpr[frb]);
+            break;
+        case 25: // FMULS (note: frC not frB)
+            s.fpr[frd] = (double)((float)s.fpr[fra] * (float)s.fpr[frc]);
+            break;
+        case 28: // FMSUBS
+            s.fpr[frd] = (double)((float)((float)s.fpr[fra] * (float)s.fpr[frc] - (float)s.fpr[frb]));
+            break;
+        case 29: // FMADDS
+            s.fpr[frd] = (double)((float)((float)s.fpr[fra] * (float)s.fpr[frc] + (float)s.fpr[frb]));
+            break;
+        case 30: // FNMSUBS
+            s.fpr[frd] = (double)(-(float)((float)s.fpr[fra] * (float)s.fpr[frc] - (float)s.fpr[frb]));
+            break;
+        case 31: // FNMADDS
+            s.fpr[frd] = (double)(-(float)((float)s.fpr[fra] * (float)s.fpr[frc] + (float)s.fpr[frb]));
+            break;
+        default:
+            return 2;
+        }
+        if (rc) setCRField64(s.cr, 1, (s.fpr[frd] < 0) ? -1 : (s.fpr[frd] > 0) ? 1 : 0, s.xer);
+        break;
+    }
+
+    // ─── Group 63 (Double-Precision FP) ───────────────────────
+
+    case OP_GRP63: {
+        uint32_t frd = RD(inst), fra = RA(inst), frb = RB(inst);
+        uint32_t frc = FRC(inst);
+        uint32_t xo10 = XO_10(inst);
+        uint32_t xo5 = (inst >> 1) & 0x1F;
+        bool rc = inst & 1;
+        bool handled = true;
+
+        // Try X-form (10-bit XO) first
+        switch (xo10) {
+        case 0: { // FCMPU
+            uint32_t bf = frd >> 2;
+            double a = s.fpr[fra], b = s.fpr[frb];
+            uint32_t val;
+            if (isnan(a) || isnan(b))       val = 0x1; // FU (unordered)
+            else if (a < b)                 val = 0x8; // FL
+            else if (a > b)                 val = 0x4; // FG
+            else                            val = 0x2; // FE
+            int shift = (7 - bf) * 4;
+            s.cr = (s.cr & ~(0xFU << shift)) | (val << shift);
+            break;
+        }
+        case 32: { // FCMPO
+            uint32_t bf = frd >> 2;
+            double a = s.fpr[fra], b = s.fpr[frb];
+            uint32_t val;
+            if (isnan(a) || isnan(b))       val = 0x1;
+            else if (a < b)                 val = 0x8;
+            else if (a > b)                 val = 0x4;
+            else                            val = 0x2;
+            int shift = (7 - bf) * 4;
+            s.cr = (s.cr & ~(0xFU << shift)) | (val << shift);
+            break;
+        }
+        case 12: // FRSP (round to single precision)
+            s.fpr[frd] = (double)(float)s.fpr[frb];
+            break;
+        case 14: { // FCTIW (convert to int word)
+            int32_t ival = (int32_t)s.fpr[frb];
+            uint64_t bits = (uint64_t)(uint32_t)ival;
+            memcpy(&s.fpr[frd], &bits, 8);
+            break;
+        }
+        case 15: { // FCTIWZ (convert to int word with truncation)
+            int32_t ival = (int32_t)s.fpr[frb];
+            uint64_t bits = (uint64_t)(uint32_t)ival;
+            memcpy(&s.fpr[frd], &bits, 8);
+            break;
+        }
+        case 40: // FNEG
+            s.fpr[frd] = -s.fpr[frb];
+            break;
+        case 72: // FMR
+            s.fpr[frd] = s.fpr[frb];
+            break;
+        case 136: // FNABS
+            s.fpr[frd] = -fabs(s.fpr[frb]);
+            break;
+        case 264: // FABS
+            s.fpr[frd] = fabs(s.fpr[frb]);
+            break;
+        case 38: { // MTFSB1 (set FPSCR bit)
+            uint32_t bt = frd;
+            if (bt < 32) s.fpscr |= (1U << (31 - bt));
+            break;
+        }
+        case 70: { // MTFSB0 (clear FPSCR bit)
+            uint32_t bt = frd;
+            if (bt < 32) s.fpscr &= ~(1U << (31 - bt));
+            break;
+        }
+        case 583: { // MFFS (move from FPSCR)
+            uint64_t bits = (uint64_t)s.fpscr;
+            memcpy(&s.fpr[frd], &bits, 8);
+            break;
+        }
+        case 711: { // MTFSF (move to FPSCR fields)
+            uint32_t fm = (inst >> 17) & 0xFF;
+            uint64_t bits;
+            memcpy(&bits, &s.fpr[frb], 8);
+            uint32_t val = (uint32_t)bits;
+            for (int i = 0; i < 8; i++) {
+                if (fm & (1 << (7 - i))) {
+                    int shift = (7 - i) * 4;
+                    s.fpscr = (s.fpscr & ~(0xFU << shift)) | (val & (0xFU << shift));
+                }
+            }
+            break;
+        }
+        case 814: { // FCTID (convert to int doubleword)
+            int64_t ival = (int64_t)s.fpr[frb];
+            uint64_t bits = (uint64_t)ival;
+            memcpy(&s.fpr[frd], &bits, 8);
+            break;
+        }
+        case 815: { // FCTIDZ (convert to int doubleword with truncation)
+            int64_t ival = (int64_t)s.fpr[frb];
+            uint64_t bits = (uint64_t)ival;
+            memcpy(&s.fpr[frd], &bits, 8);
+            break;
+        }
+        case 846: { // FCFID (convert from int doubleword)
+            uint64_t bits;
+            memcpy(&bits, &s.fpr[frb], 8);
+            s.fpr[frd] = (double)(int64_t)bits;
+            break;
+        }
+        default:
+            // Try A-form (5-bit XO)
+            handled = false;
+            break;
+        }
+
+        if (!handled) {
+            handled = true;
+            switch (xo5) {
+            case 18: // FDIV
+                s.fpr[frd] = s.fpr[fra] / s.fpr[frb];
+                break;
+            case 20: // FSUB
+                s.fpr[frd] = s.fpr[fra] - s.fpr[frb];
+                break;
+            case 21: // FADD
+                s.fpr[frd] = s.fpr[fra] + s.fpr[frb];
+                break;
+            case 22: // FSQRT
+                s.fpr[frd] = sqrt(s.fpr[fra]);
+                break;
+            case 23: // FSEL
+                s.fpr[frd] = (s.fpr[fra] >= 0.0) ? s.fpr[frc] : s.fpr[frb];
+                break;
+            case 24: // FRES (reciprocal estimate)
+                s.fpr[frd] = 1.0 / s.fpr[frb];
+                break;
+            case 25: // FMUL (note: frC not frB)
+                s.fpr[frd] = s.fpr[fra] * s.fpr[frc];
+                break;
+            case 26: // FRSQRTE (reciprocal sqrt estimate)
+                s.fpr[frd] = 1.0 / sqrt(s.fpr[frb]);
+                break;
+            case 28: // FMSUB
+                s.fpr[frd] = s.fpr[fra] * s.fpr[frc] - s.fpr[frb];
+                break;
+            case 29: // FMADD
+                s.fpr[frd] = s.fpr[fra] * s.fpr[frc] + s.fpr[frb];
+                break;
+            case 30: // FNMSUB
+                s.fpr[frd] = -(s.fpr[fra] * s.fpr[frc] - s.fpr[frb]);
+                break;
+            case 31: // FNMADD
+                s.fpr[frd] = -(s.fpr[fra] * s.fpr[frc] + s.fpr[frb]);
+                break;
+            default:
+                return 2;
+            }
+        }
+        if (rc && handled) {
+            setCRField64(s.cr, 1, (s.fpr[frd] < 0) ? -1 : (s.fpr[frd] > 0) ? 1 : 0, s.xer);
         }
         break;
     }

@@ -123,6 +123,7 @@ PPE_HD inline uint32_t ME(uint32_t inst) { return (inst >> 1) & 0x1F; }
 // ═══════════════════════════════════════════════════════════════
 
 enum PrimaryOp : uint32_t {
+    OP_TDI     = 2,   // Trap Doubleword Immediate
     OP_TWI     = 3,   // Trap Word Immediate
     OP_MULLI   = 7,   // Multiply Low Immediate
     OP_SUBFIC  = 8,   // Subtract From Immediate Carrying
@@ -171,7 +172,9 @@ enum PrimaryOp : uint32_t {
     OP_STFSU   = 53,  // Store Floating-Point Single with Update
     OP_STFD    = 54,  // Store Floating-Point Double
     OP_STFDU   = 55,  // Store Floating-Point Double with Update
+    OP_GRP58   = 58,  // Group 58: LD/LDU/LWA (DS-form)
     OP_GRP59   = 59,  // Group 59: single-precision FP
+    OP_GRP62   = 62,  // Group 62: STD/STDU (DS-form)
     OP_GRP63   = 63,  // Group 63: double-precision FP
 };
 
@@ -181,57 +184,102 @@ enum PrimaryOp : uint32_t {
 
 enum XO31 : uint32_t {
     XO_CMP     = 0,
+    XO_TW      = 4,      // Trap Word
     XO_SUBFC   = 8,
+    XO_MULHDU  = 9,      // Multiply High Doubleword Unsigned
     XO_ADDC    = 10,
     XO_MULHWU  = 11,
-    XO_MFCR    = 19,
+    XO_MFCR    = 19,     // also MFOCRF
+    XO_LWARX   = 20,     // Load Word and Reserve Indexed
+    XO_LDX     = 21,     // Load Doubleword Indexed
     XO_LWZX    = 23,
     XO_SLW     = 24,
     XO_CNTLZW  = 26,
+    XO_SLD     = 27,     // Shift Left Doubleword
     XO_AND     = 28,
     XO_CMPL    = 32,
     XO_SUBF    = 40,
+    XO_LDUX    = 53,     // Load Doubleword with Update Indexed
+    XO_DCBST   = 54,     // Data Cache Block Store
     XO_LWZUX   = 55,
+    XO_CNTLZD  = 58,     // Count Leading Zeros Doubleword
     XO_ANDC    = 60,
+    XO_TD      = 68,     // Trap Doubleword
+    XO_MULHD   = 73,     // Multiply High Doubleword
     XO_MULHW   = 75,
     XO_MFMSR   = 83,
+    XO_LDARX   = 84,     // Load Doubleword and Reserve Indexed
+    XO_DCBF    = 86,     // Data Cache Block Flush
     XO_LBZX    = 87,
     XO_NEG     = 104,
     XO_LBZUX   = 119,
     XO_NOR     = 124,
     XO_SUBFE   = 136,
     XO_ADDE    = 138,
-    XO_MTCRF   = 144,
+    XO_MTCRF   = 144,    // also MTOCRF
     XO_MTMSR   = 146,
+    XO_STDX    = 149,    // Store Doubleword Indexed
+    XO_STWCX   = 150,    // Store Word Conditional Indexed
     XO_STWX    = 151,
+    XO_STDUX   = 181,    // Store Doubleword with Update Indexed
     XO_STWUX   = 183,
     XO_SUBFZE  = 200,
     XO_ADDZE   = 202,
+    XO_STDCX   = 214,    // Store Doubleword Conditional Indexed
     XO_STBX    = 215,
     XO_SUBFME  = 232,
+    XO_MULLD   = 233,    // Multiply Low Doubleword
     XO_ADDME   = 234,
     XO_MULLW   = 235,
+    XO_DCBTST  = 246,    // Data Cache Block Touch for Store
     XO_STBUX   = 247,
     XO_ADD     = 266,
+    XO_DCBT    = 278,    // Data Cache Block Touch
     XO_LHZX    = 279,
+    XO_EQV     = 284,    // Equivalent
+    XO_LHZUX   = 311,
     XO_XOR     = 316,
     XO_MFSPR   = 339,
-    XO_LHZUX   = 311,
+    XO_LWAX    = 341,    // Load Word Algebraic Indexed
     XO_LHAX    = 343,
+    XO_MFTB    = 371,    // Move From Time Base
+    XO_LWAUX   = 373,    // Load Word Algebraic with Update Indexed
+    XO_LHAUX   = 375,    // Load Half Word Algebraic with Update Indexed
     XO_STHX    = 407,
     XO_ORC     = 412,
+    XO_STHUX   = 439,    // Store Half Word with Update Indexed
     XO_OR      = 444,
+    XO_DIVDU   = 457,    // Divide Doubleword Unsigned
     XO_DIVWU   = 459,
     XO_MTSPR   = 467,
     XO_NAND    = 476,
+    XO_DIVD    = 489,    // Divide Doubleword
     XO_DIVW    = 491,
+    XO_LWBRX   = 534,    // Load Word Byte-Reversed Indexed
+    XO_LFSX    = 535,    // Load Floating-Point Single Indexed
     XO_SRW     = 536,
+    XO_SRD     = 539,    // Shift Right Doubleword
+    XO_LFSUX   = 567,    // Load Floating-Point Single with Update Indexed
     XO_SYNC    = 598,
+    XO_LFDX    = 599,    // Load Floating-Point Double Indexed
+    XO_LFDUX   = 631,    // Load Floating-Point Double with Update Indexed
+    XO_STWBRX  = 662,    // Store Word Byte-Reversed Indexed
+    XO_STFSX   = 663,    // Store Floating-Point Single Indexed
+    XO_STFSUX  = 695,    // Store Floating-Point Single with Update Indexed
+    XO_STFDX   = 727,    // Store Floating-Point Double Indexed
+    XO_STFDUX  = 759,    // Store Floating-Point Double with Update Indexed
+    XO_LHBRX   = 790,    // Load Half Word Byte-Reversed Indexed
     XO_SRAW    = 792,
+    XO_SRAD    = 794,    // Shift Right Algebraic Doubleword
     XO_SRAWI   = 824,
     XO_EIEIO   = 854,
-    XO_EXTSB   = 954,
+    XO_STHBRX  = 918,    // Store Half Word Byte-Reversed Indexed
     XO_EXTSH   = 922,
+    XO_EXTSB   = 954,
+    XO_ICBI    = 982,    // Instruction Cache Block Invalidate
+    XO_STFIWX  = 983,    // Store Floating-Point as Integer Word Indexed
+    XO_EXTSW   = 986,    // Extend Sign Word
+    XO_DCBZ    = 1014,   // Data Cache Block Zero
 };
 
 // ═══════════════════════════════════════════════════════════════
