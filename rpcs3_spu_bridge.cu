@@ -257,6 +257,46 @@ static const char* spu_kernel_template =
 "        case 0x00D: info[2]=3;info[5]=ra;info[6]=rt;goto done;\n"
 "        case 0x10D: info[2]=4;info[5]=ra;info[6]=rt;goto done;\n"
 "        case 0x00F: RW(rt,0)=1;RW(rt,1)=0;RW(rt,2)=0;RW(rt,3)=0; break;\n"
+
+// CBX/CHX/CWX/CDX: generate controls for byte/halfword/word/doubleword insertion (register form)
+"        case 0x1D4: { int t=(~(RW(ra,0)+RW(rb,0)))&0xF; uint32_t*d=&regs[rt*4]; d[0]=0x10111213;d[1]=0x14151617;d[2]=0x18191A1B;d[3]=0x1C1D1E1F; set_reg_byte(d,t,0x03); break; }\n"
+"        case 0x1D5: { int t=((~(RW(ra,0)+RW(rb,0)))&0xE)>>1; uint32_t*d=&regs[rt*4]; d[0]=0x10111213;d[1]=0x14151617;d[2]=0x18191A1B;d[3]=0x1C1D1E1F; set_reg_hw(d,t,0x0203); break; }\n"
+"        case 0x1D6: { int t=((~(RW(ra,0)+RW(rb,0)))&0xC)>>2; uint32_t*d=&regs[rt*4]; d[0]=0x10111213;d[1]=0x14151617;d[2]=0x18191A1B;d[3]=0x1C1D1E1F; d[t]=0x00010203; break; }\n"
+"        case 0x1D7: { int t=((~(RW(ra,0)+RW(rb,0)))&0x8)>>3; uint32_t*d=&regs[rt*4]; d[0]=0x10111213;d[1]=0x14151617;d[2]=0x18191A1B;d[3]=0x1C1D1E1F; d[t*2]=0x00010203;d[t*2+1]=0x04050607; break; }\n"
+
+// MPYHHA/MPYHHAU: multiply high halfword with accumulate
+"        case 0x346: for(int w=0;w<4;w++) RW(rt,w)+=(uint32_t)((int32_t)(int16_t)(RW(ra,w)>>16)*(int32_t)(int16_t)(RW(rb,w)>>16)); break;\n"
+"        case 0x34E: for(int w=0;w<4;w++) RW(rt,w)+=(RW(ra,w)>>16)*(RW(rb,w)>>16); break;\n"
+
+// FESD: floating extend single to double (slot 0→dw0, slot 2→dw1)
+"        case 0x3B8: { float f0=u2f(RW(ra,0)),f1=u2f(RW(ra,2)); double d0=(double)f0,d1=(double)f1; uint64_t u0,u1; memcpy(&u0,&d0,8);memcpy(&u1,&d1,8); RW(rt,0)=(uint32_t)(u0>>32);RW(rt,1)=(uint32_t)u0;RW(rt,2)=(uint32_t)(u1>>32);RW(rt,3)=(uint32_t)u1; break; }\n"
+// FRDS: floating round double to single (dw0→slot 0, dw1→slot 2)
+"        case 0x3B9: { uint64_t u0=((uint64_t)RW(ra,0)<<32)|RW(ra,1),u1=((uint64_t)RW(ra,2)<<32)|RW(ra,3); double d0,d1; memcpy(&d0,&u0,8);memcpy(&d1,&u1,8); RW(rt,0)=f2u((float)d0);RW(rt,1)=0;RW(rt,2)=f2u((float)d1);RW(rt,3)=0; break; }\n"
+
+// FSCRRD/FSCRWR: FP status/control register (stub — read zeros / ignore writes)
+"        case 0x398: for(int w=0;w<4;w++) RW(rt,w)=0; break;\n"
+"        case 0x3BA: break;\n"
+
+// DFTSV: double FP test special value — test class bits in rb[0:6]
+"        case 0x3BF: { uint64_t u0=((uint64_t)RW(ra,0)<<32)|RW(ra,1),u1=((uint64_t)RW(ra,2)<<32)|RW(ra,3); double d0,d1; memcpy(&d0,&u0,8);memcpy(&d1,&u1,8); uint32_t mask=i7&0x7F; uint32_t r0=0,r1=0; uint64_t e0=(u0>>52)&0x7FF,m0=u0&0xFFFFFFFFFFFFFULL; uint64_t e1=(u1>>52)&0x7FF,m1=u1&0xFFFFFFFFFFFFFULL; int s0=(u0>>63)&1,s1=(u1>>63)&1; if((mask&0x01)&&(e0==0&&m0==0&&!s0)) r0=0xFFFFFFFF; if((mask&0x02)&&(e0==0&&m0==0&&s0)) r0=0xFFFFFFFF; if((mask&0x04)&&(e0==0&&m0!=0)) r0=0xFFFFFFFF; if((mask&0x08)&&(e0==0x7FF&&m0==0&&!s0)) r0=0xFFFFFFFF; if((mask&0x10)&&(e0==0x7FF&&m0==0&&s0)) r0=0xFFFFFFFF; if((mask&0x20)&&(e0==0x7FF&&m0!=0)) r0=0xFFFFFFFF; if((mask&0x01)&&(e1==0&&m1==0&&!s1)) r1=0xFFFFFFFF; if((mask&0x02)&&(e1==0&&m1==0&&s1)) r1=0xFFFFFFFF; if((mask&0x04)&&(e1==0&&m1!=0)) r1=0xFFFFFFFF; if((mask&0x08)&&(e1==0x7FF&&m1==0&&!s1)) r1=0xFFFFFFFF; if((mask&0x10)&&(e1==0x7FF&&m1==0&&s1)) r1=0xFFFFFFFF; if((mask&0x20)&&(e1==0x7FF&&m1!=0)) r1=0xFFFFFFFF; RW(rt,0)=r0;RW(rt,1)=r0;RW(rt,2)=r1;RW(rt,3)=r1; break; }\n"
+
+// Double FP compare: DFCEQ, DFCGT, DFCMEQ, DFCMGT
+"        case 0x3C3: { uint64_t ah=((uint64_t)RW(ra,0)<<32)|RW(ra,1),al=((uint64_t)RW(ra,2)<<32)|RW(ra,3);uint64_t bh=((uint64_t)RW(rb,0)<<32)|RW(rb,1),bl=((uint64_t)RW(rb,2)<<32)|RW(rb,3);double da,db,dal,dbl;memcpy(&da,&ah,8);memcpy(&db,&bh,8);memcpy(&dal,&al,8);memcpy(&dbl,&bl,8); uint32_t r0=(da==db)?0xFFFFFFFF:0,r1=(dal==dbl)?0xFFFFFFFF:0; RW(rt,0)=r0;RW(rt,1)=r0;RW(rt,2)=r1;RW(rt,3)=r1; break; }\n"
+"        case 0x2C3: { uint64_t ah=((uint64_t)RW(ra,0)<<32)|RW(ra,1),al=((uint64_t)RW(ra,2)<<32)|RW(ra,3);uint64_t bh=((uint64_t)RW(rb,0)<<32)|RW(rb,1),bl=((uint64_t)RW(rb,2)<<32)|RW(rb,3);double da,db,dal,dbl;memcpy(&da,&ah,8);memcpy(&db,&bh,8);memcpy(&dal,&al,8);memcpy(&dbl,&bl,8); uint32_t r0=(da>db)?0xFFFFFFFF:0,r1=(dal>dbl)?0xFFFFFFFF:0; RW(rt,0)=r0;RW(rt,1)=r0;RW(rt,2)=r1;RW(rt,3)=r1; break; }\n"
+"        case 0x3CB: { uint64_t ah=((uint64_t)RW(ra,0)<<32)|RW(ra,1),al=((uint64_t)RW(ra,2)<<32)|RW(ra,3);uint64_t bh=((uint64_t)RW(rb,0)<<32)|RW(rb,1),bl=((uint64_t)RW(rb,2)<<32)|RW(rb,3);double da,db,dal,dbl;memcpy(&da,&ah,8);memcpy(&db,&bh,8);memcpy(&dal,&al,8);memcpy(&dbl,&bl,8); da=da<0?-da:da;db=db<0?-db:db;dal=dal<0?-dal:dal;dbl=dbl<0?-dbl:dbl; uint32_t r0=(da==db)?0xFFFFFFFF:0,r1=(dal==dbl)?0xFFFFFFFF:0; RW(rt,0)=r0;RW(rt,1)=r0;RW(rt,2)=r1;RW(rt,3)=r1; break; }\n"
+"        case 0x2CB: { uint64_t ah=((uint64_t)RW(ra,0)<<32)|RW(ra,1),al=((uint64_t)RW(ra,2)<<32)|RW(ra,3);uint64_t bh=((uint64_t)RW(rb,0)<<32)|RW(rb,1),bl=((uint64_t)RW(rb,2)<<32)|RW(rb,3);double da,db,dal,dbl;memcpy(&da,&ah,8);memcpy(&db,&bh,8);memcpy(&dal,&al,8);memcpy(&dbl,&bl,8); da=da<0?-da:da;db=db<0?-db:db;dal=dal<0?-dal:dal;dbl=dbl<0?-dbl:dbl; uint32_t r0=(da>db)?0xFFFFFFFF:0,r1=(dal>dbl)?0xFFFFFFFF:0; RW(rt,0)=r0;RW(rt,1)=r0;RW(rt,2)=r1;RW(rt,3)=r1; break; }\n"
+
+// DFMA/DFMS/DFNMS/DFNMA: double FP multiply-add/subtract variants
+"        case 0x35C: { uint64_t ah=((uint64_t)RW(ra,0)<<32)|RW(ra,1),al=((uint64_t)RW(ra,2)<<32)|RW(ra,3);uint64_t bh=((uint64_t)RW(rb,0)<<32)|RW(rb,1),bl=((uint64_t)RW(rb,2)<<32)|RW(rb,3);uint64_t th=((uint64_t)RW(rt,0)<<32)|RW(rt,1),tl=((uint64_t)RW(rt,2)<<32)|RW(rt,3);double da,db,dt,dal,dbl,dtl;memcpy(&da,&ah,8);memcpy(&db,&bh,8);memcpy(&dt,&th,8);memcpy(&dal,&al,8);memcpy(&dbl,&bl,8);memcpy(&dtl,&tl,8);dt=fma(da,db,dt);dtl=fma(dal,dbl,dtl);memcpy(&th,&dt,8);memcpy(&tl,&dtl,8);RW(rt,0)=(uint32_t)(th>>32);RW(rt,1)=(uint32_t)th;RW(rt,2)=(uint32_t)(tl>>32);RW(rt,3)=(uint32_t)tl; break; }\n"
+"        case 0x35D: { uint64_t ah=((uint64_t)RW(ra,0)<<32)|RW(ra,1),al=((uint64_t)RW(ra,2)<<32)|RW(ra,3);uint64_t bh=((uint64_t)RW(rb,0)<<32)|RW(rb,1),bl=((uint64_t)RW(rb,2)<<32)|RW(rb,3);uint64_t th=((uint64_t)RW(rt,0)<<32)|RW(rt,1),tl=((uint64_t)RW(rt,2)<<32)|RW(rt,3);double da,db,dt,dal,dbl,dtl;memcpy(&da,&ah,8);memcpy(&db,&bh,8);memcpy(&dt,&th,8);memcpy(&dal,&al,8);memcpy(&dbl,&bl,8);memcpy(&dtl,&tl,8);dt=fma(da,db,-dt);dtl=fma(dal,dbl,-dtl);memcpy(&th,&dt,8);memcpy(&tl,&dtl,8);RW(rt,0)=(uint32_t)(th>>32);RW(rt,1)=(uint32_t)th;RW(rt,2)=(uint32_t)(tl>>32);RW(rt,3)=(uint32_t)tl; break; }\n"
+"        case 0x35E: { uint64_t ah=((uint64_t)RW(ra,0)<<32)|RW(ra,1),al=((uint64_t)RW(ra,2)<<32)|RW(ra,3);uint64_t bh=((uint64_t)RW(rb,0)<<32)|RW(rb,1),bl=((uint64_t)RW(rb,2)<<32)|RW(rb,3);uint64_t th=((uint64_t)RW(rt,0)<<32)|RW(rt,1),tl=((uint64_t)RW(rt,2)<<32)|RW(rt,3);double da,db,dt,dal,dbl,dtl;memcpy(&da,&ah,8);memcpy(&db,&bh,8);memcpy(&dt,&th,8);memcpy(&dal,&al,8);memcpy(&dbl,&bl,8);memcpy(&dtl,&tl,8);dt=fma(-da,db,dt);dtl=fma(-dal,dbl,dtl);memcpy(&th,&dt,8);memcpy(&tl,&dtl,8);RW(rt,0)=(uint32_t)(th>>32);RW(rt,1)=(uint32_t)th;RW(rt,2)=(uint32_t)(tl>>32);RW(rt,3)=(uint32_t)tl; break; }\n"
+"        case 0x35F: { uint64_t ah=((uint64_t)RW(ra,0)<<32)|RW(ra,1),al=((uint64_t)RW(ra,2)<<32)|RW(ra,3);uint64_t bh=((uint64_t)RW(rb,0)<<32)|RW(rb,1),bl=((uint64_t)RW(rb,2)<<32)|RW(rb,3);uint64_t th=((uint64_t)RW(rt,0)<<32)|RW(rt,1),tl=((uint64_t)RW(rt,2)<<32)|RW(rt,3);double da,db,dt,dal,dbl,dtl;memcpy(&da,&ah,8);memcpy(&db,&bh,8);memcpy(&dt,&th,8);memcpy(&dal,&al,8);memcpy(&dbl,&bl,8);memcpy(&dtl,&tl,8);dt=-fma(da,db,dt);dtl=-fma(dal,dbl,dtl);memcpy(&th,&dt,8);memcpy(&tl,&dtl,8);RW(rt,0)=(uint32_t)(th>>32);RW(rt,1)=(uint32_t)th;RW(rt,2)=(uint32_t)(tl>>32);RW(rt,3)=(uint32_t)tl; break; }\n"
+
+// IRET: interrupt return (stub — halt, not supported in GPU context)
+"        case 0x1AA: info[2]=2; goto done;\n"
+// BISLED: branch indirect if external data (stub — treat as unconditional for now)
+"        case 0x1AB: { uint32_t tgt=RW(ra,0)&0x3FFFC; RW(rt,0)=pc+4;RW(rt,1)=0;RW(rt,2)=0;RW(rt,3)=0; pc=tgt; cycles++; continue; }\n"
+
 "        default: handled=false;\n"
 "        }\n"
 "\n"
