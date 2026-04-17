@@ -108,6 +108,20 @@ public:
     void setCullMode(CullMode m) { cullMode_ = m; }
     void setFrontFace(FrontFace f) { frontFace_ = f; }
 
+    // Alpha test: fragments with a*255 < ref are rejected when enabled.
+    // Mirrors RSX NV4097_SET_ALPHA_TEST_ENABLE + SET_ALPHA_FUNC/REF.
+    // Only Greater (>) is implemented today since it's the common case;
+    // other funcs can be added as games need them.
+    void setAlphaTest(bool enable, uint8_t ref = 0) {
+        alphaTestEnable_ = enable; alphaRef_ = ref;
+    }
+
+    // Indexed draw — vertex buffer addressed by an index array.
+    // Index type uint16 or uint32 selected via indexIs32.
+    uint32_t drawIndexed(const RasterVertex* verts, uint32_t vertexCount,
+                         const void* indices, uint32_t indexCount,
+                         bool indexIs32);
+
     // Scissor rect in pixel coordinates. Set w=0 or h=0 to disable.
     // Matches RSX SET_SCISSOR_HORIZONTAL / SET_SCISSOR_VERTICAL.
     void setScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
@@ -157,6 +171,8 @@ private:
     FrontFace frontFace_{FrontFace::CCW};
     int32_t   scX_{0}, scY_{0};
     uint32_t  scW_{0}, scH_{0};
+    bool      alphaTestEnable_{false};
+    uint8_t   alphaRef_{0};
 };
 
 } // namespace rsx

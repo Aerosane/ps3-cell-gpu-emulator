@@ -113,7 +113,8 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   const uint32_t* __restrict__ tex,
                                   uint32_t texW, uint32_t texH,
                                   int texBilinear,
-                                  int scX, int scY, uint32_t scW, uint32_t scH) {
+                                  int scX, int scY, uint32_t scW, uint32_t scH,
+                                  int alphaTest, uint32_t alphaRef) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -169,8 +170,12 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             float vv = w0 * v0.v + w1 * v1.v + w2 * v2.v;
             float tr, tg, tb, ta;
             sampleTex(tex, texW, texH, u, vv, texBilinear, tr, tg, tb, ta);
-            // Modulate vertex color with texture sample.
             r *= tr; g *= tg; b *= tb; a *= ta;
+        }
+
+        if (alphaTest) {
+            uint32_t af = (uint32_t)(a * 255.0f + 0.5f);
+            if (af <= alphaRef) continue;
         }
 
         if (blendEnable) {
@@ -258,6 +263,24 @@ void CudaRasterizer::clearDepth(float value) {
     cudaDeviceSynchronize();
 }
 
+uint32_t CudaRasterizer::drawIndexed(const RasterVertex* verts,
+                                     uint32_t vertexCount,
+                                     const void* indices,
+                                     uint32_t indexCount,
+                                     bool indexIs32) {
+    if (!verts || !indices || indexCount < 3) return 0;
+    std::vector<RasterVertex> expanded;
+    expanded.reserve(indexCount);
+    for (uint32_t i = 0; i < indexCount; ++i) {
+        uint32_t idx = indexIs32
+            ? static_cast<const uint32_t*>(indices)[i]
+            : static_cast<const uint16_t*>(indices)[i];
+        if (idx >= vertexCount) return 0;
+        expanded.push_back(verts[idx]);
+    }
+    return drawTriangles(expanded.data(), (uint32_t)expanded.size());
+}
+
 uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                        uint32_t count) {
     if (!fb_.d_color || count < 3) return 0;
@@ -341,7 +364,9 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   uint32_t(depthFunc_),
                                   d_tex_, texW_, texH_,
                                   texBilinear_ ? 1 : 0,
-                                  scX_, scY_, scW_, scH_);
+                                  scX_, scY_, scW_, scH_,
+                                  alphaTestEnable_ ? 1 : 0,
+                                  uint32_t(alphaRef_));
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;

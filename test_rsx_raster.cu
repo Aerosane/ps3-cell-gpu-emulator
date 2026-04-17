@@ -351,6 +351,50 @@ int main() {
           "CCW survives, center is green not red");
     r.setCullMode(CullMode::None);
 
+    // ───────────────────────────────────────────────────────────────
+    // Indexed draw: 4 verts + 6 indices = 2 triangles as a quad.
+    // ───────────────────────────────────────────────────────────────
+    r.clear(0xFF000000u);
+    RasterVertex quadVerts[4] = {
+        { 80.f,  60.f, 0, 1,0,0,1 },
+        {240.f,  60.f, 0, 0,1,0,1 },
+        {240.f, 180.f, 0, 0,0,1,1 },
+        { 80.f, 180.f, 0, 1,1,0,1 },
+    };
+    uint16_t idx16[6] = { 0,1,2,  0,2,3 };
+    uint32_t it = r.drawIndexed(quadVerts, 4, idx16, 6, false);
+    CHECK(it == 2, "drawIndexed produced 2 triangles");
+    r.readback(fb.data());
+    uint32_t qc = fb[120 * 320 + 160];
+    std::printf("  indexed quad center: 0x%08x\n", qc);
+    CHECK(qc != 0xFF000000u, "Indexed quad rasterized");
+
+    // ───────────────────────────────────────────────────────────────
+    // Alpha test: draw a fully-transparent triangle (a=0) on top of a
+    // solid one; with alpha test ref=127, the transparent fragments
+    // are rejected and the underlying color survives.
+    // ───────────────────────────────────────────────────────────────
+    r.clear(0xFF000000u);
+    RasterVertex solid[3] = {
+        { 80.f,  50.f, 0, 0,1,1,1 },
+        {240.f,  50.f, 0, 0,1,1,1 },
+        {160.f, 190.f, 0, 0,1,1,1 },
+    };
+    RasterVertex ghost[3] = {
+        { 80.f,  50.f, 0, 1,0,0, 0.2f },
+        {240.f,  50.f, 0, 1,0,0, 0.2f },
+        {160.f, 190.f, 0, 1,0,0, 0.2f },
+    };
+    r.drawTriangles(solid, 3);
+    r.setAlphaTest(true, 127);  // reject fragments where a*255 <= 127
+    r.drawTriangles(ghost, 3);
+    r.setAlphaTest(false);
+    r.readback(fb.data());
+    uint32_t aPx = fb[100 * 320 + 160];
+    std::printf("  alpha-test px: 0x%08x (want cyan, not red)\n", aPx);
+    CHECK(((aPx>>16)&0xFF) < 32 && ((aPx>>8)&0xFF) > 200 && (aPx&0xFF) > 200,
+          "Alpha test rejected ghost fragments");
+
     std::printf("\nStats: tris=%u skipped=%u clears=%u\n",
                 r.stats.triangles, r.stats.triangleSkipped, r.stats.clears);
     std::printf("%s (%d failures)\n",
