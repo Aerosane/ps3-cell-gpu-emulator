@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
+#include <cmath>
 #include <vector>
 
 using namespace rsx;
@@ -143,6 +144,103 @@ int main() {
     CHECK(zOverlap > 0.18f && zOverlap < 0.22f, "Depth buffer stored near Z");
 
     r.savePPM("/tmp/rsx_raster_zdemo.ppm");
+
+    // ───────────────────────────────────────────────────────────────
+    // 3D cube through MVP pipeline: world-space verts, perspective
+    // projection, viewport mapping, depth-buffered visibility.
+    // Expectation: 3 faces visible, 3 hidden; silhouette is 6-sided.
+    // ───────────────────────────────────────────────────────────────
+    r.clear(0xFF101020u);
+    r.clearDepth(1.0f);
+    r.setDepthTest(true);
+    r.setBlend(false);
+
+    // Perspective (fovy=60°, aspect=320/240, near=1, far=10) * rotate Y 35°
+    //   combined with translate(0,0,-3).
+    auto persp = [](float fovy, float aspect, float zn, float zf) {
+        float f = 1.0f / std::tan(fovy * 0.5f);
+        RasterMat4 m{};
+        m.m[0][0] = f / aspect;
+        m.m[1][1] = f;
+        m.m[2][2] = (zf + zn) / (zn - zf);
+        m.m[2][3] = -1.0f;
+        m.m[3][2] = (2.0f * zf * zn) / (zn - zf);
+        return m;
+    };
+    auto rotY = [](float a) {
+        RasterMat4 m = RasterMat4::identity();
+        float c = std::cos(a), s = std::sin(a);
+        m.m[0][0] = c; m.m[2][0] = s;
+        m.m[0][2] = -s; m.m[2][2] = c;
+        return m;
+    };
+    auto rotX = [](float a) {
+        RasterMat4 m = RasterMat4::identity();
+        float c = std::cos(a), s = std::sin(a);
+        m.m[1][1] = c; m.m[2][1] = -s;
+        m.m[1][2] = s; m.m[2][2] = c;
+        return m;
+    };
+    auto translate = [](float x, float y, float z) {
+        RasterMat4 m = RasterMat4::identity();
+        m.m[3][0] = x; m.m[3][1] = y; m.m[3][2] = z;
+        return m;
+    };
+    auto mul = [](const RasterMat4& A, const RasterMat4& B) {
+        RasterMat4 C{};
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
+                for (int k = 0; k < 4; ++k)
+                    C.m[i][j] += A.m[k][j] * B.m[i][k];
+        return C;
+    };
+
+    RasterMat4 P  = persp(1.047f, 320.0f/240.0f, 1.0f, 10.0f);
+    RasterMat4 V  = translate(0.0f, 0.0f, -3.5f);
+    RasterMat4 M  = mul(rotY(0.6f), rotX(0.4f));
+    RasterMat4 MVP = mul(P, mul(V, M));
+    r.setMVP(MVP);
+    r.setViewport(0.0f, 0.0f, 320.0f, 240.0f);
+
+    // Cube -1..+1 with face-colored verts. 12 triangles, 36 verts.
+    auto face = [&](std::vector<RasterVertex>& out,
+                    float ax, float ay, float az,
+                    float bx, float by, float bz,
+                    float cx, float cy, float cz,
+                    float dx, float dy, float dz,
+                    float R, float G, float B) {
+        out.push_back({ax,ay,az, R,G,B,1});
+        out.push_back({bx,by,bz, R,G,B,1});
+        out.push_back({cx,cy,cz, R,G,B,1});
+        out.push_back({ax,ay,az, R,G,B,1});
+        out.push_back({cx,cy,cz, R,G,B,1});
+        out.push_back({dx,dy,dz, R,G,B,1});
+    };
+    std::vector<RasterVertex> cube;
+    // +X (red), -X (cyan), +Y (green), -Y (magenta), +Z (blue), -Z (yellow)
+    face(cube, +1,-1,-1,  +1,+1,-1,  +1,+1,+1,  +1,-1,+1,  1,0.2f,0.2f);
+    face(cube, -1,-1,+1,  -1,+1,+1,  -1,+1,-1,  -1,-1,-1,  0.2f,1,1);
+    face(cube, -1,+1,-1,  -1,+1,+1,  +1,+1,+1,  +1,+1,-1,  0.2f,1,0.2f);
+    face(cube, -1,-1,+1,  -1,-1,-1,  +1,-1,-1,  +1,-1,+1,  1,0.2f,1);
+    face(cube, -1,-1,+1,  +1,-1,+1,  +1,+1,+1,  -1,+1,+1,  0.2f,0.4f,1);
+    face(cube, +1,-1,-1,  -1,-1,-1,  -1,+1,-1,  +1,+1,-1,  1,1,0.2f);
+
+    r.drawTriangles(cube.data(), (uint32_t)cube.size());
+    r.readback(fb.data());
+
+    // Count non-clear pixels to verify the cube rendered something.
+    size_t lit = 0;
+    for (uint32_t p : fb) if (p != 0xFF101020u) lit++;
+    std::printf("  cube lit pixels: %zu (expect 15-40%% of 76800)\n", lit);
+    CHECK(lit > 10000 && lit < 40000, "Cube silhouette rendered at expected size");
+
+    // Center pixel should be some face color (not clear color).
+    uint32_t cube_center = fb[120 * 320 + 160];
+    std::printf("  cube center: 0x%08x\n", cube_center);
+    CHECK(cube_center != 0xFF101020u, "Cube center is a face, not background");
+
+    r.savePPM("/tmp/rsx_raster_cube.ppm");
+    r.clearMVP();
 
     std::printf("\nStats: tris=%u clears=%u\n",
                 r.stats.triangles, r.stats.clears);

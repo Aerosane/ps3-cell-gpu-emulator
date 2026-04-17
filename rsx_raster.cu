@@ -189,10 +189,40 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                        uint32_t count) {
     if (!fb_.d_color || count < 3) return 0;
     uint32_t tris = count / 3;
+
+    // Transform to pixel/NDC-z space on host. For small vertex counts
+    // this is well under GPU dispatch overhead; a dedicated transform
+    // kernel is a later optimization once we're pushing 100k+ verts.
+    std::vector<RasterVertex> transformed;
+    const RasterVertex* d_src = verts;
+    if (useMVP_) {
+        transformed.resize(count);
+        float vpX = (vpW_ > 0) ? vpX_ : 0.0f;
+        float vpY = (vpH_ > 0) ? vpY_ : 0.0f;
+        float vpW = (vpW_ > 0) ? vpW_ : (float)fb_.width;
+        float vpH = (vpH_ > 0) ? vpH_ : (float)fb_.height;
+        for (uint32_t i = 0; i < count; ++i) {
+            const auto& v = verts[i];
+            // clip = M * (x,y,z,1) using column-major convention.
+            float cx = mvp_.m[0][0]*v.x + mvp_.m[1][0]*v.y + mvp_.m[2][0]*v.z + mvp_.m[3][0];
+            float cy = mvp_.m[0][1]*v.x + mvp_.m[1][1]*v.y + mvp_.m[2][1]*v.z + mvp_.m[3][1];
+            float cz = mvp_.m[0][2]*v.x + mvp_.m[1][2]*v.y + mvp_.m[2][2]*v.z + mvp_.m[3][2];
+            float cw = mvp_.m[0][3]*v.x + mvp_.m[1][3]*v.y + mvp_.m[2][3]*v.z + mvp_.m[3][3];
+            if (cw == 0.0f) cw = 1e-30f;
+            float nx = cx / cw, ny = cy / cw, nz = cz / cw;
+            // NDC [-1,1] -> viewport pixels. Y flip to screen-down.
+            transformed[i] = v;
+            transformed[i].x = vpX + (nx * 0.5f + 0.5f) * vpW;
+            transformed[i].y = vpY + (1.0f - (ny * 0.5f + 0.5f)) * vpH;
+            transformed[i].z = nz * 0.5f + 0.5f;  // NDC z [-1,1] -> [0,1]
+        }
+        d_src = transformed.data();
+    }
+
     size_t bytes = size_t(tris) * 3 * sizeof(RasterVertex);
     RasterVertex* d_v = nullptr;
     if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
-    cudaMemcpy(d_v, verts, bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_v, d_src, bytes, cudaMemcpyHostToDevice);
 
     dim3 bs(16, 16);
     dim3 gs((fb_.width + bs.x - 1) / bs.x,

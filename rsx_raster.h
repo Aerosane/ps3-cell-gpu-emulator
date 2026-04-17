@@ -25,8 +25,19 @@
 namespace rsx {
 
 struct RasterVertex {
-    float x, y, z;     // Screen-space for now. Clip/VP transform TBD.
+    float x, y, z;     // Model/clip-space depending on pipeline state.
     float r, g, b, a;  // Linear RGBA
+};
+
+// Column-major 4x4 matrix, mirroring GL/RSX convention:
+// M[col][row]. m[0] is the first column, so m[0][3] = element row3col0.
+struct RasterMat4 {
+    float m[4][4];
+    static RasterMat4 identity() {
+        RasterMat4 r{};
+        for (int i = 0; i < 4; ++i) r.m[i][i] = 1.0f;
+        return r;
+    }
 };
 
 struct RasterFramebuffer {
@@ -71,6 +82,17 @@ public:
     void setDepthWrite(bool enable) { depthWrite_ = enable; }
     void setDepthFunc(DepthFunc f) { depthFunc_ = f; }
 
+    // MVP matrix: applied as clip = M * vertex, then perspective divide
+    // (x,y,z /= w), then viewport mapping to pixel coords.
+    // Leave at identity to pass screen-space vertices straight through.
+    void setMVP(const RasterMat4& m) { mvp_ = m; useMVP_ = true; }
+    void clearMVP() { useMVP_ = false; }
+
+    // Viewport in pixels. Used only when MVP transform is active.
+    void setViewport(float x, float y, float w, float h) {
+        vpX_ = x; vpY_ = y; vpW_ = w; vpH_ = h;
+    }
+
     // Rasterize a triangle list. `verts` must have count%3 == 0.
     // Returns number of triangles that passed degeneracy test.
     uint32_t drawTriangles(const RasterVertex* verts, uint32_t count);
@@ -101,6 +123,9 @@ private:
     bool depthTest_{false};
     bool depthWrite_{true};
     DepthFunc depthFunc_{DepthFunc::Less};
+    bool useMVP_{false};
+    RasterMat4 mvp_{RasterMat4::identity()};
+    float vpX_{0}, vpY_{0}, vpW_{0}, vpH_{0};
 };
 
 } // namespace rsx
