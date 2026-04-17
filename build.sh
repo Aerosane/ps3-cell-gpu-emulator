@@ -69,7 +69,7 @@ $NVCC $NVCC_FLAGS \
   -o rsx_replay_test
 
 echo "[9/9] Building RSX CUDA rasterizer test..."
-$NVCC $NVCC_FLAGS \
+$NVCC $NVCC_FLAGS --extended-lambda \
   test_rsx_raster.cu rsx_raster.cu \
   -o rsx_raster_test
 

@@ -26,7 +26,8 @@ namespace rsx {
 
 struct RasterVertex {
     float x, y, z;     // Model/clip-space depending on pipeline state.
-    float r, g, b, a;  // Linear RGBA
+    float r, g, b, a;  // Linear RGBA (modulated with texture when bound).
+    float u, v;        // Texture coords, [0,1] with current wrap mode.
 };
 
 // Column-major 4x4 matrix, mirroring GL/RSX convention:
@@ -93,6 +94,12 @@ public:
         vpX_ = x; vpY_ = y; vpW_ = w; vpH_ = h;
     }
 
+    // Texture binding. Data is RGBA8 (0xAARRGGBB little-endian),
+    // row-major, no swizzle. Bilinear sampled; UVs wrap with mod 1.
+    // Call with data=nullptr to unbind.
+    int  setTexture2D(const uint32_t* data, uint32_t w, uint32_t h);
+    void setTextureFilter(bool bilinear) { texBilinear_ = bilinear; }
+
     // Rasterize a triangle list. `verts` must have count%3 == 0.
     // Returns number of triangles that passed degeneracy test.
     uint32_t drawTriangles(const RasterVertex* verts, uint32_t count);
@@ -126,6 +133,11 @@ private:
     bool useMVP_{false};
     RasterMat4 mvp_{RasterMat4::identity()};
     float vpX_{0}, vpY_{0}, vpW_{0}, vpH_{0};
+
+    // Texture state
+    uint32_t* d_tex_{nullptr};
+    uint32_t  texW_{0}, texH_{0};
+    bool      texBilinear_{true};
 };
 
 } // namespace rsx

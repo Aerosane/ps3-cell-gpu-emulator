@@ -242,6 +242,62 @@ int main() {
     r.savePPM("/tmp/rsx_raster_cube.ppm");
     r.clearMVP();
 
+    // ───────────────────────────────────────────────────────────────
+    // Textured quad: procedural 8x8 checker, bilinear-sampled.
+    // ───────────────────────────────────────────────────────────────
+    r.clear(0xFF000000u);
+    r.clearDepth(1.0f);
+    r.setDepthTest(false);
+    r.setBlend(false);
+
+    const uint32_t TW = 8, TH = 8;
+    std::vector<uint32_t> checker(TW * TH);
+    for (uint32_t y = 0; y < TH; ++y)
+        for (uint32_t x = 0; x < TW; ++x) {
+            bool c = ((x ^ y) & 1) != 0;
+            checker[y*TW + x] = c ? 0xFFFFFFFFu : 0xFF202020u;
+        }
+    r.setTexture2D(checker.data(), TW, TH);
+    r.setTextureFilter(true);
+
+    // Full-surface quad with UV 0..1. Two triangles.
+    RasterVertex quad[6] = {
+        { 40.f,  40.f, 0, 1,1,1,1, 0.f, 0.f },
+        {280.f,  40.f, 0, 1,1,1,1, 1.f, 0.f },
+        {280.f, 200.f, 0, 1,1,1,1, 1.f, 1.f },
+        { 40.f,  40.f, 0, 1,1,1,1, 0.f, 0.f },
+        {280.f, 200.f, 0, 1,1,1,1, 1.f, 1.f },
+        { 40.f, 200.f, 0, 1,1,1,1, 0.f, 1.f },
+    };
+    r.drawTriangles(quad, 6);
+    r.readback(fb.data());
+
+    // Inside quad centre of a white checker cell: near (50, 50) UV ~ (0.04, 0.06)
+    // texel (0,0) which is (x^y)&1 = 0 -> dark. Sample a known-white cell.
+    // Cell (1,0) at texture pixel x=1,y=0 is white. That maps to quad pixel
+    // roughly (40 + 1/8 * 240 + 0.5*30, 40 + 0.5*20) = (70+15, 50) = (85, 50).
+    // Sample at texel centers. Each texel is 30px wide (240/8); texel 1
+    // (white) is centered at quad-x = 40 + (1+0.5)/8*240 = 85. Texel 0
+    // (dark) center at quad-x = 40 + 0.5/8*240 = 55. y at v=0.5/8 → 50.
+    uint32_t texWhite = fb[50 * 320 + 85];
+    uint32_t texDark  = fb[50 * 320 + 55];
+    std::printf("  tex white-cell: 0x%08x  dark-cell: 0x%08x\n", texWhite, texDark);
+    CHECK(((texWhite>>16)&0xFF) > 200 && ((texWhite>>8)&0xFF) > 200 && (texWhite&0xFF) > 200,
+          "Texture white checker sampled");
+    CHECK(((texDark>>16)&0xFF) < 80 && ((texDark>>8)&0xFF) < 80 && (texDark&0xFF) < 80,
+          "Texture dark checker sampled");
+
+    // Bilinear produces a gradient at cell boundaries — sample at the
+    // transition between texel 0 (dark) and texel 1 (white): texel edge
+    // at u=0.125 -> quad-x = 40 + 0.125*240 = 70. Halfway shade expected.
+    uint32_t mid = fb[50 * 320 + 70];
+    int mr = (mid>>16)&0xFF;
+    std::printf("  tex bilinear edge @(55,50): 0x%08x (R=%d)\n", mid, mr);
+    CHECK(mr > 40 && mr < 220, "Bilinear filter produces intermediate value");
+
+    r.savePPM("/tmp/rsx_raster_tex.ppm");
+    r.setTexture2D(nullptr, 0, 0);
+
     std::printf("\nStats: tris=%u clears=%u\n",
                 r.stats.triangles, r.stats.clears);
     std::printf("%s (%d failures)\n",

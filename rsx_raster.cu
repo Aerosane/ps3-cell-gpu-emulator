@@ -50,6 +50,47 @@ __device__ __forceinline__ bool depthCompare(uint32_t func, float src, float dst
     }
 }
 
+__device__ __forceinline__ uint32_t texFetch(const uint32_t* tex,
+                                             uint32_t tw, uint32_t th,
+                                             int tx, int ty) {
+    // wrap mode: repeat
+    tx = tx % (int)tw; if (tx < 0) tx += tw;
+    ty = ty % (int)th; if (ty < 0) ty += th;
+    return tex[ty * tw + tx];
+}
+
+__device__ __forceinline__ void sampleTex(const uint32_t* tex,
+                                          uint32_t tw, uint32_t th,
+                                          float u, float v, int bilinear,
+                                          float& r, float& g, float& b, float& a) {
+    float fx = u * (float)tw - 0.5f;
+    float fy = v * (float)th - 0.5f;
+    int ix = (int)floorf(fx);
+    int iy = (int)floorf(fy);
+    if (!bilinear) {
+        uint32_t c = texFetch(tex, tw, th, ix, iy);
+        r = ((c >> 16) & 0xFF) / 255.0f;
+        g = ((c >>  8) & 0xFF) / 255.0f;
+        b = ((c >>  0) & 0xFF) / 255.0f;
+        a = ((c >> 24) & 0xFF) / 255.0f;
+        return;
+    }
+    float sx = fx - ix, sy = fy - iy;
+    uint32_t c00 = texFetch(tex, tw, th, ix,   iy  );
+    uint32_t c10 = texFetch(tex, tw, th, ix+1, iy  );
+    uint32_t c01 = texFetch(tex, tw, th, ix,   iy+1);
+    uint32_t c11 = texFetch(tex, tw, th, ix+1, iy+1);
+    auto lerp = [] __device__ (float a, float b, float t) { return a + (b - a) * t; };
+    auto ch = [&](int shift) {
+        float v00 = ((c00>>shift)&0xFF)/255.0f;
+        float v10 = ((c10>>shift)&0xFF)/255.0f;
+        float v01 = ((c01>>shift)&0xFF)/255.0f;
+        float v11 = ((c11>>shift)&0xFF)/255.0f;
+        return lerp(lerp(v00, v10, sx), lerp(v01, v11, sx), sy);
+    };
+    r = ch(16); g = ch(8); b = ch(0); a = ch(24);
+}
+
 // One thread per pixel per triangle batch. For each pixel we iterate the
 // triangle list and keep the last one that covers it (painter order).
 // That matches RSX "no depth test" behaviour when depth is disabled —
@@ -68,7 +109,10 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   int blendEnable,
                                   int depthTest,
                                   int depthWrite,
-                                  uint32_t depthFunc) {
+                                  uint32_t depthFunc,
+                                  const uint32_t* __restrict__ tex,
+                                  uint32_t texW, uint32_t texH,
+                                  int texBilinear) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -112,6 +156,15 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         float g = w0 * v0.g + w1 * v1.g + w2 * v2.g;
         float b = w0 * v0.b + w1 * v1.b + w2 * v2.b;
         float a = w0 * v0.a + w1 * v1.a + w2 * v2.a;
+
+        if (tex) {
+            float u = w0 * v0.u + w1 * v1.u + w2 * v2.u;
+            float vv = w0 * v0.v + w1 * v1.v + w2 * v2.v;
+            float tr, tg, tb, ta;
+            sampleTex(tex, texW, texH, u, vv, texBilinear, tr, tg, tb, ta);
+            // Modulate vertex color with texture sample.
+            r *= tr; g *= tg; b *= tb; a *= ta;
+        }
 
         if (blendEnable) {
             uint32_t dc = dstPx;
@@ -163,7 +216,20 @@ int CudaRasterizer::init(uint32_t width, uint32_t height) {
 void CudaRasterizer::shutdown() {
     if (fb_.d_color) { cudaFree(fb_.d_color); fb_.d_color = nullptr; }
     if (fb_.d_depth) { cudaFree(fb_.d_depth); fb_.d_depth = nullptr; }
+    if (d_tex_) { cudaFree(d_tex_); d_tex_ = nullptr; }
+    texW_ = texH_ = 0;
     fb_.width = fb_.height = 0;
+}
+
+int CudaRasterizer::setTexture2D(const uint32_t* data, uint32_t w, uint32_t h) {
+    if (d_tex_) { cudaFree(d_tex_); d_tex_ = nullptr; texW_ = texH_ = 0; }
+    if (!data || w == 0 || h == 0) return 0;
+    size_t bytes = size_t(w) * size_t(h) * sizeof(uint32_t);
+    CU_CHECK(cudaMalloc(&d_tex_, bytes));
+    cudaMemcpy(d_tex_, data, bytes, cudaMemcpyHostToDevice);
+    texW_ = w;
+    texH_ = h;
+    return 0;
 }
 
 void CudaRasterizer::clear(uint32_t rgba) {
@@ -233,7 +299,9 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   blendEnable_ ? 1 : 0,
                                   depthTest_ ? 1 : 0,
                                   depthWrite_ ? 1 : 0,
-                                  uint32_t(depthFunc_));
+                                  uint32_t(depthFunc_),
+                                  d_tex_, texW_, texH_,
+                                  texBilinear_ ? 1 : 0);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;
