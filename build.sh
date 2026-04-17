@@ -68,10 +68,15 @@ $NVCC $NVCC_FLAGS \
   test_rsx_replay.cu rsx_command_processor.cu rsx_vulkan_emitter.cpp rsx_vulkan_emitter_shim.cpp rsx_soft_replayer.cpp \
   -o rsx_replay_test
 
-echo "[9/9] Building RSX CUDA rasterizer test..."
+echo "[9/10] Building RSX CUDA rasterizer test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_rsx_raster.cu rsx_raster.cu \
   -o rsx_raster_test
+
+echo "[10/10] Building RSX → bridge → rasterizer end-to-end test..."
+$NVCC $NVCC_FLAGS --extended-lambda \
+  test_rsx_bridge.cu rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
+  -o rsx_bridge_test
 
 echo ""
 echo "═══════════════════════════════════════════"
@@ -79,5 +84,5 @@ echo "  ✅ Build complete"
 echo "  ./cell_test  ./jit_test  ./mega_jit_test"
 echo "  ./turbo_test  ./hyper_test  ./ppc_jit_test"
 echo "  ./rsx_vulkan_test  ./rsx_replay_test"
-echo "  ./rsx_raster_test"
+echo "  ./rsx_raster_test  ./rsx_bridge_test"
 echo "═══════════════════════════════════════════"
