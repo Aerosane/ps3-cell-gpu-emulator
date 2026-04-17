@@ -58,9 +58,15 @@ $NVCC $NVCC_FLAGS \
   -lnvrtc -lcuda \
   -o ppc_jit_test
 
+echo "[7/7] Building RSX → Vulkan emitter test..."
+$NVCC $NVCC_FLAGS \
+  test_rsx_vulkan.cu rsx_command_processor.cu rsx_vulkan_emitter.cpp rsx_vulkan_emitter_shim.cpp \
+  -o rsx_vulkan_test
+
 echo ""
 echo "═══════════════════════════════════════════"
 echo "  ✅ Build complete"
 echo "  ./cell_test  ./jit_test  ./mega_jit_test"
 echo "  ./turbo_test  ./hyper_test  ./ppc_jit_test"
+echo "  ./rsx_vulkan_test"
 echo "═══════════════════════════════════════════"

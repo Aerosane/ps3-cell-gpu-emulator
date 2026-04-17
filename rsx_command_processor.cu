@@ -8,6 +8,26 @@
 
 #include "rsx_defs.h"
 
+// ═══════════════════════════════════════════════════════════════════
+// Optional Vulkan emitter bridge — weak symbols so both CUDA builds
+// (no emitter linked) and host-only builds (emitter present) work.
+// ═══════════════════════════════════════════════════════════════════
+extern "C" {
+void rsx_emitter_onSurfaceSetup(void* emitter, const rsx::RSXState* s)     __attribute__((weak));
+void rsx_emitter_onViewport   (void* emitter, const rsx::RSXState* s)      __attribute__((weak));
+void rsx_emitter_onScissor    (void* emitter, const rsx::RSXState* s)      __attribute__((weak));
+void rsx_emitter_onClearSurface(void* emitter, const rsx::RSXState* s, uint32_t mask) __attribute__((weak));
+void rsx_emitter_onBeginEnd   (void* emitter, const rsx::RSXState* s, uint32_t prim)  __attribute__((weak));
+void rsx_emitter_onDrawArrays (void* emitter, const rsx::RSXState* s, uint32_t first, uint32_t count) __attribute__((weak));
+void rsx_emitter_onDrawIndexed(void* emitter, const rsx::RSXState* s, uint32_t first, uint32_t count, uint32_t fmt) __attribute__((weak));
+void rsx_emitter_onFlip       (void* emitter, const rsx::RSXState* s, uint32_t surfaceOffset) __attribute__((weak));
+}
+
+#define RSX_EMIT(fn, ...) do { \
+    if (state->vulkanEmitter && rsx_emitter_##fn) \
+        rsx_emitter_##fn(state->vulkanEmitter, __VA_ARGS__); \
+} while (0)
+
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -128,6 +148,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     switch (method) {
     case NV4097_SET_SURFACE_FORMAT:
         state->surfaceFormat = data & 0x1F;
+        RSX_EMIT(onSurfaceSetup, state);
         return;
     case NV4097_SET_SURFACE_CLIP_HORIZONTAL:
         state->surfaceWidth  = data & 0xFFFF;
@@ -160,6 +181,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     case NV4097_SET_VIEWPORT_VERTICAL:
         state->viewportY = (uint16_t)(data & 0xFFFF);
         state->viewportH = (uint16_t)(data >> 16);
+        RSX_EMIT(onViewport, state);
         return;
     case NV4097_SET_SCISSOR_HORIZONTAL:
         state->scissorX = (uint16_t)(data & 0xFFFF);
@@ -168,6 +190,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     case NV4097_SET_SCISSOR_VERTICAL:
         state->scissorY = (uint16_t)(data & 0xFFFF);
         state->scissorH = (uint16_t)(data >> 16);
+        RSX_EMIT(onScissor, state);
         return;
 
     // ── Depth / Stencil ────────────────────────────────────────
@@ -197,6 +220,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         return;
     case NV4097_CLEAR_SURFACE:
         rsx_clear_surface(state, vram, data);
+        RSX_EMIT(onClearSurface, state, data);
         return;
 
     // ── Shader programs ────────────────────────────────────────
@@ -218,17 +242,22 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
             // END — finalize draw batch
             state->inBeginEnd = false;
         }
+        RSX_EMIT(onBeginEnd, state, data);
         return;
     case NV4097_DRAW_ARRAYS: {
+        uint32_t first = data & 0xFFFFFF;
         uint32_t count = ((data >> 24) & 0xFF) + 1;
         state->drawCallCount++;
         state->triangleCount += estimateTriangles(state->currentPrim, count);
+        RSX_EMIT(onDrawArrays, state, first, count);
         return;
     }
     case NV4097_DRAW_INDEX_ARRAY: {
+        uint32_t first = data & 0xFFFFFF;
         uint32_t count = ((data >> 24) & 0xFF) + 1;
         state->drawCallCount++;
         state->triangleCount += estimateTriangles(state->currentPrim, count);
+        RSX_EMIT(onDrawIndexed, state, first, count, 0u);
         return;
     }
 
@@ -236,6 +265,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     case NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP:
         state->surfaceOffsetA = data;
         state->frameCount++;
+        RSX_EMIT(onFlip, state, data);
         return;
 
     // ── Reference register ─────────────────────────────────────

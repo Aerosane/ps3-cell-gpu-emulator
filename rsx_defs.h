@@ -230,6 +230,11 @@ struct RSXState {
     uint32_t triangleCount;
     uint32_t cmdCount;
     uint32_t frameCount;
+
+    // Optional Vulkan emitter (host-side; null in CUDA contexts).
+    // Type-erased as void* so this header stays includable from both
+    // .cu and host .cpp. Populated via rsx_set_vulkan_emitter().
+    void*    vulkanEmitter;
 };
 
 // ═══════════════════════════════════════════════════════════════════
