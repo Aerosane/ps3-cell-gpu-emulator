@@ -96,6 +96,54 @@ int main() {
     bool ok = r.savePPM("/tmp/rsx_raster_demo.ppm");
     CHECK(ok, "Saved /tmp/rsx_raster_demo.ppm");
 
+    // ───────────────────────────────────────────────────────────────
+    // Depth-test scene: draw a red far triangle AFTER a green near one.
+    // With depth test, green should survive in the overlap even though
+    // red is drawn later (painter order would let red win).
+    // ───────────────────────────────────────────────────────────────
+    r.clear(0xFF000000u);
+    r.clearDepth(1.0f);
+    r.setBlend(false);
+    r.setDepthTest(true);
+    r.setDepthWrite(true);
+    r.setDepthFunc(DepthFunc::Less);
+
+    RasterVertex near_grn[3] = {
+        { 80.f,  60.f, 0.2f, 0,1,0,1 },
+        {240.f,  60.f, 0.2f, 0,1,0,1 },
+        {160.f, 200.f, 0.2f, 0,1,0,1 },
+    };
+    RasterVertex far_red[3] = {
+        { 40.f, 100.f, 0.8f, 1,0,0,1 },
+        {280.f, 100.f, 0.8f, 1,0,0,1 },
+        {160.f, 230.f, 0.8f, 1,0,0,1 },
+    };
+
+    r.drawTriangles(near_grn, 3);
+    r.drawTriangles(far_red,  3);
+    r.readback(fb.data());
+
+    // (160, 120) is inside both triangles. With z-test, green (near) wins.
+    uint32_t overlap = fb[120 * 320 + 160];
+    std::printf("  Z-overlap: 0x%08x (want green, not red)\n", overlap);
+    CHECK(((overlap>>16)&0xFF) < 32 && ((overlap>>8)&0xFF) > 200,
+          "Depth test: near triangle occludes far");
+
+    // (160, 220) is only inside red (below green's bottom at y=200) → red.
+    uint32_t redOnly = fb[220 * 320 + 160];
+    std::printf("  Red only:  0x%08x (want red)\n", redOnly);
+    CHECK(((redOnly>>16)&0xFF) > 200 && ((redOnly>>8)&0xFF) < 32,
+          "Non-occluded area still renders");
+
+    // Verify depth buffer actually contains near Z where green rendered.
+    std::vector<float> depth(320u * 240u);
+    r.readbackDepth(depth.data());
+    float zOverlap = depth[120 * 320 + 160];
+    std::printf("  Z at overlap: %.3f (want ~0.2)\n", zOverlap);
+    CHECK(zOverlap > 0.18f && zOverlap < 0.22f, "Depth buffer stored near Z");
+
+    r.savePPM("/tmp/rsx_raster_zdemo.ppm");
+
     std::printf("\nStats: tris=%u clears=%u\n",
                 r.stats.triangles, r.stats.clears);
     std::printf("%s (%d failures)\n",
