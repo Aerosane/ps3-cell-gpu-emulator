@@ -395,6 +395,63 @@ int main() {
     CHECK(((aPx>>16)&0xFF) < 32 && ((aPx>>8)&0xFF) > 200 && (aPx&0xFF) > 200,
           "Alpha test rejected ghost fragments");
 
+    // ── 8. Stencil mask (classic portal test) ───────────────────────
+    // Draw a small triangle that writes stencil=1 but NOT color.
+    // Then draw a fullscreen quad with StencilFunc::Equal ref=1 so that
+    // only pixels inside the stencil shape receive color. Result: a
+    // triangle-shaped patch of blue on a cleared background.
+    r.clear(0xFF100000u);
+    r.clearStencil(0);
+    r.setDepthTest(false);
+    r.setAlphaTest(false);
+    r.setCullMode(CullMode::None);
+    r.disableScissor();
+
+    // Phase 1: mark stencil. color-mask-like effect done via alpha test —
+    // but we just let color write, because phase 2 will overwrite it.
+    r.setStencilTest(true);
+    r.setStencilFunc(StencilFunc::Always, 1, 0xFF);
+    r.setStencilOp(StencilOp::Keep, StencilOp::Keep, StencilOp::Replace);
+    r.setStencilWriteMask(0xFF);
+    RasterVertex mask[3] = {
+        {100.f,  60.f, 0, 1,1,1,1 },
+        {220.f,  60.f, 0, 1,1,1,1 },
+        {160.f, 180.f, 0, 1,1,1,1 },
+    };
+    r.drawTriangles(mask, 3);
+
+    // Phase 2: draw fullscreen blue quad, keep only where stencil==1.
+    r.setStencilFunc(StencilFunc::Equal, 1, 0xFF);
+    r.setStencilOp(StencilOp::Keep, StencilOp::Keep, StencilOp::Keep);
+    RasterVertex full[6] = {
+        {  0.f,   0.f, 0, 0,0,1,1 },
+        {320.f,   0.f, 0, 0,0,1,1 },
+        {320.f, 240.f, 0, 0,0,1,1 },
+        {  0.f,   0.f, 0, 0,0,1,1 },
+        {320.f, 240.f, 0, 0,0,1,1 },
+        {  0.f, 240.f, 0, 0,0,1,1 },
+    };
+    r.drawTriangles(full, 6);
+    r.setStencilTest(false);
+
+    r.readback(fb.data());
+    uint32_t insideStencil = fb[120 * 320 + 160]; // inside the marker triangle
+    uint32_t outsideStencil = fb[10 * 320 + 10];  // outside, cleared
+    std::printf("  stencil inside:  0x%08x (want blue)\n",   insideStencil);
+    std::printf("  stencil outside: 0x%08x (want dark red)\n", outsideStencil);
+    CHECK((insideStencil & 0xFF) > 200 && ((insideStencil >> 16) & 0xFF) < 32,
+          "Stencil: fullscreen quad passed inside marker");
+    CHECK(outsideStencil == 0xFF100000u,
+          "Stencil: fullscreen quad rejected outside marker");
+
+    // Stencil buffer readback sanity.
+    std::vector<uint8_t> sfb(320 * 240);
+    r.readbackStencil(sfb.data());
+    CHECK(sfb[120 * 320 + 160] == 1, "Stencil buffer holds 1 inside marker");
+    CHECK(sfb[10 * 320 + 10] == 0,   "Stencil buffer still 0 outside marker");
+
+    r.savePPM("/tmp/rsx_raster_stencil.ppm");
+
     std::printf("\nStats: tris=%u skipped=%u clears=%u\n",
                 r.stats.triangles, r.stats.triangleSkipped, r.stats.clears);
     std::printf("%s (%d failures)\n",

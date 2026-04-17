@@ -50,6 +50,33 @@ __device__ __forceinline__ bool depthCompare(uint32_t func, float src, float dst
     }
 }
 
+__device__ __forceinline__ bool stencilCompare(uint32_t func, uint8_t a, uint8_t b) {
+    switch (func) {
+    case 0: return false;
+    case 1: return a <  b;
+    case 2: return a == b;
+    case 3: return a <= b;
+    case 4: return a >  b;
+    case 5: return a != b;
+    case 6: return a >= b;
+    default: return true;
+    }
+}
+
+__device__ __forceinline__ uint8_t stencilApply(uint32_t op, uint8_t cur, uint8_t ref) {
+    switch (op) {
+    case 0: return cur;                                  // Keep
+    case 1: return 0;                                    // Zero
+    case 2: return ref;                                  // Replace
+    case 3: return cur == 255 ? 255 : cur + 1;           // IncrSat
+    case 4: return cur == 0   ? 0   : cur - 1;           // DecrSat
+    case 5: return (uint8_t)(~cur);                      // Invert
+    case 6: return (uint8_t)(cur + 1);                   // IncrWrap
+    case 7: return (uint8_t)(cur - 1);                   // DecrWrap
+    default: return cur;
+    }
+}
+
 __device__ __forceinline__ uint32_t texFetch(const uint32_t* tex,
                                              uint32_t tw, uint32_t th,
                                              int tx, int ty) {
@@ -103,6 +130,7 @@ __device__ __forceinline__ void sampleTex(const uint32_t* tex,
 // for colored triangles; textured paths will tighten this.
 __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   float*    __restrict__ depth,
+                                  uint8_t*  __restrict__ stencil,
                                   uint32_t width, uint32_t height,
                                   const RasterVertex* __restrict__ verts,
                                   uint32_t triangleCount,
@@ -114,7 +142,15 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   uint32_t texW, uint32_t texH,
                                   int texBilinear,
                                   int scX, int scY, uint32_t scW, uint32_t scH,
-                                  int alphaTest, uint32_t alphaRef) {
+                                  int alphaTest, uint32_t alphaRef,
+                                  int   stencilTest,
+                                  uint32_t stencilFunc,
+                                  uint32_t stencilRef,
+                                  uint32_t stencilMask,
+                                  uint32_t stencilWriteMask,
+                                  uint32_t opSFail,
+                                  uint32_t opZFail,
+                                  uint32_t opZPass) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -131,6 +167,7 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
     uint32_t base = y * width + x;
     uint32_t dstPx = dst[base];
     float    dstZ  = depth ? depth[base] : 1.0f;
+    uint8_t  dstS  = stencil ? stencil[base] : 0;
 
     for (uint32_t t = 0; t < triangleCount; ++t) {
         const RasterVertex v0 = verts[t*3 + 0];
@@ -156,9 +193,28 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
 
         float z = w0 * v0.z + w1 * v1.z + w2 * v2.z;
 
-        if (depthTest && depth) {
-            if (!depthCompare(depthFunc, z, dstZ)) continue;
+        // Stencil test happens before depth test (matches RSX/GL order).
+        bool sPass = true;
+        if (stencilTest && stencil) {
+            uint8_t refM = (uint8_t)(stencilRef & stencilMask);
+            uint8_t curM = (uint8_t)(dstS & stencilMask);
+            sPass = stencilCompare(stencilFunc, refM, curM);
         }
+
+        bool zPass = true;
+        if (depthTest && depth) {
+            zPass = depthCompare(depthFunc, z, dstZ);
+        }
+
+        // Stencil-op selection + masked write.
+        if (stencilTest && stencil) {
+            uint32_t op = sPass ? (zPass ? opZPass : opZFail) : opSFail;
+            uint8_t newS = stencilApply(op, dstS, (uint8_t)stencilRef);
+            dstS = (uint8_t)((dstS & ~stencilWriteMask) | (newS & stencilWriteMask));
+        }
+
+        if (!sPass) continue;
+        if (!zPass) continue;
 
         float r = w0 * v0.r + w1 * v1.r + w2 * v2.r;
         float g = w0 * v0.g + w1 * v1.g + w2 * v2.g;
@@ -200,6 +256,7 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
 
     dst[base] = dstPx;
     if (depth && depthWrite) depth[base] = dstZ;
+    if (stencil && stencilTest) stencil[base] = dstS;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -216,7 +273,9 @@ int CudaRasterizer::init(uint32_t width, uint32_t height) {
     size_t pixels = size_t(width) * size_t(height);
     CU_CHECK(cudaMalloc(&fb_.d_color, pixels * sizeof(uint32_t)));
     CU_CHECK(cudaMalloc(&fb_.d_depth, pixels * sizeof(float)));
+    CU_CHECK(cudaMalloc(&fb_.d_stencil, pixels * sizeof(uint8_t)));
     CU_CHECK(cudaMemset(fb_.d_color, 0, pixels * sizeof(uint32_t)));
+    CU_CHECK(cudaMemset(fb_.d_stencil, 0, pixels * sizeof(uint8_t)));
     // Clear depth to 1.0 (far plane) — use the kernel so we get the right value.
     dim3 bs(16,16);
     dim3 gs((width+bs.x-1)/bs.x, (height+bs.y-1)/bs.y);
@@ -228,6 +287,7 @@ int CudaRasterizer::init(uint32_t width, uint32_t height) {
 void CudaRasterizer::shutdown() {
     if (fb_.d_color) { cudaFree(fb_.d_color); fb_.d_color = nullptr; }
     if (fb_.d_depth) { cudaFree(fb_.d_depth); fb_.d_depth = nullptr; }
+    if (fb_.d_stencil) { cudaFree(fb_.d_stencil); fb_.d_stencil = nullptr; }
     if (d_tex_) { cudaFree(d_tex_); d_tex_ = nullptr; }
     texW_ = texH_ = 0;
     fb_.width = fb_.height = 0;
@@ -261,6 +321,12 @@ void CudaRasterizer::clearDepth(float value) {
             (fb_.height + bs.y - 1) / bs.y);
     k_clearDepth<<<gs, bs>>>(fb_.d_depth, fb_.width, fb_.height, value);
     cudaDeviceSynchronize();
+}
+
+void CudaRasterizer::clearStencil(uint8_t value) {
+    if (!fb_.d_stencil) return;
+    size_t pixels = size_t(fb_.width) * size_t(fb_.height);
+    cudaMemset(fb_.d_stencil, value, pixels * sizeof(uint8_t));
 }
 
 uint32_t CudaRasterizer::drawIndexed(const RasterVertex* verts,
@@ -355,7 +421,7 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     dim3 bs(16, 16);
     dim3 gs((fb_.width + bs.x - 1) / bs.x,
             (fb_.height + bs.y - 1) / bs.y);
-    k_rasterTriangles<<<gs, bs>>>(fb_.d_color, fb_.d_depth,
+    k_rasterTriangles<<<gs, bs>>>(fb_.d_color, fb_.d_depth, fb_.d_stencil,
                                   fb_.width, fb_.height,
                                   d_v, tris,
                                   blendEnable_ ? 1 : 0,
@@ -366,7 +432,15 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   texBilinear_ ? 1 : 0,
                                   scX_, scY_, scW_, scH_,
                                   alphaTestEnable_ ? 1 : 0,
-                                  uint32_t(alphaRef_));
+                                  uint32_t(alphaRef_),
+                                  stencilTest_ ? 1 : 0,
+                                  uint32_t(stencilFunc_),
+                                  uint32_t(stencilRef_),
+                                  uint32_t(stencilMask_),
+                                  uint32_t(stencilWriteMask_),
+                                  uint32_t(stencilSFail_),
+                                  uint32_t(stencilZFail_),
+                                  uint32_t(stencilZPass_));
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;
@@ -383,6 +457,12 @@ void CudaRasterizer::readbackDepth(float* out) const {
     if (!fb_.d_depth || !out) return;
     size_t bytes = size_t(fb_.width) * size_t(fb_.height) * sizeof(float);
     cudaMemcpy(out, fb_.d_depth, bytes, cudaMemcpyDeviceToHost);
+}
+
+void CudaRasterizer::readbackStencil(uint8_t* out) const {
+    if (!fb_.d_stencil || !out) return;
+    size_t bytes = size_t(fb_.width) * size_t(fb_.height) * sizeof(uint8_t);
+    cudaMemcpy(out, fb_.d_stencil, bytes, cudaMemcpyDeviceToHost);
 }
 
 bool CudaRasterizer::savePPM(const char* path) const {

@@ -44,8 +44,9 @@ struct RasterMat4 {
 struct RasterFramebuffer {
     uint32_t width{0};
     uint32_t height{0};
-    uint32_t* d_color{nullptr};  // device pointer, width*height RGBA8 little-endian
-    float*    d_depth{nullptr};  // device pointer, width*height float32 depth
+    uint32_t* d_color{nullptr};   // device, width*height RGBA8 little-endian
+    float*    d_depth{nullptr};   // device, width*height float32 depth
+    uint8_t*  d_stencil{nullptr}; // device, width*height uint8 stencil
 };
 
 // Depth compare function. Matches RSX/NV4097 SET_DEPTH_FUNC semantics.
@@ -63,6 +64,30 @@ enum class DepthFunc : uint32_t {
 enum class CullMode : uint32_t { None = 0, Front = 1, Back = 2, FrontAndBack = 3 };
 enum class FrontFace : uint32_t { CCW = 0, CW = 1 };
 
+// Stencil compare. Matches RSX NV4097_SET_STENCIL_FUNC semantics.
+enum class StencilFunc : uint32_t {
+    Never    = 0,
+    Less     = 1,
+    Equal    = 2,
+    LEqual   = 3,
+    Greater  = 4,
+    NotEqual = 5,
+    GEqual   = 6,
+    Always   = 7,
+};
+
+// Stencil op on test result. Matches RSX NV4097_SET_STENCIL_OP semantics.
+enum class StencilOp : uint32_t {
+    Keep     = 0,
+    Zero     = 1,
+    Replace  = 2,
+    IncrSat  = 3,  // clamped to 255
+    DecrSat  = 4,  // clamped to 0
+    Invert   = 5,
+    IncrWrap = 6,  // wraps 255 -> 0
+    DecrWrap = 7,  // wraps 0 -> 255
+};
+
 class CudaRasterizer {
 public:
     CudaRasterizer();
@@ -76,6 +101,24 @@ public:
 
     // Clear depth target.
     void clearDepth(float value = 1.0f);
+
+    // Clear stencil target.
+    void clearStencil(uint8_t value = 0);
+
+    // Stencil test configuration. Mirrors RSX SET_STENCIL_TEST_ENABLE /
+    // SET_STENCIL_FUNC / SET_STENCIL_OP / SET_STENCIL_MASK.
+    //
+    // The compare is: (ref & mask) <func> (stencilBuf & mask).
+    // On stencil-fail: sFail op. On stencil-pass but depth-fail: zFail.
+    // On both pass: zPass. Writes are masked with writeMask.
+    void setStencilTest(bool enable) { stencilTest_ = enable; }
+    void setStencilFunc(StencilFunc f, uint8_t ref, uint8_t mask = 0xFF) {
+        stencilFunc_ = f; stencilRef_ = ref; stencilMask_ = mask;
+    }
+    void setStencilOp(StencilOp sFail, StencilOp zFail, StencilOp zPass) {
+        stencilSFail_ = sFail; stencilZFail_ = zFail; stencilZPass_ = zPass;
+    }
+    void setStencilWriteMask(uint8_t mask) { stencilWriteMask_ = mask; }
 
     // Enable/disable alpha blending (SRC_ALPHA, ONE_MINUS_SRC_ALPHA).
     void setBlend(bool enable) { blendEnable_ = enable; }
@@ -140,6 +183,9 @@ public:
     // Copy depth buffer to host (float32 per pixel).
     void readbackDepth(float* out) const;
 
+    // Copy stencil buffer to host (uint8 per pixel).
+    void readbackStencil(uint8_t* out) const;
+
     uint32_t width()  const { return fb_.width; }
     uint32_t height() const { return fb_.height; }
 
@@ -173,6 +219,15 @@ private:
     uint32_t  scW_{0}, scH_{0};
     bool      alphaTestEnable_{false};
     uint8_t   alphaRef_{0};
+
+    bool      stencilTest_{false};
+    StencilFunc stencilFunc_{StencilFunc::Always};
+    uint8_t   stencilRef_{0};
+    uint8_t   stencilMask_{0xFF};
+    uint8_t   stencilWriteMask_{0xFF};
+    StencilOp stencilSFail_{StencilOp::Keep};
+    StencilOp stencilZFail_{StencilOp::Keep};
+    StencilOp stencilZPass_{StencilOp::Keep};
 };
 
 } // namespace rsx
