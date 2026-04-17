@@ -63,10 +63,15 @@ $NVCC $NVCC_FLAGS \
   test_rsx_vulkan.cu rsx_command_processor.cu rsx_vulkan_emitter.cpp rsx_vulkan_emitter_shim.cpp \
   -o rsx_vulkan_test
 
+echo "[8/8] Building RSX full-pipeline replay demo..."
+$NVCC $NVCC_FLAGS \
+  test_rsx_replay.cu rsx_command_processor.cu rsx_vulkan_emitter.cpp rsx_vulkan_emitter_shim.cpp rsx_soft_replayer.cpp \
+  -o rsx_replay_test
+
 echo ""
 echo "═══════════════════════════════════════════"
 echo "  ✅ Build complete"
 echo "  ./cell_test  ./jit_test  ./mega_jit_test"
 echo "  ./turbo_test  ./hyper_test  ./ppc_jit_test"
-echo "  ./rsx_vulkan_test"
+echo "  ./rsx_vulkan_test  ./rsx_replay_test"
 echo "═══════════════════════════════════════════"
