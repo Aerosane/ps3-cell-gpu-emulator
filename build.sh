@@ -68,10 +68,16 @@ $NVCC $NVCC_FLAGS \
   test_rsx_replay.cu rsx_command_processor.cu rsx_vulkan_emitter.cpp rsx_vulkan_emitter_shim.cpp rsx_soft_replayer.cpp \
   -o rsx_replay_test
 
+echo "[9/9] Building RSX CUDA rasterizer test..."
+$NVCC $NVCC_FLAGS \
+  test_rsx_raster.cu rsx_raster.cu \
+  -o rsx_raster_test
+
 echo ""
 echo "═══════════════════════════════════════════"
 echo "  ✅ Build complete"
 echo "  ./cell_test  ./jit_test  ./mega_jit_test"
 echo "  ./turbo_test  ./hyper_test  ./ppc_jit_test"
 echo "  ./rsx_vulkan_test  ./rsx_replay_test"
+echo "  ./rsx_raster_test"
 echo "═══════════════════════════════════════════"
