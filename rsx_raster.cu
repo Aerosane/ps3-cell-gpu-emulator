@@ -112,10 +112,17 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   uint32_t depthFunc,
                                   const uint32_t* __restrict__ tex,
                                   uint32_t texW, uint32_t texH,
-                                  int texBilinear) {
+                                  int texBilinear,
+                                  int scX, int scY, uint32_t scW, uint32_t scH) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
+
+    // Scissor test: when scW>0 and scH>0, reject pixels outside rect.
+    if (scW > 0 && scH > 0) {
+        if ((int)x < scX || (int)x >= scX + (int)scW ||
+            (int)y < scY || (int)y >= scY + (int)scH) return;
+    }
 
     float px = (float)x + 0.5f;
     float py = (float)y + 0.5f;
@@ -286,6 +293,38 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     }
 
     size_t bytes = size_t(tris) * 3 * sizeof(RasterVertex);
+
+    // Back-face cull: compute screen-space signed area; drop triangles
+    // whose facing matches cullMode_ given frontFace_. Runs on host
+    // after transform — for high triangle counts a GPU pass would be
+    // faster but this keeps the code self-contained.
+    std::vector<RasterVertex> culled;
+    if (cullMode_ != CullMode::None) {
+        culled.reserve(count);
+        for (uint32_t t = 0; t < tris; ++t) {
+            const auto& a = d_src[t*3 + 0];
+            const auto& b = d_src[t*3 + 1];
+            const auto& c = d_src[t*3 + 2];
+            float area = (c.x - a.x) * (b.y - a.y)
+                       - (c.y - a.y) * (b.x - a.x);
+            // area > 0 = CCW in our kernel convention; area < 0 = CW.
+            bool isFront = (frontFace_ == FrontFace::CCW) ? (area > 0)
+                                                          : (area < 0);
+            bool drop = false;
+            if (cullMode_ == CullMode::Front) drop = isFront;
+            else if (cullMode_ == CullMode::Back) drop = !isFront;
+            else if (cullMode_ == CullMode::FrontAndBack) drop = true;
+            if (drop) { stats.triangleSkipped++; continue; }
+            culled.push_back(a);
+            culled.push_back(b);
+            culled.push_back(c);
+        }
+        d_src = culled.data();
+        tris = (uint32_t)(culled.size() / 3);
+        bytes = culled.size() * sizeof(RasterVertex);
+        if (tris == 0) return 0;
+    }
+
     RasterVertex* d_v = nullptr;
     if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
     cudaMemcpy(d_v, d_src, bytes, cudaMemcpyHostToDevice);
@@ -301,7 +340,8 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   depthWrite_ ? 1 : 0,
                                   uint32_t(depthFunc_),
                                   d_tex_, texW_, texH_,
-                                  texBilinear_ ? 1 : 0);
+                                  texBilinear_ ? 1 : 0,
+                                  scX_, scY_, scW_, scH_);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;

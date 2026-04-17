@@ -60,6 +60,9 @@ enum class DepthFunc : uint32_t {
     Always   = 7,
 };
 
+enum class CullMode : uint32_t { None = 0, Front = 1, Back = 2, FrontAndBack = 3 };
+enum class FrontFace : uint32_t { CCW = 0, CW = 1 };
+
 class CudaRasterizer {
 public:
     CudaRasterizer();
@@ -100,6 +103,18 @@ public:
     int  setTexture2D(const uint32_t* data, uint32_t w, uint32_t h);
     void setTextureFilter(bool bilinear) { texBilinear_ = bilinear; }
 
+    // Culling: matches RSX NV4097_SET_CULL_FACE_ENABLE + SET_CULL_FACE +
+    // SET_FRONT_FACE. Default: no culling.
+    void setCullMode(CullMode m) { cullMode_ = m; }
+    void setFrontFace(FrontFace f) { frontFace_ = f; }
+
+    // Scissor rect in pixel coordinates. Set w=0 or h=0 to disable.
+    // Matches RSX SET_SCISSOR_HORIZONTAL / SET_SCISSOR_VERTICAL.
+    void setScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
+        scX_ = x; scY_ = y; scW_ = w; scH_ = h;
+    }
+    void disableScissor() { scW_ = 0; scH_ = 0; }
+
     // Rasterize a triangle list. `verts` must have count%3 == 0.
     // Returns number of triangles that passed degeneracy test.
     uint32_t drawTriangles(const RasterVertex* verts, uint32_t count);
@@ -138,6 +153,10 @@ private:
     uint32_t* d_tex_{nullptr};
     uint32_t  texW_{0}, texH_{0};
     bool      texBilinear_{true};
+    CullMode  cullMode_{CullMode::None};
+    FrontFace frontFace_{FrontFace::CCW};
+    int32_t   scX_{0}, scY_{0};
+    uint32_t  scW_{0}, scH_{0};
 };
 
 } // namespace rsx

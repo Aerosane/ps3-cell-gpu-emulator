@@ -298,8 +298,61 @@ int main() {
     r.savePPM("/tmp/rsx_raster_tex.ppm");
     r.setTexture2D(nullptr, 0, 0);
 
-    std::printf("\nStats: tris=%u clears=%u\n",
-                r.stats.triangles, r.stats.clears);
+    // ───────────────────────────────────────────────────────────────
+    // Scissor test: draw a full-surface triangle with scissor clipping
+    // the top half only. Bottom half should stay at clear color.
+    // ───────────────────────────────────────────────────────────────
+    r.clear(0xFF000000u);
+    r.setScissor(0, 0, 320, 120);
+    RasterVertex big[3] = {
+        {  0.f,   0.f, 0, 1,1,0,1 },
+        {320.f,   0.f, 0, 1,1,0,1 },
+        {160.f, 240.f, 0, 1,1,0,1 },
+    };
+    r.drawTriangles(big, 3);
+    r.readback(fb.data());
+    uint32_t inside  = fb[60  * 320 + 160];
+    uint32_t outside = fb[180 * 320 + 160];
+    std::printf("  scissor inside: 0x%08x  outside: 0x%08x\n", inside, outside);
+    CHECK(((inside>>16)&0xFF) > 200 && ((inside>>8)&0xFF) > 200,
+          "Scissor allowed inside pixels");
+    CHECK(outside == 0xFF000000u, "Scissor rejected outside pixels");
+    r.disableScissor();
+
+    // ───────────────────────────────────────────────────────────────
+    // Back-face culling: draw two triangles with identical position but
+    // opposite winding. With cull=Back only the CCW triangle renders.
+    // ───────────────────────────────────────────────────────────────
+    r.clear(0xFF000000u);
+    r.setCullMode(CullMode::Back);
+    r.setFrontFace(FrontFace::CCW);
+
+    RasterVertex ccwTri[3] = {
+        { 50.f,  50.f, 0, 0,1,0,1 },
+        {150.f, 200.f, 0, 0,1,0,1 },
+        {250.f,  50.f, 0, 0,1,0,1 },
+    };
+    RasterVertex cwTri[3] = {
+        { 50.f,  50.f, 0, 1,0,0,1 },
+        {250.f,  50.f, 0, 1,0,0,1 },
+        {150.f, 200.f, 0, 1,0,0,1 },
+    };
+    r.drawTriangles(ccwTri, 3);
+    uint32_t cullSkippedBefore = r.stats.triangleSkipped;
+    r.drawTriangles(cwTri, 3);
+    uint32_t cullSkippedAfter = r.stats.triangleSkipped;
+
+    r.readback(fb.data());
+    uint32_t pt = fb[100 * 320 + 150];
+    std::printf("  cull: %u CW tri(s) skipped; center pixel: 0x%08x\n",
+                cullSkippedAfter - cullSkippedBefore, pt);
+    CHECK(cullSkippedAfter - cullSkippedBefore == 1, "CW triangle skipped under Back cull");
+    CHECK(((pt>>16)&0xFF) < 32 && ((pt>>8)&0xFF) > 200,
+          "CCW survives, center is green not red");
+    r.setCullMode(CullMode::None);
+
+    std::printf("\nStats: tris=%u skipped=%u clears=%u\n",
+                r.stats.triangles, r.stats.triangleSkipped, r.stats.clears);
     std::printf("%s (%d failures)\n",
                 fails == 0 ? "ALL PASSED" : "SOME FAILED", fails);
     r.shutdown();
