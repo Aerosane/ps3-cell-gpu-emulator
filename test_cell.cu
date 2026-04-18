@@ -3,6 +3,7 @@
 // and verifies correctness.
 //
 #include "ppc_defs.h"
+#include "ppc_jit.h"
 #include "spu_defs.h"
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -455,64 +456,88 @@ static void bench_ppe_throughput() {
     printf("║  BENCH: PPE Instruction Throughput    ║\n");
     printf("╚═══════════════════════════════════════╝\n");
 
+    // PPC encoders (copied from test_ppc_jit.cu so we can compile the
+    // same kernel the hyper JIT test uses).
+    auto bswap32_h = [](uint32_t x) -> uint32_t {
+        return ((x >> 24) & 0xFF) | ((x >> 8) & 0xFF00) |
+               ((x << 8) & 0xFF0000) | ((x << 24) & 0xFF000000);
+    };
+    auto ppc_df = [](uint32_t opcd, uint32_t rd, uint32_t ra, int16_t simm) -> uint32_t {
+        return (opcd << 26) | (rd << 21) | (ra << 16) | ((uint16_t)simm);
+    };
+    auto ppc_xf = [](uint32_t opcd, uint32_t rd, uint32_t ra, uint32_t rb,
+                     uint32_t xo, uint32_t rc) -> uint32_t {
+        return (opcd << 26) | (rd << 21) | (ra << 16) | (rb << 11) | (xo << 1) | rc;
+    };
+    auto ppc_bf = [](uint32_t opcd, uint32_t bo, uint32_t bi, int16_t bd,
+                     uint32_t aa, uint32_t lk) -> uint32_t {
+        return (opcd << 26) | (bo << 21) | (bi << 16) |
+               (((uint16_t)bd) & 0xFFFC) | (aa << 1) | lk;
+    };
+    auto ppc_sc_fn = []() -> uint32_t { return (17u << 26) | (1u << 1); };
+    auto wr = [&](uint8_t* m, uint64_t off, uint32_t insn) {
+        uint32_t be = bswap32_h(insn); memcpy(m + off, &be, 4);
+    };
+
+    const uint64_t base = 0x10000;
+    const uint32_t ITERATIONS = 1000000;
+
+    uint8_t prog[32] = {};
+    wr(prog,  0, ppc_df(14, 3, 0, 0));                         // li r3, 0
+    wr(prog,  4, ppc_df(15, 4, 0, (ITERATIONS >> 16)));        // lis r4, hi
+    wr(prog,  8, ppc_df(24, 4, 4, (int16_t)(ITERATIONS & 0xFFFF))); // ori r4, r4, lo
+    wr(prog, 12, ppc_df(14, 3, 3, 1));                         // addi r3, r3, 1
+    wr(prog, 16, ppc_xf(31, 0, 3, 4, 0, 0));                   // cmpw cr0, r3, r4
+    wr(prog, 20, ppc_bf(16, 12, 0, -8, 0, 0));                 // blt -8
+    wr(prog, 24, ppc_sc_fn());                                  // sc
+    const uint64_t totalInsns = (uint64_t)ITERATIONS * 3 + 4;
+
+    // ── (1) Interpreter megakernel path ─────────────────────────
+    printf("\n  [Interp]  megakernel <<<1,1>>> interpreter:\n");
     megakernel_init();
-
-    // Tight loop: 1M iterations of add
-    //   li r3, 0
-    //   lis r4, 0x000F     → r4 = 0xF0000 = 983040
-    //   ori r4, r4, 0x4240 → r4 = 1000000
-    // loop:
-    //   addi r3, r3, 1
-    //   addi r5, r5, 1     (dummy work)
-    //   addi r6, r6, 1     (dummy work)
-    //   subf r7 = r4 - r3 via: cmpli + bne pattern
-    //   ... simplified: just run N cycles of addi
-
-    // Simple: li r3, 0 + 999998 × addi r3, r3, 1 + halt
-    // We can't assemble 1M instructions, so we use a loop
-
-    auto ppc_cmpi_fn = [](int bf, int rA, int16_t imm) -> uint32_t {
-        return bswap32((11u << 26) | ((bf & 7) << 23) | (rA << 16) | (uint16_t)imm);
-    };
-    auto ppc_bc_fn = [](int bo, int bi, int16_t disp) -> uint32_t {
-        return bswap32((16u << 26) | (bo << 21) | (bi << 16) | ((uint16_t)disp & 0xFFFC));
-    };
-
-    uint32_t code[] = {
-        ppc_addi(3, 0, 0),          // r3 = 0 (counter)
-        ppc_addis(4, 0, 0x000F),    // r4 = 0xF0000
-        ppc_ori(4, 4, 0x4240),      // r4 = 0xF4240 = 1000000
-        // loop:
-        ppc_addi(3, 3, 1),          // r3++
-        ppc_cmpi_fn(0, 3, 0),       // cmpi cr0, r3, r4 — but can't compare to reg with cmpi...
-        // Use subf + cmpi 0 pattern:
-        // Actually let's just run a fixed 100K cycle budget
-        ppc_addi(5, 5, 1),          // dummy
-        ppc_addi(6, 6, 1),          // dummy
-        ppc_b(-16),                  // b loop (-4 instructions = -16 bytes)
-    };
-
-    uint64_t loadAddr = 0x10000;
-    megakernel_load(loadAddr, code, sizeof(code));
-    megakernel_set_entry(loadAddr, 0x80000, 0);
-
-    // Run 1M cycles
-    uint32_t cycles = 1000000;
-    float ms = megakernel_run(cycles);
-
-    PPEState st;
-    megakernel_read_state(&st);
-
-    float mips = (st.cycles / (ms / 1000.0f)) / 1e6f;
-    float effective_mhz = mips; // 1 instruction per cycle ideally
-
-    printf("  Cycles executed: %u\n", st.cycles);
-    printf("  Wall time: %.3f ms\n", ms);
-    printf("  Throughput: %.1f MIPS\n", mips);
-    printf("  Effective clock: %.1f MHz\n", effective_mhz);
-    printf("  vs PS3 PPE (3200 MHz): %.1f%%\n", (effective_mhz / 3200.0f) * 100.0f);
-
+    megakernel_load(base, prog, sizeof(prog));
+    megakernel_set_entry(base, 0x80000, 0);
+    float interpMs = megakernel_run(ITERATIONS * 4 + 100);
+    PPEState interpSt;
+    megakernel_read_state(&interpSt);
+    double interpMIPS = (double)totalInsns / (interpMs * 1000.0);
+    printf("    Wall: %.2f ms   Throughput: %.2f MIPS   r3=%llu\n",
+           interpMs, interpMIPS, (unsigned long long)interpSt.gpr[3]);
+    printf("    vs PS3 PPE (3200 MHz): %.2f%%\n", interpMIPS / 3200.0 * 100.0);
     megakernel_shutdown();
+
+    // ── (2) Warp JIT path (32-lane NVRTC-cached cubin) ─────────
+    printf("\n  [JIT]     warp-parallel NVRTC cubin:\n");
+    uint8_t* d_mem = nullptr;
+    cudaMalloc(&d_mem, PS3_SANDBOX_SIZE);
+    cudaMemset(d_mem, 0, PS3_SANDBOX_SIZE);
+    cudaMemcpy(d_mem + base, prog, sizeof(prog), cudaMemcpyHostToDevice);
+
+    ppc_jit::PPCJITState jit;
+    ppc_jit::ppc_jit_init(&jit);
+
+    PPEState jitSt = {};
+    jitSt.pc = base;
+    float coldMs = 0; uint32_t jitCycles = 0;
+    ppc_jit::ppc_jit_run_warp(&jit, &jitSt, d_mem, ITERATIONS * 4 + 100,
+                              &coldMs, &jitCycles);
+    jitSt = {};
+    jitSt.pc = base;
+    float hotMs = 0;
+    ppc_jit::ppc_jit_run_warp(&jit, &jitSt, d_mem, ITERATIONS * 4 + 100,
+                              &hotMs, &jitCycles);
+
+    double jitColdMIPS = (double)totalInsns / (coldMs * 1000.0);
+    double jitHotMIPS  = (double)totalInsns / (hotMs  * 1000.0);
+    printf("    Cold (compile): %.2f ms → %.1f MIPS\n", coldMs, jitColdMIPS);
+    printf("    Cached (cubin): %.2f ms → %.1f MIPS   r3=%llu\n",
+           hotMs, jitHotMIPS, (unsigned long long)jitSt.gpr[3]);
+    printf("    Effective clock: %.2f GHz  (%.1f%% of real PS3 PPE)\n",
+           jitHotMIPS / 1000.0, jitHotMIPS / 3200.0 * 100.0);
+    printf("    Speedup over interpreter: %.0f×\n", jitHotMIPS / interpMIPS);
+
+    ppc_jit::ppc_jit_shutdown(&jit);
+    cudaFree(d_mem);
 }
 
 // ═══════════════════════════════════════════════════════════════

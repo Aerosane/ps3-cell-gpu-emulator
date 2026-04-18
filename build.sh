@@ -27,8 +27,8 @@ $NVCC $NVCC_FLAGS -rdc=true -c cell_megakernel.cu -o cell_megakernel.o
 
 echo "[4/5] Building test harness..."
 $NVCC $NVCC_FLAGS -rdc=true \
-  test_cell.cu ppc_interpreter.o spu_interpreter.o cell_megakernel.o \
-  -lcudadevrt \
+  test_cell.cu ppc_interpreter.o spu_interpreter.o cell_megakernel.o ppc_jit.cu \
+  -lcudadevrt -lnvrtc -lcuda \
   -o cell_test
 
 echo "[5/5] Building SPU JIT stack (per-block + mega + turbo + hyper)..."
