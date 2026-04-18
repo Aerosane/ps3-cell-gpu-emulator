@@ -6,6 +6,7 @@
 #include "rsx_defs.h"
 #include "rsx_raster.h"
 #include "rsx_raster_bridge.h"
+#include "rsx_fp_shader.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -369,6 +370,56 @@ int main() {
           ((vpOutsidePx >>  8) & 0xFF) < 32,
           "VP-scaled triangle no longer covers original outer region");
     raster.savePPM("/tmp/rsx_bridge_vp.ppm");
+
+
+    // ── Fragment-program interpreter unit test ──────────────────────
+    // Build a minimal FP directly in memory:
+    //   MUL r0.xyzw, f[COL0].xyzw, c[0].xyzw ; end
+    // With f[COL0] = (1, 1, 0, 1) and c[0] = (0.5, 0.25, 0.125, 1.0) the
+    // result in r0 must be (0.5, 0.25, 0, 1).
+    std::printf("\n── FP interpreter:\n");
+    auto fp_enc = [](uint32_t v) -> uint32_t {
+        // fp_swap_word is its own inverse — swap byte pairs so the decoder
+        // undoes it when it reads the word back.
+        return ((v & 0x00FF00FF) << 8) | ((v & 0xFF00FF00) >> 8);
+    };
+
+    // w0 (OPDEST): opcode=FP_MUL(2)<<24 | inputAttr=1<<13 | mask xyzw
+    //              | dstReg=0<<1 | endFlag=1
+    uint32_t w0 = 1u | (0xFu << 9) | (1u << 13) | (0x02u << 24);
+    // w1 (SRC0): regType=INPUT(1), swz xyzw (0,1,2,3)
+    uint32_t w1 = 1u | (0u << 2) | (0u << 9) | (1u << 11) | (2u << 13) | (3u << 15);
+    // w2 (SRC1): regType=CONSTANT(2), swz xyzw, opcodeHi=0
+    uint32_t w2 = 2u | (0u << 2) | (0u << 9) | (1u << 11) | (2u << 13) | (3u << 15);
+    // w3 (SRC2): unused (regType=0 => temp 0 — ignored by MUL)
+    uint32_t w3 = 0;
+
+    uint32_t fpProg[8];
+    fpProg[0] = fp_enc(w0);
+    fpProg[1] = fp_enc(w1);
+    fpProg[2] = fp_enc(w2);
+    fpProg[3] = fp_enc(w3);
+    // Inline constant vector for c[0] (follows the instruction because
+    // SRC1.regType == CONSTANT). Each component is byte-swapped.
+    float cvals[4] = { 0.5f, 0.25f, 0.125f, 1.0f };
+    uint32_t* cwords = reinterpret_cast<uint32_t*>(cvals);
+    fpProg[4] = fp_enc(cwords[0]);
+    fpProg[5] = fp_enc(cwords[1]);
+    fpProg[6] = fp_enc(cwords[2]);
+    fpProg[7] = fp_enc(cwords[3]);
+
+    FPFloat4 fpInputs[16] = {};
+    fpInputs[1] = FPFloat4{{1.0f, 1.0f, 0.0f, 1.0f}};
+    FPFloat4 fpOutputs[4] = {};
+    fp_execute(fpProg, 8, fpInputs, fpOutputs);
+    std::printf("  r0 = (%.3f, %.3f, %.3f, %.3f)\n",
+                fpOutputs[0].v[0], fpOutputs[0].v[1],
+                fpOutputs[0].v[2], fpOutputs[0].v[3]);
+    CHECK(fpOutputs[0].v[0] > 0.49f && fpOutputs[0].v[0] < 0.51f &&
+          fpOutputs[0].v[1] > 0.24f && fpOutputs[0].v[1] < 0.26f &&
+          fpOutputs[0].v[2] < 0.01f &&
+          fpOutputs[0].v[3] > 0.99f && fpOutputs[0].v[3] < 1.01f,
+          "FP MUL with inline constant produces (0.5, 0.25, 0, 1)");
 
 
     raster.shutdown();

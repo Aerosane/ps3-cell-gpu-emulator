@@ -553,4 +553,224 @@ inline void fp_disassemble(const uint32_t* fpData, uint32_t fpLen) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Host-side Fragment Program Interpreter
+// ═══════════════════════════════════════════════════════════════════
+//
+// Executes a fragment program one pixel at a time on the CPU. Takes
+// interpolated inputs (inputs[0..15]) and the uploaded constant bank
+// (constants[...]) and writes outputs[0..3] (RSX allows up to 4 MRT
+// color outputs via register h0/r0, plus h2, h4, h6 or r2, r4, r6).
+//
+// The interpreter is intentionally a strict subset (the useful "90%"
+// of shipped PS3 fragment programs): MOV, MUL, ADD, MAD, DP3, DP4,
+// MIN, MAX, FRC, FLR, SLT/SGE/SLE/SGT/SNE/SEQ, RCP, RSQ, EX2, LG2,
+// POW, LRP, COS, SIN, NRM, DIV, DP2, DP2A. KIL / TEX / flow control
+// are left as TODO — they need scene or control-flow state.
+
+struct FPFloat4 { float v[4]; };
+
+// Inline constants in RSX FP are stored in the instruction stream after
+// the instruction that uses them (when src.regType == FP_REG_CONSTANT,
+// the constant is the following 4 dwords, byte-swapped with fp_swap_word).
+// The walker returns the interpreted value and advances the cursor.
+inline FPFloat4 fp_read_inline_const(const uint32_t* ptr) {
+    FPFloat4 r = {};
+    for (int i = 0; i < 4; ++i) {
+        uint32_t swapped = fp_swap_word(ptr[i]);
+        std::memcpy(&r.v[i], &swapped, sizeof(float));
+    }
+    return r;
+}
+
+inline void fp_read_src(const FPDecodedSrc& s,
+                        uint32_t inputAttr,
+                        const FPFloat4 inputs[16],
+                        const FPFloat4 temps[48],
+                        const FPFloat4* inlineConst,
+                        float out[4]) {
+    const float* base = nullptr;
+    float zeros[4] = {0, 0, 0, 0};
+    switch (s.regType) {
+    case FP_REG_TEMP:     base = temps[s.regIdx & 0x3F].v; break;
+    case FP_REG_INPUT:    base = inputs[inputAttr & 0xF].v; break;
+    case FP_REG_CONSTANT: base = inlineConst ? inlineConst->v : zeros; break;
+    default:              base = zeros; break;
+    }
+    uint32_t swz[4] = {s.swzX, s.swzY, s.swzZ, s.swzW};
+    for (int i = 0; i < 4; ++i) {
+        float f = base[swz[i] & 3];
+        if (s.abs) f = f < 0 ? -f : f;
+        if (s.neg) f = -f;
+        out[i] = f;
+    }
+}
+
+inline void fp_write_dst(const FPDecodedInsn& insn,
+                         const float val[4],
+                         FPFloat4 temps[48],
+                         FPFloat4 outputs[4]) {
+    if (insn.noDest) return;
+
+    // Map the destination register to either a temp or a color output.
+    // RSX fragment programs write color outputs to r0 (MRT 0), r2, r4, r6
+    // (MRT 1-3). Everything else is a temp.
+    FPFloat4* dst = nullptr;
+    uint32_t idx = insn.dstReg & 0x3F;
+    if ((idx == 0 || idx == 2 || idx == 4 || idx == 6) && !insn.dstFp16) {
+        dst = &outputs[idx / 2];
+    } else {
+        dst = &temps[idx];
+    }
+    bool mask[4] = {insn.maskX, insn.maskY, insn.maskZ, insn.maskW};
+    for (int i = 0; i < 4; ++i) {
+        if (!mask[i]) continue;
+        float f = val[i];
+        if (insn.saturate) {
+            if (f < 0) f = 0;
+            if (f > 1) f = 1;
+        }
+        dst->v[i] = f;
+    }
+    // Also mirror writes to r0..r6 back into the temp file so the program
+    // can read them later — hardware aliases output registers with temps.
+    if ((idx == 0 || idx == 2 || idx == 4 || idx == 6) && !insn.dstFp16) {
+        FPFloat4& t = temps[idx];
+        for (int i = 0; i < 4; ++i) if (mask[i]) t.v[i] = dst->v[i];
+    }
+}
+
+inline void fp_execute(const uint32_t* fpData, uint32_t fpMaxWords,
+                       const FPFloat4 inputs[16],
+                       FPFloat4 outputs[4]) {
+    FPFloat4 temps[48] = {};
+    // Default: color output 0 = black.
+    for (int i = 0; i < 4; ++i) outputs[i] = FPFloat4{};
+
+    uint32_t i = 0;
+    uint32_t guard = 0;
+    while (i + 4 <= fpMaxWords && guard++ < 4096) {
+        FPDecodedInsn insn = fp_decode(&fpData[i]);
+        i += 4;
+
+        // Pull any inline constants that follow the instruction, in source
+        // order. Each FP_REG_CONSTANT source consumes 4 dwords from the
+        // stream.
+        FPFloat4 ic[3] = {};
+        bool haveIc[3] = {false, false, false};
+        for (int s = 0; s < 3; ++s) {
+            if (insn.src[s].regType == FP_REG_CONSTANT && i + 4 <= fpMaxWords) {
+                ic[s] = fp_read_inline_const(&fpData[i]);
+                haveIc[s] = true;
+                i += 4;
+            }
+        }
+
+        float s0[4], s1[4], s2[4];
+        fp_read_src(insn.src[0], insn.inputAttr, inputs, temps, haveIc[0] ? &ic[0] : nullptr, s0);
+        fp_read_src(insn.src[1], insn.inputAttr, inputs, temps, haveIc[1] ? &ic[1] : nullptr, s1);
+        fp_read_src(insn.src[2], insn.inputAttr, inputs, temps, haveIc[2] ? &ic[2] : nullptr, s2);
+
+        float r[4] = {0, 0, 0, 0};
+        switch (insn.opcode) {
+        case FP_NOP: continue;
+        case FP_MOV:
+            for (int k = 0; k < 4; ++k) r[k] = s0[k]; break;
+        case FP_MUL:
+            for (int k = 0; k < 4; ++k) r[k] = s0[k] * s1[k]; break;
+        case FP_ADD:
+            for (int k = 0; k < 4; ++k) r[k] = s0[k] + s1[k]; break;
+        case FP_MAD:
+            for (int k = 0; k < 4; ++k) r[k] = s0[k] * s1[k] + s2[k]; break;
+        case FP_DP3: {
+            float d = s0[0]*s1[0] + s0[1]*s1[1] + s0[2]*s1[2];
+            for (int k = 0; k < 4; ++k) r[k] = d; break;
+        }
+        case FP_DP4: {
+            float d = s0[0]*s1[0] + s0[1]*s1[1] + s0[2]*s1[2] + s0[3]*s1[3];
+            for (int k = 0; k < 4; ++k) r[k] = d; break;
+        }
+        case FP_DP2: {
+            float d = s0[0]*s1[0] + s0[1]*s1[1];
+            for (int k = 0; k < 4; ++k) r[k] = d; break;
+        }
+        case FP_DP2A: {
+            float d = s0[0]*s1[0] + s0[1]*s1[1] + s2[0];
+            for (int k = 0; k < 4; ++k) r[k] = d; break;
+        }
+        case FP_MIN:
+            for (int k = 0; k < 4; ++k) r[k] = s0[k] < s1[k] ? s0[k] : s1[k]; break;
+        case FP_MAX:
+            for (int k = 0; k < 4; ++k) r[k] = s0[k] > s1[k] ? s0[k] : s1[k]; break;
+        case FP_SLT:
+            for (int k = 0; k < 4; ++k) r[k] = (s0[k] <  s1[k]) ? 1.0f : 0.0f; break;
+        case FP_SGE:
+            for (int k = 0; k < 4; ++k) r[k] = (s0[k] >= s1[k]) ? 1.0f : 0.0f; break;
+        case FP_SLE:
+            for (int k = 0; k < 4; ++k) r[k] = (s0[k] <= s1[k]) ? 1.0f : 0.0f; break;
+        case FP_SGT:
+            for (int k = 0; k < 4; ++k) r[k] = (s0[k] >  s1[k]) ? 1.0f : 0.0f; break;
+        case FP_SEQ:
+            for (int k = 0; k < 4; ++k) r[k] = (s0[k] == s1[k]) ? 1.0f : 0.0f; break;
+        case FP_SNE:
+            for (int k = 0; k < 4; ++k) r[k] = (s0[k] != s1[k]) ? 1.0f : 0.0f; break;
+        case FP_FRC:
+            for (int k = 0; k < 4; ++k) r[k] = s0[k] - (float)(int)s0[k]; break;
+        case FP_FLR:
+            for (int k = 0; k < 4; ++k) r[k] = (float)(int)(s0[k] < 0 && s0[k] != (int)s0[k] ? (int)s0[k] - 1 : (int)s0[k]); break;
+        case FP_RCP: {
+            float x = s0[0];
+            float y = (x != 0) ? 1.0f / x : 0.0f;
+            for (int k = 0; k < 4; ++k) r[k] = y; break;
+        }
+        case FP_RSQ: {
+            float x = s0[0]; if (x < 0) x = -x;
+            float y = (x > 0) ? 1.0f / __builtin_sqrtf(x) : 0.0f;
+            for (int k = 0; k < 4; ++k) r[k] = y; break;
+        }
+        case FP_EX2: {
+            float y = __builtin_exp2f(s0[0]);
+            for (int k = 0; k < 4; ++k) r[k] = y; break;
+        }
+        case FP_LG2: {
+            float x = s0[0]; if (x < 0) x = -x;
+            float y = (x > 0) ? __builtin_log2f(x) : 0.0f;
+            for (int k = 0; k < 4; ++k) r[k] = y; break;
+        }
+        case FP_POW: {
+            float y = __builtin_powf(s0[0], s1[0]);
+            for (int k = 0; k < 4; ++k) r[k] = y; break;
+        }
+        case FP_LRP:
+            // Cg LRP: s0 * s1 + (1-s0) * s2
+            for (int k = 0; k < 4; ++k) r[k] = s0[k] * s1[k] + (1.0f - s0[k]) * s2[k]; break;
+        case FP_COS: {
+            float y = __builtin_cosf(s0[0]);
+            for (int k = 0; k < 4; ++k) r[k] = y; break;
+        }
+        case FP_SIN: {
+            float y = __builtin_sinf(s0[0]);
+            for (int k = 0; k < 4; ++k) r[k] = y; break;
+        }
+        case FP_NRM: {
+            float d = s0[0]*s0[0] + s0[1]*s0[1] + s0[2]*s0[2];
+            float inv = (d > 0) ? 1.0f / __builtin_sqrtf(d) : 0.0f;
+            r[0] = s0[0]*inv; r[1] = s0[1]*inv; r[2] = s0[2]*inv; r[3] = 1.0f; break;
+        }
+        case FP_DIV: {
+            float inv = (s1[0] != 0) ? 1.0f / s1[0] : 0.0f;
+            for (int k = 0; k < 4; ++k) r[k] = s0[k] * inv; break;
+        }
+        default:
+            // Unsupported (TEX family, flow control, packing) — leave
+            // destination unchanged by zeroing the mask effect.
+            for (int k = 0; k < 4; ++k) r[k] = 0.0f;
+            break;
+        }
+
+        fp_write_dst(insn, r, temps, outputs);
+        if (insn.endFlag) break;
+    }
+}
+
 } // namespace rsx
