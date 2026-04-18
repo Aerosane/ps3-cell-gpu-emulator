@@ -69,13 +69,34 @@ __device__ static void mfc_execute(SPUState& s, uint8_t* ls, uint8_t* mainMem) {
         if (lsa + size > SPU_LS_SIZE) { cmd.active = 0; continue; }
 
         switch (cmd.cmd) {
-        case MFC_GET:
-            // Main memory → LS (copy raw bytes, both stored in BE)
+        // GET family: main memory → LS  (B=barrier, F=fence, S=start; all same for sync DMA)
+        case 0x40: // MFC_GET
+        case 0x41: // MFC_GETB
+        case 0x42: // MFC_GETF
+        case 0x48: // MFC_GETS
             memcpy(ls + lsa, mainMem + ea, size);
             break;
-        case MFC_PUT:
-            // LS → main memory
+        // PUT family: LS → main memory
+        case 0x20: // MFC_PUT
+        case 0x21: // MFC_PUTB
+        case 0x22: // MFC_PUTF
+        case 0x28: // MFC_PUTS
             memcpy(mainMem + ea, ls + lsa, size);
+            break;
+        // Atomic 128-byte cache-line ops (treat as plain copy under single-thread sync DMA)
+        case 0xD0: // MFC_GETLLAR  — Get Lock Line And Reserve
+            memcpy(ls + lsa, mainMem + ea, 128);
+            break;
+        case 0xB4: // MFC_PUTLLC   — Put Lock Line Conditional
+        case 0xB0: // MFC_PUTLLUC  — Put Lock Line Unconditional
+        case 0xB8: // MFC_PUTQLLUC — Put Queued Lock Line Unconditional
+            memcpy(mainMem + ea, ls + lsa, 128);
+            break;
+        // Sync ops: instant completion under sync DMA model
+        case 0xC0: // MFC_BARRIER
+        case 0xC8: // MFC_EIEIO
+        case 0xCC: // MFC_SYNC
+        case 0xA0: // MFC_SNDSIG (signal; no-op without subscribers)
             break;
         default:
             break;
