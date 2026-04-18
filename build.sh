@@ -84,6 +84,11 @@ $NVCC $NVCC_FLAGS \
   -lnvrtc -lcuda \
   -o elf_boot_test
 
+echo "[12/12] Building cellGcm HLE shim test..."
+$NVCC $NVCC_FLAGS --extended-lambda \
+  test_gcm_hle.cu rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
+  -o gcm_hle_test
+
 echo ""
 echo "═══════════════════════════════════════════"
 echo "  ✅ Build complete"
@@ -91,5 +96,5 @@ echo "  ./cell_test  ./jit_test  ./mega_jit_test"
 echo "  ./turbo_test  ./hyper_test  ./ppc_jit_test"
 echo "  ./rsx_vulkan_test  ./rsx_replay_test"
 echo "  ./rsx_raster_test  ./rsx_bridge_test"
-echo "  ./elf_boot_test"
+echo "  ./elf_boot_test  ./gcm_hle_test"
 echo "═══════════════════════════════════════════"
