@@ -53,7 +53,20 @@ static constexpr uint32_t NV4097_SET_SCISSOR_VERTICAL     = 0x00000A0C;
 // Depth / stencil state
 static constexpr uint32_t NV4097_SET_DEPTH_FUNC               = 0x00000300;
 static constexpr uint32_t NV4097_SET_DEPTH_TEST_ENABLE        = 0x00000304;
+static constexpr uint32_t NV4097_SET_DEPTH_MASK               = 0x0000030C;
 static constexpr uint32_t NV4097_SET_BLEND_ENABLE             = 0x00000310;
+static constexpr uint32_t NV4097_SET_BLEND_FUNC_SFACTOR       = 0x00000314;
+static constexpr uint32_t NV4097_SET_BLEND_FUNC_DFACTOR       = 0x00000318;
+static constexpr uint32_t NV4097_SET_BLEND_COLOR              = 0x0000031C;
+static constexpr uint32_t NV4097_SET_BLEND_EQUATION           = 0x00000320;
+static constexpr uint32_t NV4097_SET_STENCIL_TEST_ENABLE      = 0x0000032C;
+static constexpr uint32_t NV4097_SET_STENCIL_MASK             = 0x00000330;
+static constexpr uint32_t NV4097_SET_STENCIL_FUNC             = 0x00000334;
+static constexpr uint32_t NV4097_SET_STENCIL_FUNC_REF         = 0x00000338;
+static constexpr uint32_t NV4097_SET_STENCIL_FUNC_MASK        = 0x0000033C;
+static constexpr uint32_t NV4097_SET_STENCIL_OP_FAIL          = 0x00000340;
+static constexpr uint32_t NV4097_SET_STENCIL_OP_ZFAIL         = 0x00000344;
+static constexpr uint32_t NV4097_SET_STENCIL_OP_ZPASS         = 0x00000348;
 
 // Cull face
 static constexpr uint32_t NV4097_SET_CULL_FACE_ENABLE         = 0x00000B44;
@@ -185,9 +198,22 @@ struct RSXState {
     // Depth / Stencil
     bool     depthTestEnable;
     uint32_t depthFunc;
+    bool     depthMask;         // depth write enable
+    bool     stencilTestEnable;
+    uint32_t stencilFunc;       // GL compare 0x200..0x207
+    uint32_t stencilRef;
+    uint32_t stencilFuncMask;
+    uint32_t stencilWriteMask;
+    uint32_t stencilOpFail;     // GL op: KEEP/ZERO/REPLACE/...
+    uint32_t stencilOpZFail;
+    uint32_t stencilOpZPass;
 
     // Blend
     bool     blendEnable;
+    uint32_t blendSFactor;      // low 16 = RGB, high 16 = A (GL factor enums)
+    uint32_t blendDFactor;
+    uint32_t blendEquation;     // low 16 = RGB, high 16 = A (GL equation enums)
+    uint32_t blendColor;        // packed ARGB8888
 
     // Cull
     bool     cullFaceEnable;

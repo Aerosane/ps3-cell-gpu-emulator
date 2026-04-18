@@ -3,6 +3,7 @@
 #include "rsx_raster_bridge.h"
 #include "rsx_defs.h"
 
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -137,6 +138,63 @@ static inline DepthFunc nv_to_depthFunc(uint32_t v) {
     return DepthFunc::Less;
 }
 
+static inline StencilFunc nv_to_stencilFunc(uint32_t v) {
+    if (v >= 0x200 && v <= 0x207) {
+        return static_cast<StencilFunc>(v - 0x200);
+    }
+    return StencilFunc::Always;
+}
+
+static inline StencilOp nv_to_stencilOp(uint32_t v) {
+    // NV/GL stencil op enums:
+    //   KEEP=0x1E00, REPLACE=0x1E01, INCR=0x1E02, DECR=0x1E03,
+    //   ZERO=0, INVERT=0x150A, INCR_WRAP=0x8507, DECR_WRAP=0x8508.
+    switch (v) {
+    case 0x1E00: return StencilOp::Keep;
+    case 0x0000: return StencilOp::Zero;
+    case 0x1E01: return StencilOp::Replace;
+    case 0x1E02: return StencilOp::IncrSat;
+    case 0x1E03: return StencilOp::DecrSat;
+    case 0x150A: return StencilOp::Invert;
+    case 0x8507: return StencilOp::IncrWrap;
+    case 0x8508: return StencilOp::DecrWrap;
+    default:     return StencilOp::Keep;
+    }
+}
+
+static inline BlendFactor nv_to_blendFactor(uint32_t v) {
+    // NV/GL blend factor enums — mixed ranges.
+    switch (v) {
+    case 0x0000: return BlendFactor::Zero;
+    case 0x0001: return BlendFactor::One;
+    case 0x0300: return BlendFactor::SrcColor;
+    case 0x0301: return BlendFactor::OneMinusSrcColor;
+    case 0x0302: return BlendFactor::SrcAlpha;
+    case 0x0303: return BlendFactor::OneMinusSrcAlpha;
+    case 0x0304: return BlendFactor::DstAlpha;
+    case 0x0305: return BlendFactor::OneMinusDstAlpha;
+    case 0x0306: return BlendFactor::DstColor;
+    case 0x0307: return BlendFactor::OneMinusDstColor;
+    case 0x0308: return BlendFactor::SrcAlphaSaturate;
+    case 0x8001: return BlendFactor::ConstColor;
+    case 0x8002: return BlendFactor::OneMinusConstColor;
+    case 0x8003: return BlendFactor::ConstAlpha;
+    case 0x8004: return BlendFactor::OneMinusConstAlpha;
+    default:     return BlendFactor::One;
+    }
+}
+
+static inline BlendEquation nv_to_blendEquation(uint32_t v) {
+    switch (v) {
+    case 0x8006: return BlendEquation::Add;
+    case 0x8007: return BlendEquation::Min;
+    case 0x8008: return BlendEquation::Max;
+    case 0x800A: return BlendEquation::Subtract;
+    case 0x800B: return BlendEquation::RevSubtract;
+    default:     return BlendEquation::Add;
+    }
+}
+
 static inline CullMode nv_to_cullMode(uint32_t v, bool enabled) {
     if (!enabled) return CullMode::None;
     switch (v) {
@@ -149,9 +207,43 @@ static inline CullMode nv_to_cullMode(uint32_t v, bool enabled) {
 
 void RasterBridge::applyPipelineState(const RSXState& s) {
     if (!rast_) return;
+
+    // Depth
     rast_->setDepthTest(s.depthTestEnable);
     rast_->setDepthFunc(nv_to_depthFunc(s.depthFunc));
+    rast_->setDepthWrite(s.depthMask);
+
+    // Blend: SFactor/DFactor/Equation split RGB (low16) from alpha (high16).
     rast_->setBlend(s.blendEnable);
+    if (s.blendEnable) {
+        BlendFactor srcRGB = nv_to_blendFactor(s.blendSFactor & 0xFFFF);
+        BlendFactor srcA   = nv_to_blendFactor((s.blendSFactor >> 16) & 0xFFFF);
+        BlendFactor dstRGB = nv_to_blendFactor(s.blendDFactor & 0xFFFF);
+        BlendFactor dstA   = nv_to_blendFactor((s.blendDFactor >> 16) & 0xFFFF);
+        rast_->setBlendFunc(srcRGB, dstRGB, srcA, dstA);
+        BlendEquation eqRGB = nv_to_blendEquation(s.blendEquation & 0xFFFF);
+        BlendEquation eqA   = nv_to_blendEquation((s.blendEquation >> 16) & 0xFFFF);
+        rast_->setBlendEquation(eqRGB, eqA);
+        uint32_t c = s.blendColor;
+        rast_->setBlendColor(((c >> 16) & 0xFF) / 255.f,
+                             ((c >>  8) & 0xFF) / 255.f,
+                             ( c        & 0xFF) / 255.f,
+                             ((c >> 24) & 0xFF) / 255.f);
+    }
+
+    // Stencil
+    rast_->setStencilTest(s.stencilTestEnable);
+    if (s.stencilTestEnable) {
+        rast_->setStencilFunc(nv_to_stencilFunc(s.stencilFunc),
+                              (uint8_t)(s.stencilRef & 0xFF),
+                              (uint8_t)(s.stencilFuncMask & 0xFF));
+        rast_->setStencilOp(nv_to_stencilOp(s.stencilOpFail),
+                            nv_to_stencilOp(s.stencilOpZFail),
+                            nv_to_stencilOp(s.stencilOpZPass));
+        rast_->setStencilWriteMask((uint8_t)(s.stencilWriteMask & 0xFF));
+    }
+
+    // Cull
     rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
 }
 

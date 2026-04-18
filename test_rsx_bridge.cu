@@ -120,25 +120,33 @@ int main() {
 
     // ── NV40 vertex-array decode scenario ───────────────────────────
     // Clear state, attach VRAM, detach pool. Pack 3 float3 positions
-    // at VRAM offset 0x1000, 3 UB4 colors at 0x2000. Configure slots
+    // + 3 UB4 colors into VRAM well past the surface. Configure slots
     // 0 and 3 via FIFO, draw. The bridge should decode from VRAM.
     std::printf("\n── NV40 vertex-array decode:\n");
     bridge.setVertexPool(nullptr, 0);
     bridge.setVRAM(vram, 8 * 1024 * 1024);
 
-    // Write 3 positions (float3, stride 12) at offset 0x1000.
+    // VRAM layout: surface occupies offsets 0..~0x12B000 (320-wide rows at
+    // pitch 5120 × 240 rows). Place vertex buffers past the surface to
+    // survive CLEAR_SURFACE.
+    static constexpr uint32_t VB_POS1  = 0x200000;
+    static constexpr uint32_t VB_COL1  = 0x201000;
+    static constexpr uint32_t VB_POS2  = 0x202000;
+    static constexpr uint32_t VB_COL2  = 0x203000;
+
+    // Write 3 positions (float3, stride 12) at VB_POS1.
     float positions[9] = {
          40.f,  40.f, 0.f,
         280.f,  40.f, 0.f,
         160.f, 200.f, 0.f,
     };
-    std::memcpy(vram + 0x1000, positions, sizeof(positions));
+    std::memcpy(vram + VB_POS1, positions, sizeof(positions));
 
-    // Write 3 colors (UB4, D3DCOLOR = BGRA in memory), stride 4 at 0x2000.
+    // Write 3 colors (UB4, D3DCOLOR = BGRA in memory), stride 4 at VB_COL1.
     // Pure yellow for all three: R=255 G=255 B=0 A=255 → memory BGRA = 00FFFFFF.
     uint32_t bgra_yellow = 0xFFFFFF00u; // B=0x00 G=0xFF R=0xFF A=0xFF
     uint32_t cols[3] = { bgra_yellow, bgra_yellow, bgra_yellow };
-    std::memcpy(vram + 0x2000, cols, sizeof(cols));
+    std::memcpy(vram + VB_COL1, cols, sizeof(cols));
 
     // Clear → draw with freshly configured streams → flip.
     uint32_t fifo2[64];
@@ -150,13 +158,13 @@ int main() {
     fifo2[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 0*4, 1);
     fifo2[m++] = (12u << 8) | (3u << 4) | VERTEX_F;
     fifo2[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 0*4, 1);
-    fifo2[m++] = 0x1000u;
+    fifo2[m++] = VB_POS1;
 
     // Slot 3: color UB4, stride 4.
     fifo2[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 3*4, 1);
     fifo2[m++] = (4u << 8) | (4u << 4) | VERTEX_UB;
     fifo2[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 3*4, 1);
-    fifo2[m++] = 0x2000u;
+    fifo2[m++] = VB_COL1;
 
     fifo2[m++] = fifo_incr(NV4097_SET_BEGIN_END, 1); fifo2[m++] = PRIM_TRIANGLES;
     fifo2[m++] = fifo_incr(NV4097_DRAW_ARRAYS, 1);   fifo2[m++] = (2u << 24) | 0;
@@ -221,6 +229,68 @@ int main() {
           ((visPx >>  8) & 0xFF) > 200 &&
           ( visPx        & 0xFF) < 32,
           "Triangle visible when FIFO flips CULL_FACE=FRONT");
+
+    // ── FIFO blend-state translation ────────────────────────────────
+    // Place a second triangle over the first with alpha=128 red. With
+    // SRC_ALPHA / ONE_MINUS_SRC_ALPHA the result should be ≈ 50-50
+    // mix of red over yellow at the overlap.
+    std::printf("\n── FIFO blend-state translation:\n");
+    // Overwrite slot-3 colors with half-alpha red (BGRA: B=0 G=0 R=FF A=80)
+    uint32_t bgra_red_half = 0x80FF0000u; // B=00 G=00 R=FF A=80
+    uint32_t cols2[3] = { bgra_red_half, bgra_red_half, bgra_red_half };
+    std::memcpy(vram + VB_COL2, cols2, sizeof(cols2));
+    // Second position set, shifted down so overlap center is mixed
+    float positions2[9] = {
+         40.f, 120.f, 0.f,
+        280.f, 120.f, 0.f,
+        160.f, 220.f, 0.f,
+    };
+    std::memcpy(vram + VB_POS2, positions2, sizeof(positions2));
+
+    uint32_t fifo4[64];
+    m = 0;
+    fifo4[m++] = fifo_incr(NV4097_SET_COLOR_CLEAR_VALUE, 1); fifo4[m++] = 0xFF000000u;
+    fifo4[m++] = fifo_incr(NV4097_CLEAR_SURFACE, 1);         fifo4[m++] = CLEAR_COLOR | CLEAR_DEPTH;
+    fifo4[m++] = fifo_incr(NV4097_SET_DEPTH_TEST_ENABLE, 1); fifo4[m++] = 0;
+    fifo4[m++] = fifo_incr(NV4097_SET_CULL_FACE_ENABLE, 1);  fifo4[m++] = 0;
+
+    // First draw: opaque yellow (slots 0+3 already point at VB_POS1/VB_COL1)
+    fifo4[m++] = fifo_incr(NV4097_SET_BLEND_ENABLE, 1);      fifo4[m++] = 0;
+    fifo4[m++] = fifo_incr(NV4097_SET_BEGIN_END, 1);         fifo4[m++] = PRIM_TRIANGLES;
+    fifo4[m++] = fifo_incr(NV4097_DRAW_ARRAYS, 1);           fifo4[m++] = (2u << 24) | 0;
+    fifo4[m++] = fifo_incr(NV4097_SET_BEGIN_END, 1);         fifo4[m++] = 0;
+
+    // Retarget vertex arrays to positions2 / cols2, enable blend.
+    fifo4[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 0*4, 1);
+    fifo4[m++] = VB_POS2;
+    fifo4[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 3*4, 1);
+    fifo4[m++] = VB_COL2;
+    fifo4[m++] = fifo_incr(NV4097_SET_BLEND_ENABLE, 1);      fifo4[m++] = 1;
+    fifo4[m++] = fifo_incr(NV4097_SET_BLEND_FUNC_SFACTOR, 1);
+    fifo4[m++] = 0x03020302; // SRC_ALPHA for RGB + A
+    fifo4[m++] = fifo_incr(NV4097_SET_BLEND_FUNC_DFACTOR, 1);
+    fifo4[m++] = 0x03030303; // ONE_MINUS_SRC_ALPHA for RGB + A
+    fifo4[m++] = fifo_incr(NV4097_SET_BLEND_EQUATION, 1);
+    fifo4[m++] = 0x80068006; // ADD,ADD
+    fifo4[m++] = fifo_incr(NV4097_SET_BEGIN_END, 1);         fifo4[m++] = PRIM_TRIANGLES;
+    fifo4[m++] = fifo_incr(NV4097_DRAW_ARRAYS, 1);           fifo4[m++] = (2u << 24) | 0;
+    fifo4[m++] = fifo_incr(NV4097_SET_BEGIN_END, 1);         fifo4[m++] = 0;
+    fifo4[m++] = fifo_incr(NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP, 1); fifo4[m++] = 0;
+    rsx_process_fifo(&st, fifo4, (uint32_t)m, vram, 4096);
+
+    raster.readback(fb.data());
+    // Sample in the overlap region (y ≈ 150, x ≈ 160)
+    uint32_t mixPx = fb[150 * W + 160];
+    uint8_t r = (mixPx >> 16) & 0xFF;
+    uint8_t g = (mixPx >>  8) & 0xFF;
+    uint8_t b =  mixPx        & 0xFF;
+    std::printf("  blend-overlap px: 0x%08x  (R=%u G=%u B=%u)\n", mixPx, r, g, b);
+    // Expect R=255 (src fills in via SRC_ALPHA*255 + OMSA*255), G ≈ 127
+    // (src alpha*0 + OMSA*255 ≈ 128), B = 0.
+    CHECK(r > 220 && g > 100 && g < 160 && b < 32,
+          "Alpha-blend: red over yellow ≈ orange at overlap");
+    raster.savePPM("/tmp/rsx_bridge_blend.ppm");
+
 
     raster.shutdown();
     rsx_shutdown(&st);

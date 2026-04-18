@@ -59,10 +59,25 @@ int rsx_init(RSXState* state) {
     // Depth defaults
     state->depthTestEnable = false;
     state->depthFunc       = CMP_LESS;
+    state->depthMask       = true;   // depth writes on by default (GL)
     state->depthFormat     = DEPTH_Z24S8;
+
+    // Stencil defaults
+    state->stencilTestEnable = false;
+    state->stencilFunc       = 0x207;   // ALWAYS
+    state->stencilRef        = 0;
+    state->stencilFuncMask   = 0xFF;
+    state->stencilWriteMask  = 0xFF;
+    state->stencilOpFail     = 0x1E00;  // KEEP
+    state->stencilOpZFail    = 0x1E00;
+    state->stencilOpZPass    = 0x1E00;
 
     // Blend / cull
     state->blendEnable    = false;
+    state->blendSFactor   = 0x00010001; // ONE,ONE  (low16 RGB, high16 A)
+    state->blendDFactor   = 0x00000000; // ZERO,ZERO
+    state->blendEquation  = 0x80068006; // ADD,ADD
+    state->blendColor     = 0;
     state->cullFaceEnable = false;
     state->cullFace       = 0x0405; // GL_BACK
 
@@ -200,10 +215,49 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     case NV4097_SET_DEPTH_FUNC:
         state->depthFunc = data;
         return;
+    case NV4097_SET_DEPTH_MASK:
+        state->depthMask = (data != 0);
+        return;
+    case NV4097_SET_STENCIL_TEST_ENABLE:
+        state->stencilTestEnable = (data != 0);
+        return;
+    case NV4097_SET_STENCIL_MASK:
+        state->stencilWriteMask = data;
+        return;
+    case NV4097_SET_STENCIL_FUNC:
+        state->stencilFunc = data;
+        return;
+    case NV4097_SET_STENCIL_FUNC_REF:
+        state->stencilRef = data;
+        return;
+    case NV4097_SET_STENCIL_FUNC_MASK:
+        state->stencilFuncMask = data;
+        return;
+    case NV4097_SET_STENCIL_OP_FAIL:
+        state->stencilOpFail = data;
+        return;
+    case NV4097_SET_STENCIL_OP_ZFAIL:
+        state->stencilOpZFail = data;
+        return;
+    case NV4097_SET_STENCIL_OP_ZPASS:
+        state->stencilOpZPass = data;
+        return;
 
     // ── Blend ──────────────────────────────────────────────────
     case NV4097_SET_BLEND_ENABLE:
         state->blendEnable = (data != 0);
+        return;
+    case NV4097_SET_BLEND_FUNC_SFACTOR:
+        state->blendSFactor = data;
+        return;
+    case NV4097_SET_BLEND_FUNC_DFACTOR:
+        state->blendDFactor = data;
+        return;
+    case NV4097_SET_BLEND_EQUATION:
+        state->blendEquation = data;
+        return;
+    case NV4097_SET_BLEND_COLOR:
+        state->blendColor = data;
         return;
 
     // ── Cull face ──────────────────────────────────────────────
