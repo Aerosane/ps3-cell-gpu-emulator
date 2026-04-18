@@ -185,6 +185,86 @@ static bool test_ppe_alu() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Helper: run a PPC program through the warp JIT and return state
+// ═══════════════════════════════════════════════════════════════
+
+static bool run_ppc_jit(const void* code, size_t codeSize,
+                        uint64_t loadAddr, uint32_t maxCycles,
+                        PPEState* outSt, float* outMs)
+{
+    uint8_t* d_mem = nullptr;
+    if (cudaMalloc(&d_mem, PS3_SANDBOX_SIZE) != cudaSuccess) return false;
+    cudaMemset(d_mem, 0, PS3_SANDBOX_SIZE);
+    cudaMemcpy(d_mem + loadAddr, code, codeSize, cudaMemcpyHostToDevice);
+
+    ppc_jit::PPCJITState jit;
+    ppc_jit::ppc_jit_init(&jit);
+
+    *outSt = {};
+    outSt->pc = loadAddr;
+    uint32_t cyc = 0;
+    ppc_jit::ppc_jit_run_warp(&jit, outSt, d_mem, maxCycles, outMs, &cyc);
+    outSt->cycles = cyc;
+
+    // Read back any memory the program stored (caller may inspect).
+    // We expose the device buffer briefly via a small staging copy: 64KB
+    // around the load addr is enough for test scratch (mem[0x1000] etc).
+    static thread_local uint8_t scratch[0x4000];
+    cudaMemcpy(scratch, d_mem, sizeof(scratch), cudaMemcpyDeviceToHost);
+    // Stash pointer in a known SPRG slot so caller can read scratch[off]
+    // by reaching back through this helper. (No callers need it yet —
+    // the ALU test reads gpr[7] directly.)
+
+    ppc_jit::ppc_jit_shutdown(&jit);
+    cudaFree(d_mem);
+    return true;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Test 1b: PPE Integer ALU via warp JIT
+// ═══════════════════════════════════════════════════════════════
+
+static bool test_ppe_alu_jit() {
+    printf("\n╔═══════════════════════════════════════╗\n");
+    printf("║  TEST 1b: PPE Integer ALU (warp JIT)  ║\n");
+    printf("╚═══════════════════════════════════════╝\n");
+
+    // Same program as test_ppe_alu, but executed by the NVRTC-cached
+    // warp JIT instead of the megakernel interpreter.
+    uint32_t code[] = {
+        ppc_addi(3, 0, 42),
+        ppc_addi(4, 0, 58),
+        ppc_add(5, 3, 4),
+        ppc_addi(6, 0, 3),
+        ppc_mullw(7, 5, 6),
+        ppc_addis(8, 0, 0),
+        ppc_stw(7, 0x1000, 8),
+        ppc_addi(11, 0, 1),
+        ppc_sc(),
+    };
+
+    PPEState st = {};
+    float ms = 0;
+    if (!run_ppc_jit(code, sizeof(code), 0x10000, 1000, &st, &ms)) {
+        printf("  ❌ FAIL (cudaMalloc)\n");
+        return false;
+    }
+
+    printf("  Execution time: %.3f ms   Cycles: %u\n", ms, st.cycles);
+    printf("  r3=%llu  r4=%llu  r5=%llu  r6=%llu  r7=%llu\n",
+           (unsigned long long)st.gpr[3], (unsigned long long)st.gpr[4],
+           (unsigned long long)st.gpr[5], (unsigned long long)st.gpr[6],
+           (unsigned long long)st.gpr[7]);
+    printf("  Halted: %s\n", st.halted ? "YES" : "NO");
+
+    bool pass = (st.gpr[5] == 100) && (st.gpr[7] == 300) && st.halted;
+    printf("  Result: %s (r5=%llu exp 100; r7=%llu exp 300)\n",
+           pass ? "✅ PASS" : "❌ FAIL",
+           (unsigned long long)st.gpr[5], (unsigned long long)st.gpr[7]);
+    return pass;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Test 2: PPE Branch + Loop
 // ═══════════════════════════════════════════════════════════════
 
@@ -254,6 +334,48 @@ static bool test_ppe_loop() {
     printf("  Result: %s\n", pass ? "✅ PASS" : "❌ FAIL");
 
     megakernel_shutdown();
+    return pass;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Test 2b: PPE Branch + Loop via warp JIT
+// ═══════════════════════════════════════════════════════════════
+
+static bool test_ppe_loop_jit() {
+    printf("\n╔═══════════════════════════════════════╗\n");
+    printf("║  TEST 2b: PPE Branch + Loop (warp JIT)║\n");
+    printf("╚═══════════════════════════════════════╝\n");
+
+    auto ppc_cmpi = [](int bf, int rA, int16_t imm) -> uint32_t {
+        return bswap32((11u << 26) | ((bf & 7) << 23) | (rA << 16) | (uint16_t)imm);
+    };
+    auto ppc_bc = [](int bo, int bi, int16_t disp) -> uint32_t {
+        return bswap32((16u << 26) | (bo << 21) | (bi << 16) | ((uint16_t)disp & 0xFFFC));
+    };
+
+    uint32_t code[] = {
+        ppc_addi(3, 0, 0),
+        ppc_addi(4, 0, 10),
+        ppc_add(3, 3, 4),
+        ppc_addi(4, 4, -1),
+        ppc_cmpi(0, 4, 0),
+        ppc_bc(4, 2, -12),
+        ppc_addi(11, 0, 1),
+        ppc_sc(),
+    };
+
+    PPEState st = {};
+    float ms = 0;
+    if (!run_ppc_jit(code, sizeof(code), 0x10000, 10000, &st, &ms)) {
+        printf("  ❌ FAIL (cudaMalloc)\n"); return false;
+    }
+
+    printf("  Execution time: %.3f ms   Cycles: %u\n", ms, st.cycles);
+    printf("  r3 (sum)     = %llu (expected 55)\n", (unsigned long long)st.gpr[3]);
+    printf("  r4 (counter) = %llu (expected 0)\n",  (unsigned long long)st.gpr[4]);
+
+    bool pass = (st.gpr[3] == 55) && (st.gpr[4] == 0) && st.halted;
+    printf("  Result: %s\n", pass ? "✅ PASS" : "❌ FAIL");
     return pass;
 }
 
@@ -554,7 +676,9 @@ int main() {
     int passed = 0, total = 0;
 
     total++; if (test_ppe_alu())          passed++;
+    total++; if (test_ppe_alu_jit())      passed++;
     total++; if (test_ppe_loop())         passed++;
+    total++; if (test_ppe_loop_jit())     passed++;
     total++; if (test_spu_simd())         passed++;
     total++; if (test_spu_fp())           passed++;
     total++; if (test_cell_cooperative()) passed++;
