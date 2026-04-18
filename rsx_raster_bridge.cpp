@@ -3,9 +3,93 @@
 #include "rsx_raster_bridge.h"
 #include "rsx_defs.h"
 
+#include <cstring>
 #include <vector>
 
 namespace rsx {
+
+// ─────────────────────────────────────────────────────────────────
+// NV40 vertex-array decoder. Pulls per-vertex attributes from VRAM
+// using the slot table in RSXState.vertexArrays[]. Convention used:
+//   slot 0 → position (x, y, z [,w])
+//   slot 3 → diffuse color (r, g, b, a)
+//   slot 8 → texcoord 0 (u, v)
+// Unused / disabled slots fall back to defaults (color = opaque white,
+// uv = 0). Supports VERTEX_F and VERTEX_UB (common D3DCOLOR-style
+// 4x u8 for colors). Unknown types are treated as passthrough zeros
+// for that attribute.
+// ─────────────────────────────────────────────────────────────────
+static inline bool decode_attr(const uint8_t* vram, uint32_t vramSize,
+                               const RSXState::VertexArray& va,
+                               uint32_t index, int maxChannels,
+                               float out[4]) {
+    for (int i = 0; i < 4; ++i) out[i] = 0.0f;
+    if (!va.enabled) return false;
+
+    uint32_t type   = va.format & 0xF;
+    uint32_t size   = (va.format >> 4) & 0xF;
+    uint32_t stride = (va.format >> 8) & 0xFF;
+    if (stride == 0 || size == 0) return false;
+
+    uint32_t off = va.offset + index * stride;
+    if ((uint64_t)off + stride > vramSize) return false;
+    const uint8_t* p = vram + off;
+
+    int channels = (int)size;
+    if (channels > maxChannels) channels = maxChannels;
+
+    switch (type) {
+    case VERTEX_F: {
+        for (int i = 0; i < channels; ++i) {
+            float f;
+            std::memcpy(&f, p + i * 4, 4);
+            out[i] = f;
+        }
+        return true;
+    }
+    case VERTEX_UB: {
+        // D3DCOLOR byte order: stored BGRA in memory, emit as RGBA.
+        // When size == 4 and we're reading a color slot, remap.
+        if (size == 4 && maxChannels == 4) {
+            out[2] = p[0] / 255.0f;  // B
+            out[1] = p[1] / 255.0f;  // G
+            out[0] = p[2] / 255.0f;  // R
+            out[3] = p[3] / 255.0f;  // A
+        } else {
+            for (int i = 0; i < channels; ++i) out[i] = p[i] / 255.0f;
+        }
+        return true;
+    }
+    default:
+        // Unsupported type today — treat attribute as defaulted and
+        // let the caller fall back.
+        return false;
+    }
+}
+
+static void decode_vertex_stream(const RSXState& s,
+                                 const uint8_t* vram, uint32_t vramSize,
+                                 uint32_t first, uint32_t count,
+                                 std::vector<RasterVertex>& out) {
+    out.resize(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t idx = first + i;
+        float pos[4]   = { 0, 0, 0, 1 };
+        float color[4] = { 1, 1, 1, 1 };
+        float uv[4]    = { 0, 0, 0, 0 };
+
+        decode_attr(vram, vramSize, s.vertexArrays[0], idx, 4, pos);
+        if (s.vertexArrays[3].enabled)
+            decode_attr(vram, vramSize, s.vertexArrays[3], idx, 4, color);
+        if (s.vertexArrays[8].enabled)
+            decode_attr(vram, vramSize, s.vertexArrays[8], idx, 4, uv);
+
+        RasterVertex& v = out[i];
+        v.x = pos[0]; v.y = pos[1]; v.z = pos[2];
+        v.r = color[0]; v.g = color[1]; v.b = color[2]; v.a = color[3];
+        v.u = uv[0];    v.v = uv[1];
+    }
+}
 
 void RasterBridge::onSurfaceSetup(const RSXState& s) {
     if (!rast_) return;
@@ -45,9 +129,21 @@ void RasterBridge::onBeginEnd(const RSXState&, uint32_t) {
 }
 
 void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t count) {
-    if (!rast_ || !pool_ || count == 0) return;
-    if ((uint64_t)first + count > poolCount_) return;
-    const RasterVertex* base = pool_ + first;
+    if (!rast_ || count == 0) return;
+
+    // Choose the vertex source.
+    std::vector<RasterVertex> decoded;
+    const RasterVertex* base = nullptr;
+    if (vram_ && s.vertexArrays[0].enabled) {
+        decode_vertex_stream(s, vram_, vramSize_, first, count, decoded);
+        base = decoded.data();
+    } else if (pool_) {
+        if ((uint64_t)first + count > poolCount_) return;
+        base = pool_ + first;
+    } else {
+        return;
+    }
+
     switch (s.currentPrim) {
     case PRIM_POINTS:
         rast_->drawPoints(base, count);

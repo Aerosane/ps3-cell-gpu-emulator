@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 using namespace rsx;
@@ -116,6 +117,68 @@ int main() {
 
     raster.savePPM("/tmp/rsx_bridge_demo.ppm");
     std::printf("  Saved /tmp/rsx_bridge_demo.ppm\n");
+
+    // ── NV40 vertex-array decode scenario ───────────────────────────
+    // Clear state, attach VRAM, detach pool. Pack 3 float3 positions
+    // at VRAM offset 0x1000, 3 UB4 colors at 0x2000. Configure slots
+    // 0 and 3 via FIFO, draw. The bridge should decode from VRAM.
+    std::printf("\n── NV40 vertex-array decode:\n");
+    bridge.setVertexPool(nullptr, 0);
+    bridge.setVRAM(vram, 8 * 1024 * 1024);
+
+    // Write 3 positions (float3, stride 12) at offset 0x1000.
+    float positions[9] = {
+         40.f,  40.f, 0.f,
+        280.f,  40.f, 0.f,
+        160.f, 200.f, 0.f,
+    };
+    std::memcpy(vram + 0x1000, positions, sizeof(positions));
+
+    // Write 3 colors (UB4, D3DCOLOR = BGRA in memory), stride 4 at 0x2000.
+    // Pure yellow for all three: R=255 G=255 B=0 A=255 → memory BGRA = 00FFFFFF.
+    uint32_t bgra_yellow = 0xFFFFFF00u; // B=0x00 G=0xFF R=0xFF A=0xFF
+    uint32_t cols[3] = { bgra_yellow, bgra_yellow, bgra_yellow };
+    std::memcpy(vram + 0x2000, cols, sizeof(cols));
+
+    // Clear → draw with freshly configured streams → flip.
+    uint32_t fifo2[64];
+    size_t m = 0;
+    fifo2[m++] = fifo_incr(NV4097_SET_COLOR_CLEAR_VALUE, 1); fifo2[m++] = 0xFF000000u;
+    fifo2[m++] = fifo_incr(NV4097_CLEAR_SURFACE, 1);         fifo2[m++] = CLEAR_COLOR;
+
+    // Slot 0: position float3, stride 12.
+    fifo2[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 0*4, 1);
+    fifo2[m++] = (12u << 8) | (3u << 4) | VERTEX_F;
+    fifo2[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 0*4, 1);
+    fifo2[m++] = 0x1000u;
+
+    // Slot 3: color UB4, stride 4.
+    fifo2[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 3*4, 1);
+    fifo2[m++] = (4u << 8) | (4u << 4) | VERTEX_UB;
+    fifo2[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 3*4, 1);
+    fifo2[m++] = 0x2000u;
+
+    fifo2[m++] = fifo_incr(NV4097_SET_BEGIN_END, 1); fifo2[m++] = PRIM_TRIANGLES;
+    fifo2[m++] = fifo_incr(NV4097_DRAW_ARRAYS, 1);   fifo2[m++] = (2u << 24) | 0;
+    fifo2[m++] = fifo_incr(NV4097_SET_BEGIN_END, 1); fifo2[m++] = 0;
+    fifo2[m++] = fifo_incr(NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP, 1); fifo2[m++] = 0;
+
+    uint32_t drawsBefore = bridge.counters.draws;
+    rsx_process_fifo(&st, fifo2, (uint32_t)m, vram, 2048);
+
+    CHECK(bridge.counters.draws == drawsBefore + 1,
+          "Decode path dispatched a draw");
+
+    raster.readback(fb.data());
+    uint32_t yellowPx = fb[130 * W + 160];
+    std::printf("  VRAM-decoded tri center: 0x%08x (want yellow)\n", yellowPx);
+    CHECK(((yellowPx >> 16) & 0xFF) > 200 &&
+          ((yellowPx >>  8) & 0xFF) > 200 &&
+          ( yellowPx        & 0xFF) < 32,
+          "Decoded VRAM verts + UB4 color produced yellow triangle");
+    CHECK(fb[5 * W + 5] == 0xFF000000u, "Clear color outside triangle");
+
+    raster.savePPM("/tmp/rsx_bridge_vram.ppm");
 
     raster.shutdown();
     rsx_shutdown(&st);

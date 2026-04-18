@@ -6,11 +6,11 @@
 // as the production path; the Vulkan translator remains for portability
 // experiments.
 //
-// Vertex source: since NV40 vertex-array decode isn't implemented yet,
-// the bridge accepts an externally-supplied vertex pool. When a draw
-// method fires, the bridge pulls verts[first, first+count) into a
-// drawTriangles / drawIndexed call. The caller is responsible for
-// populating the pool before pushing the draw command.
+// Vertex source: when a VRAM pointer is attached (setVRAM), the bridge
+// decodes real NV40 vertex streams using the state's vertexArrays[]
+// slots (slot 0 = position, slot 3 = color, slot 8 = UV0) with
+// VERTEX_F and VERTEX_UB types. Otherwise, the caller-supplied
+// vertex pool is used (legacy path for synthetic tests).
 
 #include "rsx_raster.h"
 #include <cstdint>
@@ -25,6 +25,14 @@ public:
     RasterBridge() = default;
 
     int  attach(CudaRasterizer* r) { rast_ = r; return r ? 0 : -1; }
+
+    // VRAM pointer for real NV40 vertex-array decode. When non-null,
+    // onDrawArrays reads from VRAM using RSXState.vertexArrays[] rather
+    // than from the fallback vertex pool.
+    void setVRAM(const uint8_t* vram, uint32_t size) {
+        vram_ = vram; vramSize_ = size;
+    }
+
     void setVertexPool(const RasterVertex* v, uint32_t count) {
         pool_ = v; poolCount_ = count;
     }
@@ -57,6 +65,8 @@ private:
     uint32_t poolCount_{0};
     const uint16_t* idxPool_{nullptr};
     uint32_t idxCount_{0};
+    const uint8_t* vram_{nullptr};
+    uint32_t vramSize_{0};
 };
 
 } // namespace rsx
