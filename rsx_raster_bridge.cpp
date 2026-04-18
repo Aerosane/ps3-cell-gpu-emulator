@@ -3,6 +3,7 @@
 #include "rsx_raster_bridge.h"
 #include "rsx_defs.h"
 #include "rsx_vp_shader.h"
+#include "rsx_texture.h"
 
 #include <cstdio>
 #include <cstring>
@@ -301,6 +302,29 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
             v.u = outputs[4].v[0]; v.v = outputs[4].v[1];
         }
         base = transformed.data();
+    }
+
+    // ── Per-vertex texture sampling (Gouraud modulation) ────────
+    // If texture unit 0 is enabled and vram is mapped, sample it at
+    // each vertex's (u,v) and modulate the per-vertex color. This is
+    // not per-pixel FP execution — the rasterizer still does Gouraud
+    // interpolation of the resulting colors — but it closes the loop
+    // from FIFO TEXTURE_OFFSET upload → raster output without having
+    // to run the fragment program on every pixel on the host.
+    std::vector<RasterVertex> textured;
+    if (vram_ && s.textures[0].enabled && base != nullptr) {
+        ps3rsx::HostTextureSamplerCtx tctx{ vram_, vramSize_, &s };
+        textured.resize(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            RasterVertex v = base[i];
+            float uvw[3] = { v.u, v.v, 0.f };
+            float rgba[4] = { 1.f, 1.f, 1.f, 1.f };
+            ps3rsx::rsx_host_sampler(&tctx, 0, uvw, rgba);
+            v.r *= rgba[0]; v.g *= rgba[1];
+            v.b *= rgba[2]; v.a *= rgba[3];
+            textured[i] = v;
+        }
+        base = textured.data();
     }
 
     switch (s.currentPrim) {

@@ -538,6 +538,87 @@ int main() {
     }
 
 
+    // ── End-to-end textured draw: FIFO texture upload → bridge → raster ──
+    // Verifies that NV4097_SET_TEXTURE_* captured from FIFO actually
+    // modulate the rasterized pixels. We upload a 2x2 ARGB checker
+    // (white/black/black/white), draw a single fullscreen-ish white
+    // triangle with per-vertex UVs spanning the whole texture, and
+    // confirm that both white and black pixels appear in the framebuffer.
+    std::printf("\n── End-to-end FIFO → textured draw:\n");
+    {
+        // Wipe raster + FB.
+        raster.init(W, H);
+        RasterBridge br2;
+        br2.attach(&raster);
+        br2.setVRAM(vram, 8 * 1024 * 1024);
+        st.vulkanEmitter = &br2;
+
+        const uint32_t TEX_OFF = 0x400000;
+        uint8_t checker[16] = {
+            0xFF, 0xFF, 0xFF, 0xFF,   // white
+            0xFF, 0x00, 0x00, 0x00,   // black
+            0xFF, 0x00, 0x00, 0x00,   // black
+            0xFF, 0xFF, 0xFF, 0xFF,   // white
+        };
+        std::memcpy(vram + TEX_OFF, checker, sizeof(checker));
+
+        // Vertex buffer with uvs.
+        const uint32_t VB = 0x500000;
+        struct Vtx { float x,y,z,u,v; } verts[3] = {
+            {  60.f,  60.f, 0, 0.25f, 0.75f },   // texel (0,1) = black
+            { 260.f,  60.f, 0, 0.75f, 0.75f },   // texel (1,1) = white
+            { 160.f, 200.f, 0, 0.5f,  0.25f },   // texel (1,0) = black
+        };
+        std::memcpy(vram + VB, verts, sizeof(verts));
+
+        uint32_t fifo6[64]; size_t k = 0;
+        fifo6[k++] = fifo_incr(NV4097_SET_SURFACE_CLIP_HORIZONTAL, 1); fifo6[k++] = W;
+        fifo6[k++] = fifo_incr(NV4097_SET_SURFACE_CLIP_VERTICAL,   1); fifo6[k++] = H;
+        fifo6[k++] = fifo_incr(NV4097_SET_SURFACE_FORMAT, 1);          fifo6[k++] = SURFACE_A8R8G8B8;
+        fifo6[k++] = fifo_incr(NV4097_SET_VIEWPORT_HORIZONTAL, 1);     fifo6[k++] = (W << 16);
+        fifo6[k++] = fifo_incr(NV4097_SET_VIEWPORT_VERTICAL,   1);     fifo6[k++] = (H << 16);
+        fifo6[k++] = fifo_incr(NV4097_SET_SCISSOR_HORIZONTAL,  1);     fifo6[k++] = (W << 16);
+        fifo6[k++] = fifo_incr(NV4097_SET_SCISSOR_VERTICAL,    1);     fifo6[k++] = (H << 16);
+        fifo6[k++] = fifo_incr(NV4097_SET_COLOR_CLEAR_VALUE,   1);     fifo6[k++] = 0xFF404040u;
+        fifo6[k++] = fifo_incr(NV4097_CLEAR_SURFACE, 1);               fifo6[k++] = CLEAR_COLOR | CLEAR_DEPTH;
+
+        // Texture unit 0 setup.
+        fifo6[k++] = fifo_incr(NV4097_SET_TEXTURE_OFFSET + 0*0x20, 1); fifo6[k++] = TEX_OFF;
+        fifo6[k++] = fifo_incr(NV4097_SET_TEXTURE_FORMAT + 0*0x20, 1); fifo6[k++] = 0x85;
+        fifo6[k++] = fifo_incr(NV4097_SET_TEXTURE_IMAGE_RECT + 0*0x20, 1); fifo6[k++] = (2u << 16) | 2u;
+
+        // Vertex array slots: pos (stride=20, 3F), uv (stride=20, offset+12, 2F).
+        fifo6[k++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 0*4, 1); fifo6[k++] = VB;
+        fifo6[k++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 0*4, 1); fifo6[k++] = (20 << 8) | (3 << 4) | 2; // stride 20, 3 floats
+        fifo6[k++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 8*4, 1); fifo6[k++] = VB + 12;
+        fifo6[k++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 8*4, 1); fifo6[k++] = (20 << 8) | (2 << 4) | 2; // stride 20, 2 floats
+
+        fifo6[k++] = fifo_incr(NV4097_SET_BEGIN_END, 1);  fifo6[k++] = PRIM_TRIANGLES;
+        fifo6[k++] = fifo_incr(NV4097_DRAW_ARRAYS, 1);    fifo6[k++] = (3 << 24) | 0; // count=3, first=0
+        fifo6[k++] = fifo_incr(NV4097_SET_BEGIN_END, 1);  fifo6[k++] = 0;
+
+        rsx_process_fifo(&st, fifo6, (uint32_t)k, vram, 4096);
+
+        // Readback and count bright vs dark pixels inside the triangle.
+        std::vector<uint32_t> fb(W * H);
+        raster.readback(fb.data());
+        uint32_t bright = 0, dark = 0;
+        for (uint32_t i = 0; i < W * H; ++i) {
+            uint8_t r = (fb[i] >> 16) & 0xFF;
+            uint8_t g = (fb[i] >> 8)  & 0xFF;
+            uint8_t b =  fb[i]        & 0xFF;
+            if (r == 0x40 && g == 0x40 && b == 0x40) continue; // clear
+            uint32_t lum = (uint32_t)r + g + b;
+            if (lum > 350) bright++; else if (lum < 200) dark++;
+        }
+        std::printf("  bright pixels: %u   dark pixels: %u\n", bright, dark);
+        CHECK(bright > 50 && dark > 300,
+              "Textured draw produced both light and dark texels in FB");
+
+        raster.savePPM("/tmp/rsx_bridge_textured.ppm");
+    }
+
+
     raster.shutdown();
     rsx_shutdown(&st);
     std::free(vram);
