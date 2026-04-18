@@ -92,6 +92,7 @@ static constexpr uint32_t NV4097_DRAW_INDEX_ARRAY           = 0x0000181C;
 static constexpr uint32_t NV4097_SET_TEXTURE_OFFSET          = 0x00001A00;
 static constexpr uint32_t NV4097_SET_TEXTURE_FORMAT           = 0x00001A04;
 static constexpr uint32_t NV4097_SET_TEXTURE_CONTROL0         = 0x00001A0C;
+static constexpr uint32_t NV4097_SET_TEXTURE_IMAGE_RECT       = 0x00001A18;
 
 // Clear / present
 static constexpr uint32_t NV4097_SET_COLOR_CLEAR_VALUE       = 0x00001D90;

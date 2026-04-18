@@ -7,6 +7,7 @@
 #include "rsx_raster.h"
 #include "rsx_raster_bridge.h"
 #include "rsx_fp_shader.h"
+#include "rsx_texture.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -468,6 +469,73 @@ int main() {
           texOut[0].v[2] > 0.49f && texOut[0].v[2] < 0.51f &&
           texOut[0].v[3] > 0.99f,
           "FP TEX wrote sampled rgba into r0");
+
+
+    // ── FP TEX with real RSX VRAM-backed sampler ────────────────────
+    // Upload a 2x2 A8R8G8B8 texture into vram at a known offset, push
+    // TEXTURE_OFFSET / FORMAT / IMAGE_RECT FIFO methods for unit 5,
+    // then run a TEX FP using rsx_host_sampler. Verifies the command-
+    // processor texture state capture and the host sampler decode path.
+    std::printf("\n── FP TEX via VRAM-backed RSX sampler:\n");
+    {
+        const uint32_t TEX_OFF = 0x300000;     // anywhere past vbufs
+        // 2x2 ARGB texels, byte order A,R,G,B per pixel:
+        //   (0,0) red    (1,0) green
+        //   (0,1) blue   (1,1) white
+        uint8_t texels[16] = {
+            0xFF, 0xFF, 0x00, 0x00,   // red
+            0xFF, 0x00, 0xFF, 0x00,   // green
+            0xFF, 0x00, 0x00, 0xFF,   // blue
+            0xFF, 0xFF, 0xFF, 0xFF,   // white
+        };
+        std::memcpy(vram + TEX_OFF, texels, sizeof(texels));
+
+        uint32_t tfifo[16]; size_t tn = 0;
+        // unit 5 → method base + 5*0x20
+        const uint32_t U = 5;
+        const uint32_t TBASE = NV4097_SET_TEXTURE_OFFSET + U * 0x20;
+        tfifo[tn++] = fifo_incr(TBASE + 0x00, 1); tfifo[tn++] = TEX_OFF;
+        tfifo[tn++] = fifo_incr(TBASE + 0x04, 1); tfifo[tn++] = 0x85; // A8R8G8B8
+        tfifo[tn++] = fifo_incr(TBASE + 0x18, 1); tfifo[tn++] = (2u << 16) | 2u;
+        rsx_process_fifo(&st, tfifo, (uint32_t)tn, vram, 64);
+
+        CHECK(st.textures[U].enabled &&
+              st.textures[U].width == 2 && st.textures[U].height == 2 &&
+              (st.textures[U].format & 0xFF) == 0x85,
+              "Texture unit 5 captured offset/format/2x2 from FIFO");
+
+        // Build TEX r0, f[TEX0]; end on unit 5.
+        uint32_t vw0 = 1u | (0xFu << 9) | (4u << 13) | (U << 17) | (0x17u << 24);
+        uint32_t vw1 = 1u | (0u << 2) | (0u << 9) | (1u << 11) | (2u << 13) | (3u << 15);
+        uint32_t vProg[4] = { fp_enc(vw0), fp_enc(vw1), 0, 0 };
+
+        ps3rsx::HostTextureSamplerCtx vctx{ vram, 8u * 1024 * 1024, &st };
+
+        struct Probe { float u, v; float r, g, b, a; };
+        Probe probes[4] = {
+            // Sample centers of each texel: (0.25,0.25)→red, (0.75,0.25)→green,
+            // (0.25,0.75)→blue, (0.75,0.75)→white.
+            {0.25f, 0.25f, 1, 0, 0, 1},
+            {0.75f, 0.25f, 0, 1, 0, 1},
+            {0.25f, 0.75f, 0, 0, 1, 1},
+            {0.75f, 0.75f, 1, 1, 1, 1},
+        };
+        for (auto& p : probes) {
+            FPFloat4 vIn[16] = {};
+            vIn[4] = FPFloat4{{p.u, p.v, 0.f, 1.f}};
+            FPFloat4 vOut[4] = {};
+            fp_execute(vProg, 4, vIn, vOut, ps3rsx::rsx_host_sampler, &vctx);
+            std::printf("  uv=(%.2f,%.2f) → r0=(%.2f,%.2f,%.2f,%.2f) "
+                        "(expected %.0f,%.0f,%.0f,%.0f)\n",
+                        p.u, p.v,
+                        vOut[0].v[0], vOut[0].v[1], vOut[0].v[2], vOut[0].v[3],
+                        p.r, p.g, p.b, p.a);
+            auto near = [](float a, float b){ return a > b - 0.05f && a < b + 0.05f; };
+            CHECK(near(vOut[0].v[0], p.r) && near(vOut[0].v[1], p.g) &&
+                  near(vOut[0].v[2], p.b) && near(vOut[0].v[3], p.a),
+                  "VRAM-backed TEX returns expected ARGB texel");
+        }
+    }
 
 
     raster.shutdown();

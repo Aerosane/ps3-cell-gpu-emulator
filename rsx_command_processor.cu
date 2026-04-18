@@ -375,6 +375,10 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
             case 0x0C: // TEXTURE_CONTROL0
                 state->textures[unit].control0 = data;
                 break;
+            case 0x18: // TEXTURE_IMAGE_RECT  (width<<16 | height)
+                state->textures[unit].width  = (data >> 16) & 0xFFFF;
+                state->textures[unit].height =  data        & 0xFFFF;
+                break;
             default:
                 break;
             }
