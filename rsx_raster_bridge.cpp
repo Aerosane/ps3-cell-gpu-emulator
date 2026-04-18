@@ -121,7 +121,14 @@ void RasterBridge::onClearSurface(const RSXState& s, uint32_t mask) {
     if (!rast_) return;
     // rsx_command_processor uses logical flags from rsx_defs.h:
     // CLEAR_COLOR = 0x01, CLEAR_DEPTH = 0x02, CLEAR_STENCIL = 0x04.
-    if (mask & 0x01) rast_->clear(s.colorClearValue);
+    if (mask & 0x01) {
+        rast_->clear(s.colorClearValue);
+        // Mirror the clear across all bound MRT planes so deferred
+        // renderers that don't explicitly clear every G-buffer plane
+        // still see a deterministic start state.
+        for (uint32_t p = 1; p < rast_->mrtCount(); ++p)
+            rast_->clearPlane(p, s.colorClearValue);
+    }
     if (mask & 0x02) rast_->clearDepth(1.0f);
     counters.clears++;
 }
@@ -247,6 +254,23 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
 
     // Cull
     rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
+
+    // MRT: decode SURFACE_COLOR_TARGET → 1..4 active color planes.
+    // The RSX encoding is sparse (0, 1, 2, 3, 0x13, 0x17, 0x1F) and
+    // maps directly to plane count.
+    uint32_t mrt = 1;
+    switch (s.surfaceColorTarget) {
+    case SURFACE_TARGET_NONE: mrt = 0; break;
+    case SURFACE_TARGET_A:    mrt = 1; break;
+    case SURFACE_TARGET_B:    mrt = 1; break;   // single plane, B bound to slot 0
+    case SURFACE_TARGET_AB:
+    case SURFACE_TARGET_MRT1: mrt = 2; break;
+    case SURFACE_TARGET_MRT2: mrt = 3; break;
+    case SURFACE_TARGET_MRT3: mrt = 4; break;
+    default: mrt = 1; break;
+    }
+    if (mrt == 0) mrt = 1;
+    if (rast_->mrtCount() != mrt) rast_->setMRTCount(mrt);
 }
 
 void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t count) {

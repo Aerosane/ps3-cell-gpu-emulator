@@ -527,9 +527,66 @@ void CudaRasterizer::shutdown() {
     if (fb_.d_color) { cudaFree(fb_.d_color); fb_.d_color = nullptr; }
     if (fb_.d_depth) { cudaFree(fb_.d_depth); fb_.d_depth = nullptr; }
     if (fb_.d_stencil) { cudaFree(fb_.d_stencil); fb_.d_stencil = nullptr; }
+    if (d_colorB_) { cudaFree(d_colorB_); d_colorB_ = nullptr; }
+    if (d_colorC_) { cudaFree(d_colorC_); d_colorC_ = nullptr; }
+    if (d_colorD_) { cudaFree(d_colorD_); d_colorD_ = nullptr; }
+    mrtCount_ = 1;
     if (d_tex_) { cudaFree(d_tex_); d_tex_ = nullptr; }
     texW_ = texH_ = 0;
     fb_.width = fb_.height = 0;
+}
+
+int CudaRasterizer::setMRTCount(uint32_t count) {
+    if (count < 1) count = 1;
+    if (count > 4) count = 4;
+    if (!fb_.d_color) return -1;
+    size_t bytes = size_t(fb_.width) * size_t(fb_.height) * sizeof(uint32_t);
+    auto ensure = [&](uint32_t** slot) -> int {
+        if (*slot) return 0;
+        CU_CHECK(cudaMalloc(slot, bytes));
+        cudaMemset(*slot, 0, bytes);
+        return 0;
+    };
+    auto drop = [](uint32_t** slot) {
+        if (*slot) { cudaFree(*slot); *slot = nullptr; }
+    };
+    if (count >= 2) { int r = ensure(&d_colorB_); if (r) return r; } else drop(&d_colorB_);
+    if (count >= 3) { int r = ensure(&d_colorC_); if (r) return r; } else drop(&d_colorC_);
+    if (count >= 4) { int r = ensure(&d_colorD_); if (r) return r; } else drop(&d_colorD_);
+    mrtCount_ = count;
+    return 0;
+}
+
+void CudaRasterizer::clearPlane(uint32_t n, uint32_t rgba) {
+    uint32_t* buf = nullptr;
+    switch (n) {
+    case 0: buf = fb_.d_color; break;
+    case 1: buf = d_colorB_;   break;
+    case 2: buf = d_colorC_;   break;
+    case 3: buf = d_colorD_;   break;
+    default: return;
+    }
+    if (!buf) return;
+    dim3 bs(16, 16);
+    dim3 gs((fb_.width + bs.x - 1) / bs.x,
+            (fb_.height + bs.y - 1) / bs.y);
+    k_clear<<<gs, bs>>>(buf, fb_.width, fb_.height, rgba);
+    cudaDeviceSynchronize();
+    stats.clears++;
+}
+
+void CudaRasterizer::readbackPlane(uint32_t n, uint32_t* out) const {
+    const uint32_t* buf = nullptr;
+    switch (n) {
+    case 0: buf = fb_.d_color; break;
+    case 1: buf = d_colorB_;   break;
+    case 2: buf = d_colorC_;   break;
+    case 3: buf = d_colorD_;   break;
+    default: return;
+    }
+    if (!buf || !out) return;
+    size_t bytes = size_t(fb_.width) * size_t(fb_.height) * sizeof(uint32_t);
+    cudaMemcpy(out, buf, bytes, cudaMemcpyDeviceToHost);
 }
 
 int CudaRasterizer::setTexture2D(const uint32_t* data, uint32_t w, uint32_t h) {

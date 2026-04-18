@@ -247,6 +247,33 @@ public:
     // Copy stencil buffer to host (uint8 per pixel).
     void readbackStencil(uint8_t* out) const;
 
+    // ─── MRT (Multiple Render Targets) ──────────────────────────
+    // The real NV47 can bind up to 4 color planes (A/B/C/D). We
+    // manage these as independent device buffers of the FB's
+    // resolution, each matching plane A in layout (RGBA8 uint32_t,
+    // width*height pixels). Plane A is always fb_.d_color and is
+    // allocated by init(); B/C/D are allocated on first bind.
+    //
+    // RSX exposes plane target counts via SURFACE_COLOR_TARGET:
+    //   SURFACE_TARGET_A    (1 plane, count=1)
+    //   SURFACE_TARGET_AB / MRT1  (2 planes)
+    //   SURFACE_TARGET_MRT2       (3 planes: ABC)
+    //   SURFACE_TARGET_MRT3       (4 planes: ABCD)
+    // Draw calls write fragment shader output o[N] to plane N's
+    // buffer, if that plane is active. For the current Gouraud
+    // modulation path, only plane A receives shaded pixels; B/C/D
+    // are allocated and cleared so downstream code (readback,
+    // debug capture) can access them, and the device-side FP JIT
+    // will start writing them when it lands.
+    int  setMRTCount(uint32_t count);   // 1..4
+    uint32_t mrtCount() const { return mrtCount_; }
+
+    // Clear plane N (0..3) to AARRGGBB.
+    void clearPlane(uint32_t n, uint32_t rgba);
+
+    // Readback plane N.
+    void readbackPlane(uint32_t n, uint32_t* out) const;
+
     uint32_t width()  const { return fb_.width; }
     uint32_t height() const { return fb_.height; }
 
@@ -262,6 +289,11 @@ public:
 
 private:
     RasterFramebuffer fb_{};
+    // MRT planes B/C/D (plane A is fb_.d_color). Allocated lazily.
+    uint32_t* d_colorB_{nullptr};
+    uint32_t* d_colorC_{nullptr};
+    uint32_t* d_colorD_{nullptr};
+    uint32_t  mrtCount_{1};
     bool blendEnable_{false};
     bool depthTest_{false};
     bool depthWrite_{true};
