@@ -186,6 +186,7 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   int texBilinear,
                                   int scX, int scY, uint32_t scW, uint32_t scH,
                                   int alphaTest, uint32_t alphaRef,
+                                  int   depthClip,
                                   int   stencilTest,
                                   uint32_t stencilFunc,
                                   uint32_t stencilRef,
@@ -239,6 +240,12 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         float w2 = 1.0f - w0 - w1;
 
         float z = w0 * v0.z + w1 * v1.z + w2 * v2.z;
+
+        // Near/far plane clip (NDC-space depth after /w is mapped to
+        // [0,1]; values outside mean the pixel is past the near/far
+        // plane). Matches default RSX/GL behaviour — games can keep
+        // relying on depth clamping by not enabling NV4097 depth-clamp.
+        if (depthClip && (z < 0.0f || z > 1.0f)) continue;
 
         // Stencil test happens before depth test (matches RSX/GL order).
         bool sPass = true;
@@ -337,6 +344,7 @@ __global__ void k_rasterLines(uint32_t* __restrict__ dst,
                               uint32_t depthFunc,
                               int scX, int scY, uint32_t scW, uint32_t scH,
                               int alphaTest, uint32_t alphaRef,
+                              int depthClip,
                               uint32_t bfSrcRGB, uint32_t bfDstRGB,
                               uint32_t bfSrcA,   uint32_t bfDstA,
                               uint32_t beRGB,    uint32_t beA,
@@ -375,6 +383,7 @@ __global__ void k_rasterLines(uint32_t* __restrict__ dst,
         if (ex*ex + ey*ey > 0.25f) continue;  // > 0.5 px perpendicular
 
         float z = v0.z + tc * (v1.z - v0.z);
+        if (depthClip && (z < 0.0f || z > 1.0f)) continue;
         if (depthTest && depth) {
             if (!depthCompare(depthFunc, z, dstZ)) continue;
         }
@@ -435,6 +444,7 @@ __global__ void k_rasterPoints(uint32_t* __restrict__ dst,
                                uint32_t depthFunc,
                                int scX, int scY, uint32_t scW, uint32_t scH,
                                int alphaTest, uint32_t alphaRef,
+                               int depthClip,
                                uint32_t bfSrcRGB, uint32_t bfDstRGB,
                                uint32_t bfSrcA,   uint32_t bfDstA,
                                uint32_t beRGB,    uint32_t beA,
@@ -451,6 +461,7 @@ __global__ void k_rasterPoints(uint32_t* __restrict__ dst,
     }
     uint32_t base = py * width + px;
     float z = v.z;
+    if (depthClip && (z < 0.0f || z > 1.0f)) return;
     if (depthTest && depth) {
         if (!depthCompare(depthFunc, z, depth[base])) return;
     }
@@ -661,6 +672,7 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   scX_, scY_, scW_, scH_,
                                   alphaTestEnable_ ? 1 : 0,
                                   uint32_t(alphaRef_),
+                                  depthClip_ ? 1 : 0,
                                   stencilTest_ ? 1 : 0,
                                   uint32_t(stencilFunc_),
                                   uint32_t(stencilRef_),
@@ -750,6 +762,7 @@ uint32_t CudaRasterizer::drawLines(const RasterVertex* verts, uint32_t count) {
                               scX_, scY_, scW_, scH_,
                               alphaTestEnable_ ? 1 : 0,
                               uint32_t(alphaRef_),
+                              depthClip_ ? 1 : 0,
                               uint32_t(bfSrcRGB_), uint32_t(bfDstRGB_),
                               uint32_t(bfSrcA_),   uint32_t(bfDstA_),
                               uint32_t(beRGB_),    uint32_t(beA_),
@@ -789,6 +802,7 @@ uint32_t CudaRasterizer::drawPoints(const RasterVertex* verts, uint32_t count) {
                                scX_, scY_, scW_, scH_,
                                alphaTestEnable_ ? 1 : 0,
                                uint32_t(alphaRef_),
+                               depthClip_ ? 1 : 0,
                                uint32_t(bfSrcRGB_), uint32_t(bfDstRGB_),
                                uint32_t(bfSrcA_),   uint32_t(bfDstA_),
                                uint32_t(beRGB_),    uint32_t(beA_),

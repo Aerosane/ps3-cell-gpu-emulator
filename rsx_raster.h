@@ -205,6 +205,11 @@ public:
         alphaTestEnable_ = enable; alphaRef_ = ref;
     }
 
+    // Near/far depth clip. When enabled (default), fragments whose
+    // interpolated depth falls outside [0,1] are rejected. Disable for
+    // RSX depth-clamp mode (NV4097_SET_DEPTH_CLAMP_CONTROL).
+    void setDepthClip(bool enable) { depthClip_ = enable; }
+
     // Indexed draw — vertex buffer addressed by an index array.
     // Index type uint16 or uint32 selected via indexIs32.
     uint32_t drawIndexed(const RasterVertex* verts, uint32_t vertexCount,
@@ -275,6 +280,7 @@ private:
     uint32_t  scW_{0}, scH_{0};
     bool      alphaTestEnable_{false};
     uint8_t   alphaRef_{0};
+    bool      depthClip_{true};
 
     bool      stencilTest_{false};
     StencilFunc stencilFunc_{StencilFunc::Always};

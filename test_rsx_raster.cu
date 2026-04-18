@@ -577,6 +577,45 @@ int main() {
 
     r.savePPM("/tmp/rsx_raster_lines.ppm");
 
+    // ── 11. Near/far depth clipping ─────────────────────────────────
+    // Two triangles, no MVP: one at z=0.5 (visible), one at z=1.5 (past
+    // far plane). With depth clip on (default) the far-plane triangle
+    // must not render. Disabling clip brings it back.
+    r.clear(0xFF000000u);
+    r.setBlend(false);
+    r.setDepthTest(false);
+
+    RasterVertex inPlane[3] = {
+        { 60.f,  60.f, 0.5f, 0,1,0,1 },
+        {260.f,  60.f, 0.5f, 0,1,0,1 },
+        {160.f, 180.f, 0.5f, 0,1,0,1 },
+    };
+    RasterVertex farPlane[3] = {
+        { 60.f,  60.f, 1.5f, 1,0,0,1 },
+        {260.f,  60.f, 1.5f, 1,0,0,1 },
+        {160.f, 180.f, 1.5f, 1,0,0,1 },
+    };
+    r.setDepthClip(true);
+    r.drawTriangles(farPlane, 3);
+    r.drawTriangles(inPlane, 3);
+    r.readback(fb.data());
+    uint32_t clipped = fb[100 * 320 + 160];
+    std::printf("  clipped center: 0x%08x (want green, not red)\n", clipped);
+    CHECK(((clipped >> 8) & 0xFF) > 200 && ((clipped >> 16) & 0xFF) < 32,
+          "Depth clip rejected z=1.5 triangle");
+
+    // Disable clip → far triangle renders.
+    r.clear(0xFF000000u);
+    r.setDepthClip(false);
+    r.drawTriangles(farPlane, 3);
+    r.readback(fb.data());
+    uint32_t unclipped = fb[100 * 320 + 160];
+    std::printf("  unclipped center: 0x%08x (want red)\n", unclipped);
+    CHECK(((unclipped >> 16) & 0xFF) > 200 &&
+          ((unclipped >> 8)  & 0xFF) < 32,
+          "Depth clip disabled lets z=1.5 triangle render");
+    r.setDepthClip(true);
+
     std::printf("\nStats: tris=%u skipped=%u clears=%u\n",
                 r.stats.triangles, r.stats.triangleSkipped, r.stats.clears);
     std::printf("%s (%d failures)\n",
