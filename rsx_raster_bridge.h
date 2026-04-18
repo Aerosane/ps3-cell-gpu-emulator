@@ -71,6 +71,15 @@ private:
     uint32_t idxCount_{0};
     const uint8_t* vram_{nullptr};
     uint32_t vramSize_{0};
+
+    // Cache for the texture we last uploaded to the rasterizer's
+    // device-side sampler. Avoids decoding + re-uploading the same
+    // VRAM region on every draw of a textured object.
+    uint32_t cachedTexOff_{0xFFFFFFFFu};
+    uint32_t cachedTexW_{0};
+    uint32_t cachedTexH_{0};
+    uint32_t cachedTexFmt_{0xFFFFFFFFu};
+    bool     cachedTexValid_{false};
 };
 
 } // namespace rsx

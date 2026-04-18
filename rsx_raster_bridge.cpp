@@ -255,6 +255,61 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
     // Cull
     rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
 
+    // ── Per-pixel texture binding (rasterizer-side) ─────────────
+    // If texture unit 0 is enabled and vram is mapped, decode it
+    // from the RSX-native A8R8G8B8 layout into the rasterizer's
+    // RGBA8 (0xAARRGGBB little-endian) row-major format and upload
+    // via setTexture2D. The rasterizer kernel then samples per-pixel
+    // with bilinear filtering and modulates the interpolated vertex
+    // color, replacing the coarse Gouraud-modulation path that
+    // previously sampled at vertices only.
+    if (vram_ && s.textures[0].enabled &&
+        s.textures[0].width > 0 && s.textures[0].height > 0) {
+        const auto& t = s.textures[0];
+        bool stale =
+            !cachedTexValid_ ||
+            t.offset != cachedTexOff_ || t.width != cachedTexW_ ||
+            t.height != cachedTexH_   || t.format != cachedTexFmt_;
+        if (stale) {
+            uint8_t fmt = (uint8_t)(t.format & 0xFF);
+            uint32_t W = t.width, H = t.height;
+            uint64_t need = (uint64_t)W * H *
+                            (fmt == 0x81 ? 1u : 4u);
+            if ((uint64_t)t.offset + need <= vramSize_) {
+                const uint8_t* src = vram_ + t.offset;
+                std::vector<uint32_t> rgba8(W * H);
+                if (fmt == 0x85) {           // A8R8G8B8 (RSX big-endian ARGB)
+                    for (uint32_t i = 0; i < W * H; ++i) {
+                        uint8_t a = src[i*4+0], r = src[i*4+1];
+                        uint8_t g = src[i*4+2], b = src[i*4+3];
+                        rgba8[i] = ((uint32_t)a << 24) | ((uint32_t)r << 16) |
+                                   ((uint32_t)g <<  8) |  (uint32_t)b;
+                    }
+                } else if (fmt == 0x81) {    // B8 luminance
+                    for (uint32_t i = 0; i < W * H; ++i) {
+                        uint8_t v = src[i];
+                        rgba8[i] = 0xFF000000u |
+                                   ((uint32_t)v << 16) |
+                                   ((uint32_t)v <<  8) |  (uint32_t)v;
+                    }
+                } else {
+                    // Unknown format → magenta debug pattern.
+                    for (uint32_t i = 0; i < W * H; ++i) rgba8[i] = 0xFFFF00FFu;
+                }
+                rast_->setTexture2D(rgba8.data(), W, H);
+                cachedTexOff_ = t.offset;
+                cachedTexW_   = W;
+                cachedTexH_   = H;
+                cachedTexFmt_ = t.format;
+                cachedTexValid_ = true;
+            }
+        }
+    } else if (cachedTexValid_) {
+        // Texture unit went off → unbind from rasterizer too.
+        rast_->setTexture2D(nullptr, 0, 0);
+        cachedTexValid_ = false;
+    }
+
     // MRT: decode SURFACE_COLOR_TARGET → 1..4 active color planes.
     // The RSX encoding is sparse (0, 1, 2, 3, 0x13, 0x17, 0x1F) and
     // maps directly to plane count.
