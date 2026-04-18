@@ -452,6 +452,72 @@ int main() {
 
     r.savePPM("/tmp/rsx_raster_stencil.ppm");
 
+    // ── 9. Extended blend modes: additive (particles) and Min ───────
+    // Additive: start with black, draw half-intensity red+green+blue
+    // triangles overlapping. Overlap pixels should saturate toward white.
+    r.clear(0xFF000000u);
+    r.setStencilTest(false);
+    r.setBlend(true);
+    r.setBlendEquation(BlendEquation::Add, BlendEquation::Add);
+    r.setBlendFunc(BlendFactor::One, BlendFactor::One,
+                   BlendFactor::One, BlendFactor::One);
+    RasterVertex rA[3] = {
+        { 60.f,  40.f, 0, 0.5f, 0,    0,    1 },
+        {220.f,  40.f, 0, 0.5f, 0,    0,    1 },
+        {140.f, 180.f, 0, 0.5f, 0,    0,    1 },
+    };
+    RasterVertex gA[3] = {
+        {100.f,  40.f, 0, 0,    0.5f, 0,    1 },
+        {260.f,  40.f, 0, 0,    0.5f, 0,    1 },
+        {180.f, 180.f, 0, 0,    0.5f, 0,    1 },
+    };
+    RasterVertex bA[3] = {
+        { 80.f,  80.f, 0, 0,    0,    0.5f, 1 },
+        {240.f,  80.f, 0, 0,    0,    0.5f, 1 },
+        {160.f, 200.f, 0, 0,    0,    0.5f, 1 },
+    };
+    r.drawTriangles(rA, 3);
+    r.drawTriangles(gA, 3);
+    r.drawTriangles(bA, 3);
+    r.readback(fb.data());
+    uint32_t triOverlap = fb[120 * 320 + 160];
+    std::printf("  additive overlap: 0x%08x (want all-channels ~128)\n", triOverlap);
+    CHECK(((triOverlap >> 16) & 0xFF) >= 100 &&
+          ((triOverlap >>  8) & 0xFF) >= 100 &&
+          ( triOverlap        & 0xFF) >= 100,
+          "Additive blend accumulates all three channels");
+
+    // Min equation: draw a bright red quad then a dim red quad on top;
+    // Min should keep the dim red.
+    r.clear(0xFF000000u);
+    r.setBlendEquation(BlendEquation::Max, BlendEquation::Max);
+    r.setBlendFunc(BlendFactor::One, BlendFactor::One,
+                   BlendFactor::One, BlendFactor::One);
+    RasterVertex bright[3] = {
+        { 40.f,  40.f, 0, 0.9f, 0, 0, 1 },
+        {280.f,  40.f, 0, 0.9f, 0, 0, 1 },
+        {160.f, 200.f, 0, 0.9f, 0, 0, 1 },
+    };
+    RasterVertex dim[3] = {
+        { 60.f,  60.f, 0, 0.3f, 0, 0, 1 },
+        {260.f,  60.f, 0, 0.3f, 0, 0, 1 },
+        {160.f, 180.f, 0, 0.3f, 0, 0, 1 },
+    };
+    r.drawTriangles(bright, 3);
+    r.drawTriangles(dim,    3);
+    r.readback(fb.data());
+    uint32_t maxPx = fb[120 * 320 + 160];
+    std::printf("  max-blend px: 0x%08x (want ~0xFFE50000)\n", maxPx);
+    CHECK(((maxPx >> 16) & 0xFF) > 200,
+          "Max equation keeps brighter of the two reds");
+
+    // Reset blend state so cleanup path is sane.
+    r.setBlend(false);
+    r.setBlendEquation(BlendEquation::Add, BlendEquation::Add);
+    r.setBlendFunc(BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha,
+                   BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha);
+    r.savePPM("/tmp/rsx_raster_blend.ppm");
+
     std::printf("\nStats: tris=%u skipped=%u clears=%u\n",
                 r.stats.triangles, r.stats.triangleSkipped, r.stats.clears);
     std::printf("%s (%d failures)\n",

@@ -50,6 +50,49 @@ __device__ __forceinline__ bool depthCompare(uint32_t func, float src, float dst
     }
 }
 
+__device__ __forceinline__ float blendFactor(uint32_t f,
+                                             float sc, float dc,
+                                             float sa, float da,
+                                             float cc, float ca,
+                                             int channelIsAlpha) {
+    // sc/dc/sa/da: source/dest color channel (r or g or b) and alpha.
+    // cc: constant color channel.  ca: constant alpha.
+    switch (f) {
+    case 0:  return 0.0f;                    // Zero
+    case 1:  return 1.0f;                    // One
+    case 2:  return sc;                      // SrcColor
+    case 3:  return 1.0f - sc;               // OneMinusSrcColor
+    case 4:  return dc;                      // DstColor
+    case 5:  return 1.0f - dc;               // OneMinusDstColor
+    case 6:  return sa;                      // SrcAlpha
+    case 7:  return 1.0f - sa;               // OneMinusSrcAlpha
+    case 8:  return da;                      // DstAlpha
+    case 9:  return 1.0f - da;               // OneMinusDstAlpha
+    case 10: return cc;                      // ConstColor
+    case 11: return 1.0f - cc;               // OneMinusConstColor
+    case 12: return ca;                      // ConstAlpha
+    case 13: return 1.0f - ca;               // OneMinusConstAlpha
+    case 14: {                               // SrcAlphaSaturate
+        if (channelIsAlpha) return 1.0f;
+        float f1 = 1.0f - da;
+        return sa < f1 ? sa : f1;
+    }
+    default: return 1.0f;
+    }
+}
+
+__device__ __forceinline__ float blendEquation(uint32_t eq,
+                                               float src, float dst) {
+    switch (eq) {
+    case 0: return src + dst;                // Add
+    case 1: return src - dst;                // Subtract
+    case 2: return dst - src;                // RevSubtract
+    case 3: return src < dst ? src : dst;    // Min
+    case 4: return src > dst ? src : dst;    // Max
+    default: return src + dst;
+    }
+}
+
 __device__ __forceinline__ bool stencilCompare(uint32_t func, uint8_t a, uint8_t b) {
     switch (func) {
     case 0: return false;
@@ -150,7 +193,11 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   uint32_t stencilWriteMask,
                                   uint32_t opSFail,
                                   uint32_t opZFail,
-                                  uint32_t opZPass) {
+                                  uint32_t opZPass,
+                                  uint32_t bfSrcRGB, uint32_t bfDstRGB,
+                                  uint32_t bfSrcA,   uint32_t bfDstA,
+                                  uint32_t beRGB,    uint32_t beA,
+                                  float    ccR, float ccG, float ccB, float ccA) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -239,10 +286,22 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             float dr = ((dc >> 16) & 0xFF) / 255.0f;
             float dg = ((dc >>  8) & 0xFF) / 255.0f;
             float db = ((dc >>  0) & 0xFF) / 255.0f;
-            r = r * a + dr * (1.0f - a);
-            g = g * a + dg * (1.0f - a);
-            b = b * a + db * (1.0f - a);
-            a = 1.0f;
+            float da = ((dc >> 24) & 0xFF) / 255.0f;
+
+            // Evaluate per-channel source/dest factors.
+            float fSr = blendFactor(bfSrcRGB, r, dr, a, da, ccR, ccA, 0);
+            float fSg = blendFactor(bfSrcRGB, g, dg, a, da, ccG, ccA, 0);
+            float fSb = blendFactor(bfSrcRGB, b, db, a, da, ccB, ccA, 0);
+            float fSa = blendFactor(bfSrcA,   a, da, a, da, ccA, ccA, 1);
+            float fDr = blendFactor(bfDstRGB, r, dr, a, da, ccR, ccA, 0);
+            float fDg = blendFactor(bfDstRGB, g, dg, a, da, ccG, ccA, 0);
+            float fDb = blendFactor(bfDstRGB, b, db, a, da, ccB, ccA, 0);
+            float fDa = blendFactor(bfDstA,   a, da, a, da, ccA, ccA, 1);
+
+            r = blendEquation(beRGB, r * fSr, dr * fDr);
+            g = blendEquation(beRGB, g * fSg, dg * fDg);
+            b = blendEquation(beRGB, b * fSb, db * fDb);
+            a = blendEquation(beA,   a * fSa, da * fDa);
         }
 
         auto sat = [](float v) -> uint32_t {
@@ -440,7 +499,12 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   uint32_t(stencilWriteMask_),
                                   uint32_t(stencilSFail_),
                                   uint32_t(stencilZFail_),
-                                  uint32_t(stencilZPass_));
+                                  uint32_t(stencilZPass_),
+                                  uint32_t(bfSrcRGB_), uint32_t(bfDstRGB_),
+                                  uint32_t(bfSrcA_),   uint32_t(bfDstA_),
+                                  uint32_t(beRGB_),    uint32_t(beA_),
+                                  blendConstR_, blendConstG_,
+                                  blendConstB_, blendConstA_);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;

@@ -64,6 +64,36 @@ enum class DepthFunc : uint32_t {
 enum class CullMode : uint32_t { None = 0, Front = 1, Back = 2, FrontAndBack = 3 };
 enum class FrontFace : uint32_t { CCW = 0, CW = 1 };
 
+// Blend factors. Mirrors RSX NV4097 SET_BLEND_FUNC_SFACTOR / DFACTOR.
+// Numeric values chosen to be small and compact; the RSX hardware
+// encoding is mapped externally by the FIFO decoder.
+enum class BlendFactor : uint32_t {
+    Zero                = 0,
+    One                 = 1,
+    SrcColor            = 2,
+    OneMinusSrcColor    = 3,
+    DstColor            = 4,
+    OneMinusDstColor    = 5,
+    SrcAlpha            = 6,
+    OneMinusSrcAlpha    = 7,
+    DstAlpha            = 8,
+    OneMinusDstAlpha    = 9,
+    ConstColor          = 10,
+    OneMinusConstColor  = 11,
+    ConstAlpha          = 12,
+    OneMinusConstAlpha  = 13,
+    SrcAlphaSaturate    = 14,
+};
+
+// Blend equations. Mirrors RSX NV4097 SET_BLEND_EQUATION.
+enum class BlendEquation : uint32_t {
+    Add         = 0,
+    Subtract    = 1,  // src - dst
+    RevSubtract = 2,  // dst - src
+    Min         = 3,
+    Max         = 4,
+};
+
 // Stencil compare. Matches RSX NV4097_SET_STENCIL_FUNC semantics.
 enum class StencilFunc : uint32_t {
     Never    = 0,
@@ -120,8 +150,24 @@ public:
     }
     void setStencilWriteMask(uint8_t mask) { stencilWriteMask_ = mask; }
 
-    // Enable/disable alpha blending (SRC_ALPHA, ONE_MINUS_SRC_ALPHA).
+    // Enable/disable alpha blending. When enabled the blend factors and
+    // equation set via setBlendFunc / setBlendEquation apply. Defaults
+    // keep the classic SRC_ALPHA, ONE_MINUS_SRC_ALPHA over-blend so
+    // callers that only flip the enable bit still get sensible output.
     void setBlend(bool enable) { blendEnable_ = enable; }
+
+    // Full RSX/GL blend setup: separate RGB and alpha factors/equations.
+    void setBlendFunc(BlendFactor srcRGB, BlendFactor dstRGB,
+                      BlendFactor srcA,   BlendFactor dstA) {
+        bfSrcRGB_ = srcRGB; bfDstRGB_ = dstRGB;
+        bfSrcA_   = srcA;   bfDstA_   = dstA;
+    }
+    void setBlendEquation(BlendEquation rgb, BlendEquation a) {
+        beRGB_ = rgb; beA_ = a;
+    }
+    void setBlendColor(float r, float g, float b, float a) {
+        blendConstR_ = r; blendConstG_ = g; blendConstB_ = b; blendConstA_ = a;
+    }
 
     // Depth test configuration. Mirrors RSX DEPTH_TEST_ENABLE /
     // DEPTH_MASK / DEPTH_FUNC.
@@ -228,6 +274,15 @@ private:
     StencilOp stencilSFail_{StencilOp::Keep};
     StencilOp stencilZFail_{StencilOp::Keep};
     StencilOp stencilZPass_{StencilOp::Keep};
+
+    // Blend func / equation state. Defaults match legacy SRC_ALPHA over.
+    BlendFactor bfSrcRGB_{BlendFactor::SrcAlpha};
+    BlendFactor bfDstRGB_{BlendFactor::OneMinusSrcAlpha};
+    BlendFactor bfSrcA_  {BlendFactor::SrcAlpha};
+    BlendFactor bfDstA_  {BlendFactor::OneMinusSrcAlpha};
+    BlendEquation beRGB_ {BlendEquation::Add};
+    BlendEquation beA_   {BlendEquation::Add};
+    float blendConstR_{0}, blendConstG_{0}, blendConstB_{0}, blendConstA_{0};
 };
 
 } // namespace rsx
