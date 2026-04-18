@@ -123,7 +123,49 @@ int main() {
     CHECK(st.surfaceColorTarget != 0 || st.surfaceFormat == SURFACE_A8R8G8B8,
           "Surface state captured via cellGcmSetSurface");
 
-    // ── Verify pixels ─────────────────────────────────────────
+    // ── Scenario 2: depth/blend/cull/transform-program builders ──
+    std::printf("\n  Scenario 2: depth/blend/cull/transform builders\n");
+    std::vector<uint32_t> cmd2(512, 0);
+    GcmCtx c2{};
+    gcm_init_ctx(&c2, cmd2.data(), (uint32_t)cmd2.size());
+
+    cellGcmSetDepthTestEnable(&c2, true);
+    cellGcmSetDepthFunc(&c2, 0x0203);          // GL_LEQUAL
+    cellGcmSetDepthMask(&c2, true);
+    cellGcmSetBlendEnable(&c2, true);
+    cellGcmSetBlendFunc(&c2,
+                        /*srgb*/0x0302, /*drgb*/0x0303,    // GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA
+                        /*sa*/  0x0001, /*da*/  0x0000);   // GL_ONE / GL_ZERO
+    cellGcmSetCullFaceEnable(&c2, true);
+    cellGcmSetCullFace(&c2, 0x0405);            // GL_BACK
+
+    // Tiny fake VP: 2 instructions × 4 dwords each
+    uint32_t vpInsts[8] = {
+        0x401F9C6Cu, 0x0040000Du, 0x8106C083u, 0x6041FFFFu,  // mov o0, v0
+        0x401F9C6Cu, 0x0040080Du, 0x8106C083u, 0x6041FFFFu,  // mov o1, v3
+    };
+    cellGcmSetTransformProgram(&c2, /*loadSlot*/ 0, vpInsts, /*count*/ 2);
+    cellGcmSetTransformConstant(&c2, /*slot*/ 0, 1.0f, 2.0f, 3.0f, 4.0f);
+
+    rsx_process_fifo(&st, cmd2.data(), gcm_used(&c2), vram, gcm_used(&c2));
+
+    CHECK(st.depthTestEnable,                    "DEPTH_TEST_ENABLE captured");
+    CHECK(st.depthFunc == 0x0203,                "DEPTH_FUNC=GL_LEQUAL captured");
+    CHECK(st.depthMask,                          "DEPTH_MASK captured");
+    CHECK(st.blendEnable,                        "BLEND_ENABLE captured");
+    CHECK((st.blendSFactor & 0xFFFF) == 0x0302,  "BLEND_FUNC sRGB captured");
+    CHECK((st.blendDFactor & 0xFFFF) == 0x0303,  "BLEND_FUNC dRGB captured");
+    CHECK(st.cullFaceEnable,                     "CULL_FACE_ENABLE captured");
+    CHECK(st.cullFace == 0x0405,                 "CULL_FACE=GL_BACK captured");
+    CHECK(st.vpValid != 0,                       "Transform program upload valid bit set");
+    CHECK(st.vpData[0] == vpInsts[0] &&
+          st.vpData[7] == vpInsts[7],            "Transform program first+last word match");
+
+    // Transform constant — VP constants live in vpConstants if present;
+    // for now just ensure the FIFO didn't crash and an entry was emitted.
+    CHECK(gcm_used(&c2) > 12,                    "Scenario 2 emitted state setters");
+
+    // ── Verify pixels (scenario 1) ────────────────────────────
     raster.setMRTCount(1);
     std::vector<uint32_t> fb(W * H, 0);
     raster.readbackPlane(0, fb.data());

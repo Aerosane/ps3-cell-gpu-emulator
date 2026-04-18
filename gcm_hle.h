@@ -149,6 +149,74 @@ inline void cellGcmSetFlip(GcmCtx* c, uint32_t surfaceOffset) {
     emit1(c, rsx::NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP, surfaceOffset);
 }
 
+// ── Depth / stencil / blend / cull state ──────────────────────────
+
+inline void cellGcmSetDepthTestEnable(GcmCtx* c, bool enable) {
+    emit1(c, rsx::NV4097_SET_DEPTH_TEST_ENABLE, enable ? 1u : 0u);
+}
+
+inline void cellGcmSetDepthFunc(GcmCtx* c, uint32_t func) {
+    // GL-style enum: 0x200 NEVER ... 0x207 ALWAYS
+    emit1(c, rsx::NV4097_SET_DEPTH_FUNC, func);
+}
+
+inline void cellGcmSetDepthMask(GcmCtx* c, bool writeEnable) {
+    emit1(c, rsx::NV4097_SET_DEPTH_MASK, writeEnable ? 1u : 0u);
+}
+
+inline void cellGcmSetBlendEnable(GcmCtx* c, bool enable) {
+    emit1(c, rsx::NV4097_SET_BLEND_ENABLE, enable ? 1u : 0u);
+}
+
+inline void cellGcmSetBlendFunc(GcmCtx* c,
+                                uint32_t sfactorRGB, uint32_t dfactorRGB,
+                                uint32_t sfactorA,   uint32_t dfactorA)
+{
+    emit1(c, rsx::NV4097_SET_BLEND_FUNC_SFACTOR, (sfactorA << 16) | (sfactorRGB & 0xFFFFu));
+    emit1(c, rsx::NV4097_SET_BLEND_FUNC_DFACTOR, (dfactorA << 16) | (dfactorRGB & 0xFFFFu));
+}
+
+inline void cellGcmSetCullFaceEnable(GcmCtx* c, bool enable) {
+    emit1(c, rsx::NV4097_SET_CULL_FACE_ENABLE, enable ? 1u : 0u);
+}
+
+inline void cellGcmSetCullFace(GcmCtx* c, uint32_t face) {
+    // 0x404 FRONT, 0x405 BACK, 0x408 FRONT_AND_BACK
+    emit1(c, rsx::NV4097_SET_CULL_FACE, face);
+}
+
+// ── Vertex transform program (vertex shader) ──────────────────────
+//
+// Real games upload up to 512 4-dword instructions starting at a load
+// slot. Each instruction is 4 BE uint32s. The command processor mirrors
+// them into RSXState::transformProgram[] verbatim.
+inline void cellGcmSetTransformProgram(GcmCtx* c,
+                                       uint32_t loadSlot,
+                                       const uint32_t* instructions,
+                                       uint32_t instructionCount)
+{
+    emit1(c, rsx::NV4097_SET_TRANSFORM_PROGRAM_START, loadSlot);
+    // Burst-write 4 dwords per instruction at sequential method offsets.
+    for (uint32_t i = 0; i < instructionCount; i++) {
+        const uint32_t base = rsx::NV4097_SET_TRANSFORM_PROGRAM + (loadSlot + i) * 16u;
+        for (uint32_t w = 0; w < 4; w++) {
+            emit1(c, base + w * 4u, instructions[i * 4 + w]);
+        }
+    }
+}
+
+inline void cellGcmSetTransformConstant(GcmCtx* c,
+                                        uint32_t constantSlot,
+                                        float x, float y, float z, float w)
+{
+    union { float f; uint32_t u; } cv;
+    const uint32_t base = rsx::NV4097_SET_TRANSFORM_CONSTANT + constantSlot * 16u;
+    cv.f = x; emit1(c, base + 0x0, cv.u);
+    cv.f = y; emit1(c, base + 0x4, cv.u);
+    cv.f = z; emit1(c, base + 0x8, cv.u);
+    cv.f = w; emit1(c, base + 0xC, cv.u);
+}
+
 inline void cellGcmFinish(GcmCtx* c, uint32_t ref) {
     emit1(c, rsx::NV4097_SET_REFERENCE, ref);
 }
