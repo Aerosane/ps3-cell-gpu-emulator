@@ -318,6 +318,175 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
     if (stencil && stencilTest) stencil[base] = dstS;
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Line kernel — one thread per pixel, iterates segments. Uses
+// parametric-distance coverage: for each segment A→B compute the
+// nearest parameter t ∈ [0,1] from pixel P, then cover if the
+// perpendicular distance |P - (A + t*(B-A))| ≤ 0.5 px. Endpoints are
+// extended by 0.5 px so the last pixel of each end draws.
+// Color / alpha / depth are interpolated by t.
+// ─────────────────────────────────────────────────────────────────
+__global__ void k_rasterLines(uint32_t* __restrict__ dst,
+                              float*    __restrict__ depth,
+                              uint32_t width, uint32_t height,
+                              const RasterVertex* __restrict__ verts,
+                              uint32_t segmentCount,
+                              int blendEnable,
+                              int depthTest,
+                              int depthWrite,
+                              uint32_t depthFunc,
+                              int scX, int scY, uint32_t scW, uint32_t scH,
+                              int alphaTest, uint32_t alphaRef,
+                              uint32_t bfSrcRGB, uint32_t bfDstRGB,
+                              uint32_t bfSrcA,   uint32_t bfDstA,
+                              uint32_t beRGB,    uint32_t beA,
+                              float ccR, float ccG, float ccB, float ccA) {
+    uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+    if (scW > 0 && scH > 0) {
+        if ((int)x < scX || (int)x >= scX + (int)scW ||
+            (int)y < scY || (int)y >= scY + (int)scH) return;
+    }
+
+    float px = (float)x + 0.5f;
+    float py = (float)y + 0.5f;
+
+    uint32_t base = y * width + x;
+    uint32_t dstPx = dst[base];
+    float    dstZ  = depth ? depth[base] : 1.0f;
+
+    for (uint32_t s = 0; s < segmentCount; ++s) {
+        const RasterVertex v0 = verts[s*2 + 0];
+        const RasterVertex v1 = verts[s*2 + 1];
+        float dx = v1.x - v0.x;
+        float dy = v1.y - v0.y;
+        float len2 = dx*dx + dy*dy;
+        if (len2 < 1e-6f) continue;
+        float t = ((px - v0.x) * dx + (py - v0.y) * dy) / len2;
+        // Extend by 0.5 / length at each end so the endpoint pixels are
+        // inside the covered segment.
+        float extend = 0.5f / sqrtf(len2);
+        if (t < -extend || t > 1.0f + extend) continue;
+        float tc = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        float qx = v0.x + tc * dx;
+        float qy = v0.y + tc * dy;
+        float ex = px - qx, ey = py - qy;
+        if (ex*ex + ey*ey > 0.25f) continue;  // > 0.5 px perpendicular
+
+        float z = v0.z + tc * (v1.z - v0.z);
+        if (depthTest && depth) {
+            if (!depthCompare(depthFunc, z, dstZ)) continue;
+        }
+
+        float r = v0.r + tc * (v1.r - v0.r);
+        float g = v0.g + tc * (v1.g - v0.g);
+        float b = v0.b + tc * (v1.b - v0.b);
+        float a = v0.a + tc * (v1.a - v0.a);
+
+        if (alphaTest) {
+            uint32_t af = (uint32_t)(a * 255.0f + 0.5f);
+            if (af <= alphaRef) continue;
+        }
+
+        if (blendEnable) {
+            uint32_t dc = dstPx;
+            float dr = ((dc >> 16) & 0xFF) / 255.0f;
+            float dg = ((dc >>  8) & 0xFF) / 255.0f;
+            float db = ((dc >>  0) & 0xFF) / 255.0f;
+            float da = ((dc >> 24) & 0xFF) / 255.0f;
+            float fSr = blendFactor(bfSrcRGB, r, dr, a, da, ccR, ccA, 0);
+            float fSg = blendFactor(bfSrcRGB, g, dg, a, da, ccG, ccA, 0);
+            float fSb = blendFactor(bfSrcRGB, b, db, a, da, ccB, ccA, 0);
+            float fSa = blendFactor(bfSrcA,   a, da, a, da, ccA, ccA, 1);
+            float fDr = blendFactor(bfDstRGB, r, dr, a, da, ccR, ccA, 0);
+            float fDg = blendFactor(bfDstRGB, g, dg, a, da, ccG, ccA, 0);
+            float fDb = blendFactor(bfDstRGB, b, db, a, da, ccB, ccA, 0);
+            float fDa = blendFactor(bfDstA,   a, da, a, da, ccA, ccA, 1);
+            r = blendEquation(beRGB, r * fSr, dr * fDr);
+            g = blendEquation(beRGB, g * fSg, dg * fDg);
+            b = blendEquation(beRGB, b * fSb, db * fDb);
+            a = blendEquation(beA,   a * fSa, da * fDa);
+        }
+
+        auto sat = [](float v) -> uint32_t {
+            int i = (int)(v * 255.0f + 0.5f);
+            if (i < 0) i = 0; else if (i > 255) i = 255;
+            return (uint32_t)i;
+        };
+        dstPx = (sat(a) << 24) | (sat(r) << 16) | (sat(g) << 8) | sat(b);
+        if (depthWrite) dstZ = z;
+    }
+
+    dst[base] = dstPx;
+    if (depth && depthWrite) depth[base] = dstZ;
+}
+
+// Point kernel — one thread per point, directly writes the rounded
+// pixel. Respects scissor + depth + alpha + blend, skips stencil/tex.
+__global__ void k_rasterPoints(uint32_t* __restrict__ dst,
+                               float*    __restrict__ depth,
+                               uint32_t width, uint32_t height,
+                               const RasterVertex* __restrict__ verts,
+                               uint32_t pointCount,
+                               int blendEnable,
+                               int depthTest,
+                               int depthWrite,
+                               uint32_t depthFunc,
+                               int scX, int scY, uint32_t scW, uint32_t scH,
+                               int alphaTest, uint32_t alphaRef,
+                               uint32_t bfSrcRGB, uint32_t bfDstRGB,
+                               uint32_t bfSrcA,   uint32_t bfDstA,
+                               uint32_t beRGB,    uint32_t beA,
+                               float ccR, float ccG, float ccB, float ccA) {
+    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= pointCount) return;
+    const RasterVertex v = verts[i];
+    int px = (int)(v.x);  // truncation — ok for "1 px dot at floor(x)".
+    int py = (int)(v.y);
+    if (px < 0 || py < 0 || px >= (int)width || py >= (int)height) return;
+    if (scW > 0 && scH > 0) {
+        if (px < scX || px >= scX + (int)scW ||
+            py < scY || py >= scY + (int)scH) return;
+    }
+    uint32_t base = py * width + px;
+    float z = v.z;
+    if (depthTest && depth) {
+        if (!depthCompare(depthFunc, z, depth[base])) return;
+    }
+    float r = v.r, g = v.g, b = v.b, a = v.a;
+    if (alphaTest) {
+        uint32_t af = (uint32_t)(a * 255.0f + 0.5f);
+        if (af <= alphaRef) return;
+    }
+    if (blendEnable) {
+        uint32_t dc = dst[base];
+        float dr = ((dc >> 16) & 0xFF) / 255.0f;
+        float dg = ((dc >>  8) & 0xFF) / 255.0f;
+        float db = ((dc >>  0) & 0xFF) / 255.0f;
+        float da = ((dc >> 24) & 0xFF) / 255.0f;
+        float fSr = blendFactor(bfSrcRGB, r, dr, a, da, ccR, ccA, 0);
+        float fSg = blendFactor(bfSrcRGB, g, dg, a, da, ccG, ccA, 0);
+        float fSb = blendFactor(bfSrcRGB, b, db, a, da, ccB, ccA, 0);
+        float fSa = blendFactor(bfSrcA,   a, da, a, da, ccA, ccA, 1);
+        float fDr = blendFactor(bfDstRGB, r, dr, a, da, ccR, ccA, 0);
+        float fDg = blendFactor(bfDstRGB, g, dg, a, da, ccG, ccA, 0);
+        float fDb = blendFactor(bfDstRGB, b, db, a, da, ccB, ccA, 0);
+        float fDa = blendFactor(bfDstA,   a, da, a, da, ccA, ccA, 1);
+        r = blendEquation(beRGB, r * fSr, dr * fDr);
+        g = blendEquation(beRGB, g * fSg, dg * fDg);
+        b = blendEquation(beRGB, b * fSb, db * fDb);
+        a = blendEquation(beA,   a * fSa, da * fDa);
+    }
+    auto sat = [](float v) -> uint32_t {
+        int i = (int)(v * 255.0f + 0.5f);
+        if (i < 0) i = 0; else if (i > 255) i = 255;
+        return (uint32_t)i;
+    };
+    dst[base] = (sat(a) << 24) | (sat(r) << 16) | (sat(g) << 8) | sat(b);
+    if (depth && depthWrite) depth[base] = z;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Host class
 // ═══════════════════════════════════════════════════════════════
@@ -527,6 +696,107 @@ void CudaRasterizer::readbackStencil(uint8_t* out) const {
     if (!fb_.d_stencil || !out) return;
     size_t bytes = size_t(fb_.width) * size_t(fb_.height) * sizeof(uint8_t);
     cudaMemcpy(out, fb_.d_stencil, bytes, cudaMemcpyDeviceToHost);
+}
+
+// Helper: apply current MVP + viewport to a single vertex. Returns a
+// copy in screen/NDC-z space when useMVP_ is set; otherwise passthrough.
+static inline RasterVertex xformOne(const RasterVertex& v,
+                                    bool useMVP, const RasterMat4& mvp,
+                                    float vpX, float vpY,
+                                    float vpW, float vpH) {
+    if (!useMVP) return v;
+    float cx = mvp.m[0][0]*v.x + mvp.m[1][0]*v.y + mvp.m[2][0]*v.z + mvp.m[3][0];
+    float cy = mvp.m[0][1]*v.x + mvp.m[1][1]*v.y + mvp.m[2][1]*v.z + mvp.m[3][1];
+    float cz = mvp.m[0][2]*v.x + mvp.m[1][2]*v.y + mvp.m[2][2]*v.z + mvp.m[3][2];
+    float cw = mvp.m[0][3]*v.x + mvp.m[1][3]*v.y + mvp.m[2][3]*v.z + mvp.m[3][3];
+    if (cw == 0.0f) cw = 1e-30f;
+    float nx = cx / cw, ny = cy / cw, nz = cz / cw;
+    RasterVertex o = v;
+    o.x = vpX + (nx * 0.5f + 0.5f) * vpW;
+    o.y = vpY + (1.0f - (ny * 0.5f + 0.5f)) * vpH;
+    o.z = nz * 0.5f + 0.5f;
+    return o;
+}
+
+uint32_t CudaRasterizer::drawLines(const RasterVertex* verts, uint32_t count) {
+    if (!fb_.d_color || count < 2 || !verts) return 0;
+    uint32_t segs = count / 2;
+    if (segs == 0) return 0;
+
+    float vpX = (vpW_ > 0) ? vpX_ : 0.0f;
+    float vpY = (vpH_ > 0) ? vpY_ : 0.0f;
+    float vpW = (vpW_ > 0) ? vpW_ : (float)fb_.width;
+    float vpH = (vpH_ > 0) ? vpH_ : (float)fb_.height;
+
+    std::vector<RasterVertex> xf(segs * 2);
+    for (uint32_t i = 0; i < segs * 2; ++i)
+        xf[i] = xformOne(verts[i], useMVP_, mvp_, vpX, vpY, vpW, vpH);
+
+    size_t bytes = xf.size() * sizeof(RasterVertex);
+    RasterVertex* d_v = nullptr;
+    if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
+    cudaMemcpy(d_v, xf.data(), bytes, cudaMemcpyHostToDevice);
+
+    dim3 bs(16, 16);
+    dim3 gs((fb_.width + bs.x - 1) / bs.x,
+            (fb_.height + bs.y - 1) / bs.y);
+    k_rasterLines<<<gs, bs>>>(fb_.d_color, fb_.d_depth,
+                              fb_.width, fb_.height,
+                              d_v, segs,
+                              blendEnable_ ? 1 : 0,
+                              depthTest_ ? 1 : 0,
+                              depthWrite_ ? 1 : 0,
+                              uint32_t(depthFunc_),
+                              scX_, scY_, scW_, scH_,
+                              alphaTestEnable_ ? 1 : 0,
+                              uint32_t(alphaRef_),
+                              uint32_t(bfSrcRGB_), uint32_t(bfDstRGB_),
+                              uint32_t(bfSrcA_),   uint32_t(bfDstA_),
+                              uint32_t(beRGB_),    uint32_t(beA_),
+                              blendConstR_, blendConstG_,
+                              blendConstB_, blendConstA_);
+    cudaDeviceSynchronize();
+    cudaFree(d_v);
+    return segs;
+}
+
+uint32_t CudaRasterizer::drawPoints(const RasterVertex* verts, uint32_t count) {
+    if (!fb_.d_color || count == 0 || !verts) return 0;
+
+    float vpX = (vpW_ > 0) ? vpX_ : 0.0f;
+    float vpY = (vpH_ > 0) ? vpY_ : 0.0f;
+    float vpW = (vpW_ > 0) ? vpW_ : (float)fb_.width;
+    float vpH = (vpH_ > 0) ? vpH_ : (float)fb_.height;
+
+    std::vector<RasterVertex> xf(count);
+    for (uint32_t i = 0; i < count; ++i)
+        xf[i] = xformOne(verts[i], useMVP_, mvp_, vpX, vpY, vpW, vpH);
+
+    size_t bytes = xf.size() * sizeof(RasterVertex);
+    RasterVertex* d_v = nullptr;
+    if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
+    cudaMemcpy(d_v, xf.data(), bytes, cudaMemcpyHostToDevice);
+
+    dim3 bs(256);
+    dim3 gs((count + bs.x - 1) / bs.x);
+    k_rasterPoints<<<gs, bs>>>(fb_.d_color, fb_.d_depth,
+                               fb_.width, fb_.height,
+                               d_v, count,
+                               blendEnable_ ? 1 : 0,
+                               depthTest_ ? 1 : 0,
+                               depthWrite_ ? 1 : 0,
+                               uint32_t(depthFunc_),
+                               scX_, scY_, scW_, scH_,
+                               alphaTestEnable_ ? 1 : 0,
+                               uint32_t(alphaRef_),
+                               uint32_t(bfSrcRGB_), uint32_t(bfDstRGB_),
+                               uint32_t(bfSrcA_),   uint32_t(bfDstA_),
+                               uint32_t(beRGB_),    uint32_t(beA_),
+                               blendConstR_, blendConstG_,
+                               blendConstB_, blendConstA_);
+    cudaDeviceSynchronize();
+    cudaFree(d_v);
+    return count;
 }
 
 bool CudaRasterizer::savePPM(const char* path) const {

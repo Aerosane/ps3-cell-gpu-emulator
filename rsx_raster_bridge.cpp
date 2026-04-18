@@ -3,6 +3,8 @@
 #include "rsx_raster_bridge.h"
 #include "rsx_defs.h"
 
+#include <vector>
+
 namespace rsx {
 
 void RasterBridge::onSurfaceSetup(const RSXState& s) {
@@ -42,10 +44,81 @@ void RasterBridge::onBeginEnd(const RSXState&, uint32_t) {
     // kernel launches directly. Here only to match the hook signature.
 }
 
-void RasterBridge::onDrawArrays(const RSXState&, uint32_t first, uint32_t count) {
+void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t count) {
     if (!rast_ || !pool_ || count == 0) return;
     if ((uint64_t)first + count > poolCount_) return;
-    rast_->drawTriangles(pool_ + first, count);
+    const RasterVertex* base = pool_ + first;
+    switch (s.currentPrim) {
+    case PRIM_POINTS:
+        rast_->drawPoints(base, count);
+        break;
+    case PRIM_LINES:
+        rast_->drawLines(base, count - (count % 2));
+        break;
+    case PRIM_LINE_STRIP: {
+        if (count < 2) break;
+        // Expand to a line list: (v0,v1),(v1,v2),...
+        std::vector<RasterVertex> exp;
+        exp.reserve((count - 1) * 2);
+        for (uint32_t i = 0; i + 1 < count; ++i) {
+            exp.push_back(base[i]);
+            exp.push_back(base[i + 1]);
+        }
+        rast_->drawLines(exp.data(), (uint32_t)exp.size());
+        break;
+    }
+    case PRIM_TRIANGLE_STRIP: {
+        if (count < 3) break;
+        std::vector<RasterVertex> exp;
+        exp.reserve((count - 2) * 3);
+        for (uint32_t i = 0; i + 2 < count; ++i) {
+            // Flip winding on every odd triangle to preserve facing.
+            if (i & 1) {
+                exp.push_back(base[i + 1]);
+                exp.push_back(base[i]);
+                exp.push_back(base[i + 2]);
+            } else {
+                exp.push_back(base[i]);
+                exp.push_back(base[i + 1]);
+                exp.push_back(base[i + 2]);
+            }
+        }
+        rast_->drawTriangles(exp.data(), (uint32_t)exp.size());
+        break;
+    }
+    case PRIM_TRIANGLE_FAN: {
+        if (count < 3) break;
+        std::vector<RasterVertex> exp;
+        exp.reserve((count - 2) * 3);
+        for (uint32_t i = 1; i + 1 < count; ++i) {
+            exp.push_back(base[0]);
+            exp.push_back(base[i]);
+            exp.push_back(base[i + 1]);
+        }
+        rast_->drawTriangles(exp.data(), (uint32_t)exp.size());
+        break;
+    }
+    case PRIM_QUADS: {
+        if (count < 4) break;
+        uint32_t quads = count / 4;
+        std::vector<RasterVertex> exp;
+        exp.reserve(quads * 6);
+        for (uint32_t q = 0; q < quads; ++q) {
+            const auto& a = base[q * 4 + 0];
+            const auto& b = base[q * 4 + 1];
+            const auto& c = base[q * 4 + 2];
+            const auto& d = base[q * 4 + 3];
+            exp.push_back(a); exp.push_back(b); exp.push_back(c);
+            exp.push_back(a); exp.push_back(c); exp.push_back(d);
+        }
+        rast_->drawTriangles(exp.data(), (uint32_t)exp.size());
+        break;
+    }
+    case PRIM_TRIANGLES:
+    default:
+        rast_->drawTriangles(base, count - (count % 3));
+        break;
+    }
     counters.draws++;
 }
 

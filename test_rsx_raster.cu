@@ -518,6 +518,65 @@ int main() {
                    BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha);
     r.savePPM("/tmp/rsx_raster_blend.ppm");
 
+    // ── 10. Line and point primitives ───────────────────────────────
+    r.clear(0xFF000000u);
+    r.setBlend(false);
+    r.setDepthTest(false);
+    r.setAlphaTest(false);
+
+    // Horizontal red line y=50, from x=40 to x=280.
+    RasterVertex ln[4] = {
+        { 40.f, 50.f, 0, 1,0,0,1 },
+        {280.f, 50.f, 0, 1,0,0,1 },
+        // Diagonal green line gradient.
+        { 40.f, 80.f, 0, 0,1,0,1 },
+        {280.f,200.f, 0, 1,1,1,1 },
+    };
+    uint32_t nseg = r.drawLines(ln, 4);
+    CHECK(nseg == 2, "drawLines reported 2 segments");
+
+    r.readback(fb.data());
+    uint32_t midLine = fb[50 * 320 + 160];
+    std::printf("  horiz-line midpoint: 0x%08x (want red)\n", midLine);
+    CHECK(((midLine >> 16) & 0xFF) > 200 &&
+          ((midLine >>  8) & 0xFF) < 32 &&
+          ( midLine        & 0xFF) < 32,
+          "Horizontal line covers expected pixel");
+
+    uint32_t offLine = fb[52 * 320 + 160];  // 2 px below the line
+    CHECK(offLine == 0xFF000000u, "Line doesn't bleed onto neighbour row");
+
+    // Diagonal-line endpoint check: t=0 should give green at (40,80),
+    // t=1 white at (280,200).
+    uint32_t startPx = fb[80 * 320 + 40];
+    uint32_t endPx   = fb[199 * 320 + 279];
+    std::printf("  diag start:  0x%08x (want green)\n", startPx);
+    std::printf("  diag end:    0x%08x (want white)\n", endPx);
+    CHECK(((startPx >>  8) & 0xFF) > 200 && ((startPx >> 16) & 0xFF) < 32,
+          "Diagonal line start is green");
+    CHECK(((endPx >> 16) & 0xFF) > 200 && ((endPx >> 8) & 0xFF) > 200 &&
+          ( endPx        & 0xFF) > 200,
+          "Diagonal line end is white");
+
+    // Scatter some points — each exactly 1 pixel.
+    RasterVertex pts[4] = {
+        { 10.5f,  10.5f, 0, 1,1,0,1 },
+        { 50.5f,  10.5f, 0, 0,1,1,1 },
+        { 10.5f, 220.5f, 0, 1,0,1,1 },
+        {300.5f, 220.5f, 0, 1,1,1,1 },
+    };
+    uint32_t npts = r.drawPoints(pts, 4);
+    CHECK(npts == 4, "drawPoints reported 4 points");
+    r.readback(fb.data());
+    CHECK(fb[10 * 320 + 10] == 0xFFFFFF00u, "Yellow point at (10,10)");
+    CHECK(fb[10 * 320 + 50] == 0xFF00FFFFu, "Cyan point at (50,10)");
+    CHECK(fb[220 * 320 + 10] == 0xFFFF00FFu, "Magenta point at (10,220)");
+    CHECK(fb[220 * 320 + 300] == 0xFFFFFFFFu, "White point at (300,220)");
+    // Neighboring pixel of a point must remain clear.
+    CHECK(fb[10 * 320 + 11] == 0xFF000000u, "Point doesn't leak to neighbour");
+
+    r.savePPM("/tmp/rsx_raster_lines.ppm");
+
     std::printf("\nStats: tris=%u skipped=%u clears=%u\n",
                 r.stats.triangles, r.stats.triangleSkipped, r.stats.clears);
     std::printf("%s (%d failures)\n",

@@ -222,6 +222,16 @@ public:
     // Returns number of triangles that passed degeneracy test.
     uint32_t drawTriangles(const RasterVertex* verts, uint32_t count);
 
+    // Rasterize a line list (2 verts per segment). `verts` must have
+    // count%2 == 0. Uses parametric-distance coverage (width = 1 px,
+    // ends extended by 0.5 px so endpoints render). Respects blend,
+    // scissor, depth test, alpha test; does not use culling.
+    uint32_t drawLines(const RasterVertex* verts, uint32_t count);
+
+    // Rasterize a point list (1 vert per point). Points are drawn as
+    // 1-pixel dots at the rounded vertex position.
+    uint32_t drawPoints(const RasterVertex* verts, uint32_t count);
+
     // Copy color buffer to host (RGBA8, packed 0xAARRGGBB little-endian).
     // `out` must have width*height uint32_t slots.
     void readback(uint32_t* out) const;
