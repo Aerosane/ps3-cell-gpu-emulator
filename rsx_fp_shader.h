@@ -570,6 +570,14 @@ inline void fp_disassemble(const uint32_t* fpData, uint32_t fpLen) {
 
 struct FPFloat4 { float v[4]; };
 
+// Texture sampler callback. `texUnit` is the unit bound by the
+// instruction (FPDecodedInsn.texUnit), `uvw` is the s/t/p coordinate
+// from src0 (after swizzle). Returns the sampled RGBA in `rgba`.
+// A null sampler results in a zero fetch — useful for bringup tests
+// where the program doesn't actually need textures.
+using FPSampler = void (*)(void* userdata, uint32_t texUnit,
+                           const float uvw[3], float rgba[4]);
+
 // Inline constants in RSX FP are stored in the instruction stream after
 // the instruction that uses them (when src.regType == FP_REG_CONSTANT,
 // the constant is the following 4 dwords, byte-swapped with fp_swap_word).
@@ -642,7 +650,9 @@ inline void fp_write_dst(const FPDecodedInsn& insn,
 
 inline void fp_execute(const uint32_t* fpData, uint32_t fpMaxWords,
                        const FPFloat4 inputs[16],
-                       FPFloat4 outputs[4]) {
+                       FPFloat4 outputs[4],
+                       FPSampler sampler = nullptr,
+                       void* samplerUserdata = nullptr) {
     FPFloat4 temps[48] = {};
     // Default: color output 0 = black.
     for (int i = 0; i < 4; ++i) outputs[i] = FPFloat4{};
@@ -761,9 +771,36 @@ inline void fp_execute(const uint32_t* fpData, uint32_t fpMaxWords,
             float inv = (s1[0] != 0) ? 1.0f / s1[0] : 0.0f;
             for (int k = 0; k < 4; ++k) r[k] = s0[k] * inv; break;
         }
+        case FP_TEX: {
+            float uvw[3] = { s0[0], s0[1], s0[2] };
+            if (sampler) sampler(samplerUserdata, insn.texUnit, uvw, r);
+            break;
+        }
+        case FP_TXP: {
+            // Projective — divide by w.
+            float iw = (s0[3] != 0) ? 1.0f / s0[3] : 0.0f;
+            float uvw[3] = { s0[0] * iw, s0[1] * iw, s0[2] * iw };
+            if (sampler) sampler(samplerUserdata, insn.texUnit, uvw, r);
+            break;
+        }
+        case FP_TXB:
+        case FP_TXL: {
+            // Biased / LOD — we don't carry mip state, just sample level 0.
+            float uvw[3] = { s0[0], s0[1], s0[2] };
+            if (sampler) sampler(samplerUserdata, insn.texUnit, uvw, r);
+            break;
+        }
+        case FP_KIL:
+            // Discard fragment if any component of s0 is < 0. With no
+            // framebuffer feedback, we signal via NaN in outputs[0].w
+            // (callers can check this to early-out).
+            if (s0[0] < 0 || s0[1] < 0 || s0[2] < 0 || s0[3] < 0) {
+                outputs[0].v[3] = -1.0f;
+                return;
+            }
+            continue;
         default:
-            // Unsupported (TEX family, flow control, packing) — leave
-            // destination unchanged by zeroing the mask effect.
+            // Unsupported (flow control, packing) — leave zero.
             for (int k = 0; k < 4; ++k) r[k] = 0.0f;
             break;
         }

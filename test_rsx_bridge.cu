@@ -422,6 +422,54 @@ int main() {
           "FP MUL with inline constant produces (0.5, 0.25, 0, 1)");
 
 
+    // ── FP texture-sample (TEX) ─────────────────────────────────────
+    // Build `TEX r0, f[TEX0]; end` on texture unit 3. Sampler callback
+    // returns the concatenated uv and fixed 0.5, 1.0 so we can also
+    // verify the tex-unit argument is propagated correctly.
+    std::printf("\n── FP TEX sample:\n");
+    // w0: opcode=TEX(0x17)<<24 | inputAttr=4(TEX0)<<13 | mask xyzw
+    //     | dstReg=0<<1 | texUnit=3<<17 | endFlag=1
+    uint32_t tw0 = 1u | (0xFu << 9) | (4u << 13) | (3u << 17) | (0x17u << 24);
+    // w1 (SRC0): regType=INPUT(1), swz xyzw
+    uint32_t tw1 = 1u | (0u << 2) | (0u << 9) | (1u << 11) | (2u << 13) | (3u << 15);
+    uint32_t tw2 = 0;
+    uint32_t tw3 = 0;
+
+    uint32_t texProg[4] = { fp_enc(tw0), fp_enc(tw1), fp_enc(tw2), fp_enc(tw3) };
+
+    struct SamplerCtx { uint32_t seenUnit; float seenU, seenV; };
+    SamplerCtx ctx{0, 0, 0};
+    auto sampler = [](void* ud, uint32_t unit, const float uvw[3], float rgba[4]) {
+        SamplerCtx* c = static_cast<SamplerCtx*>(ud);
+        c->seenUnit = unit;
+        c->seenU = uvw[0];
+        c->seenV = uvw[1];
+        rgba[0] = uvw[0];  // R = u
+        rgba[1] = uvw[1];  // G = v
+        rgba[2] = 0.5f;
+        rgba[3] = 1.0f;
+    };
+
+    FPFloat4 texIn[16] = {};
+    texIn[4] = FPFloat4{{0.75f, 0.25f, 0.0f, 1.0f}};  // TEX0 = (.75, .25)
+    FPFloat4 texOut[4] = {};
+    fp_execute(texProg, 4, texIn, texOut, sampler, &ctx);
+    std::printf("  sampler unit=%u uv=(%.3f, %.3f)\n",
+                ctx.seenUnit, ctx.seenU, ctx.seenV);
+    std::printf("  r0 = (%.3f, %.3f, %.3f, %.3f)\n",
+                texOut[0].v[0], texOut[0].v[1],
+                texOut[0].v[2], texOut[0].v[3]);
+    CHECK(ctx.seenUnit == 3 &&
+          ctx.seenU > 0.74f && ctx.seenU < 0.76f &&
+          ctx.seenV > 0.24f && ctx.seenV < 0.26f,
+          "FP TEX forwarded (unit, u, v) to sampler callback");
+    CHECK(texOut[0].v[0] > 0.74f && texOut[0].v[0] < 0.76f &&
+          texOut[0].v[1] > 0.24f && texOut[0].v[1] < 0.26f &&
+          texOut[0].v[2] > 0.49f && texOut[0].v[2] < 0.51f &&
+          texOut[0].v[3] > 0.99f,
+          "FP TEX wrote sampled rgba into r0");
+
+
     raster.shutdown();
     rsx_shutdown(&st);
     std::free(vram);
