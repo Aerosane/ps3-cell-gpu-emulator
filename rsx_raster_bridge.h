@@ -51,6 +51,10 @@ public:
                        uint32_t indexFormat);
     void onFlip(const RSXState& s, uint32_t surfaceOffset);
 
+    // Applies depth/blend/cull state from RSXState to the rasterizer.
+    // Called automatically from onDrawArrays/onDrawIndexed.
+    void applyPipelineState(const RSXState& s);
+
     struct Counters {
         uint32_t surfaceSetups{0};
         uint32_t clears{0};

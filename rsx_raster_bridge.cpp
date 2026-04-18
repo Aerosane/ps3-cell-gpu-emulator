@@ -128,8 +128,39 @@ void RasterBridge::onBeginEnd(const RSXState&, uint32_t) {
     // kernel launches directly. Here only to match the hook signature.
 }
 
+static inline DepthFunc nv_to_depthFunc(uint32_t v) {
+    // NV4097 depth func values follow GL enum 0x200..0x207:
+    //   NEVER, LESS, EQUAL, LEQUAL, GREATER, NOTEQUAL, GEQUAL, ALWAYS.
+    if (v >= 0x200 && v <= 0x207) {
+        return static_cast<DepthFunc>(v - 0x200);
+    }
+    return DepthFunc::Less;
+}
+
+static inline CullMode nv_to_cullMode(uint32_t v, bool enabled) {
+    if (!enabled) return CullMode::None;
+    switch (v) {
+    case 0x0404: return CullMode::Front;
+    case 0x0405: return CullMode::Back;
+    case 0x0408: return CullMode::FrontAndBack;
+    default:     return CullMode::Back;
+    }
+}
+
+void RasterBridge::applyPipelineState(const RSXState& s) {
+    if (!rast_) return;
+    rast_->setDepthTest(s.depthTestEnable);
+    rast_->setDepthFunc(nv_to_depthFunc(s.depthFunc));
+    rast_->setBlend(s.blendEnable);
+    rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
+}
+
 void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t count) {
     if (!rast_ || count == 0) return;
+
+    // Translate FIFO-side pipeline state into rasterizer setters before
+    // every draw. Games frequently toggle depth/blend/cull mid-frame.
+    applyPipelineState(s);
 
     // Choose the vertex source.
     std::vector<RasterVertex> decoded;
@@ -218,10 +249,11 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
     counters.draws++;
 }
 
-void RasterBridge::onDrawIndexed(const RSXState&, uint32_t first, uint32_t count,
+void RasterBridge::onDrawIndexed(const RSXState& s, uint32_t first, uint32_t count,
                                  uint32_t /*indexFormat*/) {
     if (!rast_ || !pool_ || !idxPool_ || count == 0) return;
     if ((uint64_t)first + count > idxCount_) return;
+    applyPipelineState(s);
     rast_->drawIndexed(pool_, poolCount_, idxPool_ + first, count, false);
     counters.drawIndexed++;
 }

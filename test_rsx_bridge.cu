@@ -180,6 +180,48 @@ int main() {
 
     raster.savePPM("/tmp/rsx_bridge_vram.ppm");
 
+    // ── FIFO pipeline-state translation ─────────────────────────────
+    // Push CULL_FACE_ENABLE + CULL_FACE=BACK. With this triangle's winding
+    // the rasterizer classifies it as back-facing (screen-space y-down),
+    // so BACK culling drops it and the center pixel stays clear.
+    std::printf("\n── FIFO pipeline-state translation:\n");
+    uint32_t fifo3[32];
+    m = 0;
+    fifo3[m++] = fifo_incr(NV4097_SET_COLOR_CLEAR_VALUE, 1); fifo3[m++] = 0xFF112233u;
+    fifo3[m++] = fifo_incr(NV4097_CLEAR_SURFACE, 1);         fifo3[m++] = CLEAR_COLOR;
+    fifo3[m++] = fifo_incr(NV4097_SET_CULL_FACE_ENABLE, 1);  fifo3[m++] = 1;
+    fifo3[m++] = fifo_incr(NV4097_SET_CULL_FACE, 1);         fifo3[m++] = 0x0405; // BACK
+    fifo3[m++] = fifo_incr(NV4097_SET_BEGIN_END, 1);         fifo3[m++] = PRIM_TRIANGLES;
+    fifo3[m++] = fifo_incr(NV4097_DRAW_ARRAYS, 1);           fifo3[m++] = (2u << 24) | 0;
+    fifo3[m++] = fifo_incr(NV4097_SET_BEGIN_END, 1);         fifo3[m++] = 0;
+    fifo3[m++] = fifo_incr(NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP, 1); fifo3[m++] = 0;
+    rsx_process_fifo(&st, fifo3, (uint32_t)m, vram, 2048);
+
+    raster.readback(fb.data());
+    uint32_t culledPx = fb[130 * W + 160];
+    std::printf("  cull-back center: 0x%08x (want clear 0xFF112233)\n", culledPx);
+    CHECK(culledPx == 0xFF112233u,
+          "Triangle culled when FIFO sets CULL_FACE=BACK");
+
+    // Flip to FRONT — triangle reappears (it's back-facing, BACK was the cull).
+    m = 0;
+    fifo3[m++] = fifo_incr(NV4097_SET_COLOR_CLEAR_VALUE, 1); fifo3[m++] = 0xFF112233u;
+    fifo3[m++] = fifo_incr(NV4097_CLEAR_SURFACE, 1);         fifo3[m++] = CLEAR_COLOR;
+    fifo3[m++] = fifo_incr(NV4097_SET_CULL_FACE, 1);         fifo3[m++] = 0x0404; // FRONT
+    fifo3[m++] = fifo_incr(NV4097_SET_BEGIN_END, 1);         fifo3[m++] = PRIM_TRIANGLES;
+    fifo3[m++] = fifo_incr(NV4097_DRAW_ARRAYS, 1);           fifo3[m++] = (2u << 24) | 0;
+    fifo3[m++] = fifo_incr(NV4097_SET_BEGIN_END, 1);         fifo3[m++] = 0;
+    fifo3[m++] = fifo_incr(NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP, 1); fifo3[m++] = 0;
+    rsx_process_fifo(&st, fifo3, (uint32_t)m, vram, 2048);
+
+    raster.readback(fb.data());
+    uint32_t visPx = fb[130 * W + 160];
+    std::printf("  cull-front center: 0x%08x (want yellow)\n", visPx);
+    CHECK(((visPx >> 16) & 0xFF) > 200 &&
+          ((visPx >>  8) & 0xFF) > 200 &&
+          ( visPx        & 0xFF) < 32,
+          "Triangle visible when FIFO flips CULL_FACE=FRONT");
+
     raster.shutdown();
     rsx_shutdown(&st);
     std::free(vram);
