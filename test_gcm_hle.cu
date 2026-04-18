@@ -165,6 +165,30 @@ int main() {
     // for now just ensure the FIFO didn't crash and an entry was emitted.
     CHECK(gcm_used(&c2) > 12,                    "Scenario 2 emitted state setters");
 
+    // ── Scenario 3: alpha test / color mask / shade / front face ──
+    std::printf("\n  Scenario 3: alpha/colormask/shade/frontface builders\n");
+    std::vector<uint32_t> cmd3(64, 0);
+    GcmCtx c3{};
+    gcm_init_ctx(&c3, cmd3.data(), (uint32_t)cmd3.size());
+
+    cellGcmSetAlphaTestEnable(&c3, true);
+    cellGcmSetAlphaFunc(&c3, 0x0204, 0x80);     // GL_GREATER, ref=128
+    cellGcmSetColorMask(&c3, 0x00FFFFFFu);      // disable alpha writes
+    cellGcmSetShadeMode(&c3, 0x1D00);            // FLAT
+    cellGcmSetFrontFace(&c3, 0x0900);            // CW
+    cellGcmSetTransformConstant(&c3, /*slot*/ 0, 1.0f, 2.0f, 3.0f, 4.0f);
+
+    rsx_process_fifo(&st, cmd3.data(), gcm_used(&c3), vram, gcm_used(&c3));
+
+    CHECK(st.alphaTestEnable,                    "ALPHA_TEST_ENABLE captured");
+    CHECK(st.alphaFunc == 0x0204,                "ALPHA_FUNC=GL_GREATER captured");
+    CHECK(st.alphaRef  == 0x80,                  "ALPHA_REF=128 captured");
+    CHECK(st.colorMask == 0x00FFFFFFu,           "COLOR_MASK alpha-disable captured");
+    CHECK(st.shadeMode == 0x1D00,                "SHADE_MODE=FLAT captured");
+    CHECK(st.frontFace == 0x0900,                "FRONT_FACE=CW captured");
+    CHECK(st.vpConstants[0][0] == 1.0f &&
+          st.vpConstants[0][3] == 4.0f,          "Transform constant slot 0 captured");
+
     // ── Verify pixels (scenario 1) ────────────────────────────
     raster.setMRTCount(1);
     std::vector<uint32_t> fb(W * H, 0);

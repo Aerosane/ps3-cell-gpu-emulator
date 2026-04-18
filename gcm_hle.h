@@ -185,6 +185,29 @@ inline void cellGcmSetCullFace(GcmCtx* c, uint32_t face) {
     emit1(c, rsx::NV4097_SET_CULL_FACE, face);
 }
 
+inline void cellGcmSetFrontFace(GcmCtx* c, uint32_t face) {
+    // 0x0900 CW, 0x0901 CCW
+    emit1(c, rsx::NV4097_SET_FRONT_FACE, face);
+}
+
+inline void cellGcmSetAlphaTestEnable(GcmCtx* c, bool enable) {
+    emit1(c, rsx::NV4097_SET_ALPHA_TEST_ENABLE, enable ? 1u : 0u);
+}
+
+inline void cellGcmSetAlphaFunc(GcmCtx* c, uint32_t func, uint32_t ref) {
+    emit1(c, rsx::NV4097_SET_ALPHA_FUNC, func);
+    emit1(c, rsx::NV4097_SET_ALPHA_REF,  ref & 0xFFu);
+}
+
+inline void cellGcmSetColorMask(GcmCtx* c, uint32_t argbMask) {
+    emit1(c, rsx::NV4097_SET_COLOR_MASK, argbMask);
+}
+
+inline void cellGcmSetShadeMode(GcmCtx* c, uint32_t mode) {
+    // 0x1D00 FLAT, 0x1D01 SMOOTH
+    emit1(c, rsx::NV4097_SET_SHADE_MODE, mode);
+}
+
 // ── Vertex transform program (vertex shader) ──────────────────────
 //
 // Real games upload up to 512 4-dword instructions starting at a load

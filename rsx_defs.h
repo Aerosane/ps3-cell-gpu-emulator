@@ -71,6 +71,14 @@ static constexpr uint32_t NV4097_SET_STENCIL_OP_ZPASS         = 0x00000348;
 // Cull face
 static constexpr uint32_t NV4097_SET_CULL_FACE_ENABLE         = 0x00000B44;
 static constexpr uint32_t NV4097_SET_CULL_FACE                = 0x00000B48;
+static constexpr uint32_t NV4097_SET_FRONT_FACE               = 0x00000B4C;
+
+// Alpha test / color mask / shade mode (Phase 4b)
+static constexpr uint32_t NV4097_SET_ALPHA_TEST_ENABLE        = 0x00000300 + 0x6C; // 0x36C
+static constexpr uint32_t NV4097_SET_ALPHA_FUNC               = 0x00000300 + 0x70; // 0x370
+static constexpr uint32_t NV4097_SET_ALPHA_REF                = 0x00000300 + 0x74; // 0x374
+static constexpr uint32_t NV4097_SET_COLOR_MASK               = 0x00000358;
+static constexpr uint32_t NV4097_SET_SHADE_MODE               = 0x00000368;
 
 // Shader programs
 static constexpr uint32_t NV4097_SET_SHADER_PROGRAM          = 0x000008E4;
@@ -261,6 +269,14 @@ struct RSXState {
     // Cull
     bool     cullFaceEnable;
     uint32_t cullFace;
+
+    // Alpha test / front face / color mask / shade mode (Phase 4b)
+    bool     alphaTestEnable;
+    uint32_t alphaFunc;          // GL compare 0x200..0x207
+    uint32_t alphaRef;            // reference value (0..255 packed in low byte)
+    uint32_t frontFace;           // 0x0900 CW, 0x0901 CCW
+    uint32_t colorMask;           // ARGB bits, 0xFFFFFFFF = all writes enabled
+    uint32_t shadeMode;           // 0x1D00 FLAT, 0x1D01 SMOOTH
 
     // Vertex arrays (16 slots)
     struct VertexArray {

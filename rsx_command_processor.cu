@@ -81,6 +81,14 @@ int rsx_init(RSXState* state) {
     state->cullFaceEnable = false;
     state->cullFace       = 0x0405; // GL_BACK
 
+    // Alpha test / front face / color mask / shade mode defaults
+    state->alphaTestEnable = false;
+    state->alphaFunc       = 0x0207;     // ALWAYS
+    state->alphaRef        = 0;
+    state->frontFace       = 0x0901;     // CCW
+    state->colorMask       = 0xFFFFFFFF; // all writes enabled
+    state->shadeMode       = 0x1D01;     // SMOOTH
+
     // Draw state
     state->currentPrim = PRIM_TRIANGLES;
     state->inBeginEnd  = false;
@@ -289,6 +297,26 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         return;
     case NV4097_SET_CULL_FACE:
         state->cullFace = data;
+        return;
+    case NV4097_SET_FRONT_FACE:
+        state->frontFace = data;
+        return;
+
+    // ── Alpha test / color mask / shade mode ───────────────────
+    case NV4097_SET_ALPHA_TEST_ENABLE:
+        state->alphaTestEnable = (data != 0);
+        return;
+    case NV4097_SET_ALPHA_FUNC:
+        state->alphaFunc = data;
+        return;
+    case NV4097_SET_ALPHA_REF:
+        state->alphaRef = data;
+        return;
+    case NV4097_SET_COLOR_MASK:
+        state->colorMask = data;
+        return;
+    case NV4097_SET_SHADE_MODE:
+        state->shadeMode = data;
         return;
 
     // ── Clear ──────────────────────────────────────────────────
