@@ -504,6 +504,49 @@ __device__ static void handleSyscall(PPEState& s, uint8_t* mem, uint32_t* hle_lo
         s.gpr[3] = 0;
         break;
 
+    // ─── HLE GCM bridge: PPC code drives RSX via custom syscalls ──
+    //
+    // Real games never go through `sc` for graphics — they call libgcm
+    // user-mode functions that write FIFO words directly into a ring.
+    // We don't have an SPRX loader yet, so for synthetic test programs
+    // we expose two custom syscalls in an unused range (0xC710/0xC711)
+    // that emit FIFO method headers + payload into a guest-visible ring
+    // at PS3_GCM_FIFO_BASE. The host pumps that ring into rsx_process_fifo
+    // after the PPC thread halts.
+    //
+    // Layout at PS3_GCM_FIFO_BASE:
+    //   [+0]      uint32 cursor (in dwords past the cursor word itself)
+    //   [+4..]    native-endian FIFO dwords
+    case 0xC710: {
+        // Emit single-arg method. r3=method, r4=data
+        uint32_t method = (uint32_t)s.gpr[3];
+        uint32_t data   = (uint32_t)s.gpr[4];
+        uint32_t header = ((1u & 0x7FFu) << 18) | (method & 0xFFFCu);
+        // atomic bump of cursor (in dwords)
+        uint32_t* base = (uint32_t*)(mem + (PS3_GCM_FIFO_BASE & (PS3_SANDBOX_SIZE - 1)));
+        uint32_t pos   = atomicAdd(base, 2u);
+        // Write native-endian (rsx_process_fifo expects native uint32)
+        if (pos + 2 < (PS3_GCM_FIFO_LIMIT_DWORDS - 1)) {
+            base[1 + pos]     = header;
+            base[1 + pos + 1] = data;
+        }
+        s.gpr[3] = 0;
+        break;
+    }
+    case 0xC711: {
+        // Emit raw FIFO dword (already-formed header or payload).
+        // Lets PPC code burst multi-payload methods one word at a time.
+        // r3=raw word
+        uint32_t word = (uint32_t)s.gpr[3];
+        uint32_t* base = (uint32_t*)(mem + (PS3_GCM_FIFO_BASE & (PS3_SANDBOX_SIZE - 1)));
+        uint32_t pos   = atomicAdd(base, 1u);
+        if (pos + 1 < (PS3_GCM_FIFO_LIMIT_DWORDS - 1)) {
+            base[1 + pos] = word;
+        }
+        s.gpr[3] = 0;
+        break;
+    }
+
     default:
         // Log unknown syscall for debugging
         if (hle_log) {
@@ -2206,6 +2249,15 @@ int megakernel_load(uint64_t offset, const void* data, size_t size) {
     if (!g_ctx.ready || offset + size > PS3_SANDBOX_SIZE) return 0;
     cudaMemcpyAsync(g_ctx.d_mem + offset, data, size,
                      cudaMemcpyHostToDevice, g_ctx.stream);
+    return 1;
+}
+
+// Read back a region of the device-side sandbox (mirror of megakernel_load).
+// Useful for inspecting HLE side-effects (e.g. the GCM bridge ring).
+int megakernel_read_mem(uint64_t offset, void* dst, size_t size) {
+    if (!g_ctx.ready || offset + size > PS3_SANDBOX_SIZE) return 0;
+    cudaStreamSynchronize(g_ctx.stream);
+    cudaMemcpy(dst, g_ctx.d_mem + offset, size, cudaMemcpyDeviceToHost);
     return 1;
 }
 

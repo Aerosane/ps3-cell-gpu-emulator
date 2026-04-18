@@ -336,6 +336,12 @@ static constexpr uint64_t PS3_MMIO_BASE    = 0x28000000ULL;         // MMIO regi
 // Sandbox total: 512MB VRAM on GPU
 static constexpr uint64_t PS3_SANDBOX_SIZE = PS3_RAM_SIZE + PS3_VRAM_SIZE;
 
+// HLE GCM bridge ring (lives in main RAM, well above heap & stack):
+//   [+0]  uint32 cursor in dwords past the cursor word
+//   [+4]  FIFO dwords, native endian, consumed by host rsx_process_fifo
+static constexpr uint64_t PS3_GCM_FIFO_BASE          = 0x01000000ULL; // 16 MB
+static constexpr uint32_t PS3_GCM_FIFO_LIMIT_DWORDS  = 16u * 1024u;   //  64 KiB
+
 // ═══════════════════════════════════════════════════════════════
 // CellOS HLE Syscall Numbers (most commonly used)
 // ═══════════════════════════════════════════════════════════════
