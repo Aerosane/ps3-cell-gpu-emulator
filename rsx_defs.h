@@ -113,6 +113,13 @@ static constexpr uint32_t NV4097_SET_BEGIN_END               = 0x00001808;
 static constexpr uint32_t NV4097_DRAW_ARRAYS               = 0x00001814;
 static constexpr uint32_t NV4097_DRAW_INDEX_ARRAY           = 0x0000181C;
 
+// Index buffer state. (Real RSX places these at 0x1A0/0x1A4 inside the
+// texture range; we use a non-conflicting slot since our texture range
+// already starts at 0x1A00. Games never see these registers directly —
+// HLE wrappers translate cellGcmSetDrawIndexArray into our offsets.)
+static constexpr uint32_t NV4097_SET_INDEX_ARRAY_ADDRESS     = 0x00001828;
+static constexpr uint32_t NV4097_SET_INDEX_ARRAY_DMA         = 0x0000182C;
+
 // Texture (16 units, stride 0x20 per unit)
 static constexpr uint32_t NV4097_SET_TEXTURE_OFFSET          = 0x00001A00;
 static constexpr uint32_t NV4097_SET_TEXTURE_FORMAT           = 0x00001A04;
@@ -217,6 +224,12 @@ struct RSXState {
     uint32_t depthOffset;
     uint32_t depthPitch;
     uint32_t depthFormat;
+
+    // Index buffer state for VRAM-resident indexed draws.
+    // SET_INDEX_ARRAY_ADDRESS holds a byte offset into VRAM, DMA holds
+    // the format (0 = U16 little-endian, 1 = U32) packed in low bits.
+    uint32_t indexArrayAddress;
+    uint32_t indexArrayFormat;
 
     // Viewport / Scissor
     uint16_t viewportX, viewportY, viewportW, viewportH;

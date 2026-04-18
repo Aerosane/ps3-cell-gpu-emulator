@@ -482,11 +482,63 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
 
 void RasterBridge::onDrawIndexed(const RSXState& s, uint32_t first, uint32_t count,
                                  uint32_t /*indexFormat*/) {
-    if (!rast_ || !pool_ || !idxPool_ || count == 0) return;
-    if ((uint64_t)first + count > idxCount_) return;
+    if (!rast_ || count == 0) return;
     applyPipelineState(s);
-    rast_->drawIndexed(pool_, poolCount_, idxPool_ + first, count, false);
-    counters.drawIndexed++;
+
+    // Path A — host-staged vertex + index pools (legacy test path).
+    if (pool_ && idxPool_) {
+        if ((uint64_t)first + count > idxCount_) return;
+        rast_->drawIndexed(pool_, poolCount_, idxPool_ + first, count, false);
+        counters.drawIndexed++;
+        return;
+    }
+
+    // Path B — VRAM-resident indices + VRAM-decoded vertex stream.
+    // Mirrors what real PS3 games drive via cellGcmSetDrawIndexArray:
+    // SET_INDEX_ARRAY_ADDRESS captured into s.indexArrayAddress, the
+    // DRAW_INDEX_ARRAY method then specifies (first, count). U16 LE
+    // is the common format (s.indexArrayFormat low bit = 0).
+    if (vram_ && s.vertexArrays[0].enabled) {
+        const bool u32 = (s.indexArrayFormat & 1u) != 0;
+        const uint32_t stride = u32 ? 4u : 2u;
+        const uint64_t need   = (uint64_t)(first + count) * stride;
+        if ((uint64_t)s.indexArrayAddress + need > vramSize_) return;
+
+        // Decode both streams into host buffers, then drive the rasterizer.
+        std::vector<RasterVertex> verts;
+        // Determine highest index we'll touch so decode is bounded.
+        const uint8_t* idxSrc = vram_ + s.indexArrayAddress + (uint64_t)first * stride;
+        std::vector<uint32_t> idx32(count);
+        uint32_t maxIdx = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            uint32_t v = u32
+                ? *reinterpret_cast<const uint32_t*>(idxSrc + i * 4u)
+                : (uint32_t)*reinterpret_cast<const uint16_t*>(idxSrc + i * 2u);
+            idx32[i] = v;
+            if (v > maxIdx) maxIdx = v;
+        }
+        decode_vertex_stream(s, vram_, vramSize_, 0, maxIdx + 1, verts);
+        if (verts.empty()) return;
+
+        // CudaRasterizer::drawIndexed expects uint16_t indices; downcast
+        // when safe, otherwise expand triangles ourselves.
+        if (maxIdx <= 0xFFFFu) {
+            std::vector<uint16_t> idx16(count);
+            for (uint32_t i = 0; i < count; ++i) idx16[i] = (uint16_t)idx32[i];
+            rast_->drawIndexed(verts.data(), (uint32_t)verts.size(),
+                               idx16.data(), count, false);
+        } else {
+            // Fallback: gather vertices through the index list.
+            std::vector<RasterVertex> expanded(count);
+            for (uint32_t i = 0; i < count; ++i) {
+                uint32_t v = idx32[i];
+                expanded[i] = (v < verts.size()) ? verts[v] : RasterVertex{};
+            }
+            rast_->drawTriangles(expanded.data(), count);
+        }
+        counters.drawIndexed++;
+        return;
+    }
 }
 
 void RasterBridge::onFlip(const RSXState&, uint32_t) {

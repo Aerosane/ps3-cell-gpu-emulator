@@ -203,6 +203,14 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         state->surfaceColorTarget = data;
         return;
 
+    // ── Index buffer state (VRAM-resident indexed draws) ───────
+    case NV4097_SET_INDEX_ARRAY_ADDRESS:
+        state->indexArrayAddress = data;
+        return;
+    case NV4097_SET_INDEX_ARRAY_DMA:
+        state->indexArrayFormat = data;
+        return;
+
     // ── Viewport / Scissor ─────────────────────────────────────
     case NV4097_SET_VIEWPORT_HORIZONTAL:
         state->viewportX = (uint16_t)(data & 0xFFFF);

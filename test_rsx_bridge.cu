@@ -793,6 +793,112 @@ int main() {
               "All four corner colors visible (Gouraud-interpolated)");
     }
 
+    // ── Scenario 13: VRAM-resident indexed draw ─────────────────────
+    //
+    // Real PS3 games stage both vertex and index buffers in VRAM and
+    // drive the FIFO with SET_INDEX_ARRAY_ADDRESS + DRAW_INDEX_ARRAY.
+    // This exercises the new VRAM index-decode path in onDrawIndexed
+    // (no host pool registered).
+    {
+        std::printf("\n── VRAM-resident indexed draw:\n");
+
+        constexpr uint32_t W = 320, H = 240;
+        constexpr uint32_t VB_POS3 = 0x300000;
+        constexpr uint32_t VB_COL3 = 0x301000;
+        constexpr uint32_t IB3     = 0x302000;
+
+        // Two-triangle quad in pixel coords; same colors as scenario 12.
+        float positions[12] = {
+             32.f, 216.f, 0.5f,    // 0 BL  red
+            288.f, 216.f, 0.5f,    // 1 BR  green
+            288.f,  24.f, 0.5f,    // 2 TR  blue
+             32.f,  24.f, 0.5f,    // 3 TL  yellow
+        };
+        std::memcpy(vram + VB_POS3, positions, sizeof(positions));
+
+        // BGRA in memory: byte0=B byte1=G byte2=R byte3=A → LE u32 packing.
+        uint32_t cols[4] = {
+            0xFFFF0000u,  // red    (B=00 G=00 R=FF A=FF)
+            0xFF00FF00u,  // green  (B=00 G=FF R=00 A=FF)
+            0xFF0000FFu,  // blue   (B=FF G=00 R=00 A=FF)
+            0xFFFFFF00u,  // yellow (B=00 G=FF R=FF A=FF)
+        };
+        std::memcpy(vram + VB_COL3, cols, sizeof(cols));
+
+        // U16 LE indices: two triangles forming the quad.
+        uint16_t idx[6] = { 0, 1, 2, 0, 2, 3 };
+        std::memcpy(vram + IB3, idx, sizeof(idx));
+
+        // Detach host pools so the bridge takes the VRAM path.
+        bridge.setVertexPool(nullptr, 0);
+        bridge.setIndexPool(nullptr, 0);
+        bridge.setVRAM(vram, 8 * 1024 * 1024);
+        st.vulkanEmitter = &bridge;
+
+        // Reset MRT to single plane and clear FB to black.
+        raster.setMRTCount(1);
+        raster.clearPlane(0, 0xFF000000u);
+
+        // Clear texture state (carry-over from earlier scenarios).
+        for (auto& t : st.textures) t.enabled = false;
+        st.vpValid = 0;
+
+        std::vector<uint32_t> fifo;
+        // Vertex stream slot 0: position float3 stride 12.
+        fifo.push_back(fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 0*4, 1));
+        fifo.push_back((12u << 8) | (3u << 4) | VERTEX_F);
+        fifo.push_back(fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 0*4, 1));
+        fifo.push_back(VB_POS3);
+        // Slot 3: color UB4 stride 4.
+        fifo.push_back(fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 3*4, 1));
+        fifo.push_back((4u << 8) | (4u << 4) | VERTEX_UB);
+        fifo.push_back(fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 3*4, 1));
+        fifo.push_back(VB_COL3);
+        // Index buffer state.
+        fifo.push_back(fifo_incr(NV4097_SET_INDEX_ARRAY_ADDRESS, 1));
+        fifo.push_back(IB3);
+        fifo.push_back(fifo_incr(NV4097_SET_INDEX_ARRAY_DMA, 1));
+        fifo.push_back(0u);                                  // U16 little-endian
+        // Begin → DrawIndexed(first=0, count=6) → End.
+        fifo.push_back(fifo_incr(NV4097_SET_BEGIN_END, 1));
+        fifo.push_back(PRIM_TRIANGLES);
+        fifo.push_back(fifo_incr(NV4097_DRAW_INDEX_ARRAY, 1));
+        fifo.push_back(((6 - 1) << 24) | 0u);
+        fifo.push_back(fifo_incr(NV4097_SET_BEGIN_END, 1));
+        fifo.push_back(0u);
+
+        uint32_t before = bridge.counters.drawIndexed;
+        rsx_process_fifo(&st, fifo.data(), (uint32_t)fifo.size(),
+                         (uint8_t*)vram, fifo.size());
+        uint32_t after = bridge.counters.drawIndexed;
+        CHECK(after == before + 1, "VRAM indexed draw fired exactly once");
+        CHECK(st.indexArrayAddress == IB3, "INDEX_ARRAY_ADDRESS captured");
+        CHECK(st.indexArrayFormat == 0, "INDEX_ARRAY_DMA captured (U16 LE)");
+
+        std::vector<uint32_t> fb(W * H, 0);
+        raster.readbackPlane(0, fb.data());
+        uint32_t lit = 0, red = 0, green = 0, blue = 0, yellow = 0;
+        for (uint32_t y = 0; y < H; ++y) {
+            for (uint32_t x = 0; x < W; ++x) {
+                uint32_t p = fb[y * W + x];
+                if (p == 0xFF000000u) continue;
+                ++lit;
+                uint8_t R = (p >> 16) & 0xFF;
+                uint8_t G = (p >>  8) & 0xFF;
+                uint8_t B =  p        & 0xFF;
+                if (R > 200 && G <  60 && B <  60) ++red;
+                if (R <  60 && G > 200 && B <  60) ++green;
+                if (R <  60 && G <  60 && B > 200) ++blue;
+                if (R > 200 && G > 200 && B <  60) ++yellow;
+            }
+        }
+        std::printf("  lit=%u   red=%u green=%u blue=%u yellow=%u\n",
+                    lit, red, green, blue, yellow);
+        CHECK(lit > 30000, "VRAM-driven quad covers expected area");
+        CHECK(red > 50 && green > 50 && blue > 50 && yellow > 50,
+              "All four corner colors visible (decoded from VRAM)");
+    }
+
 
     raster.shutdown();
     rsx_shutdown(&st);
