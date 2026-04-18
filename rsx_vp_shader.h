@@ -521,4 +521,187 @@ inline void vp_disassemble(const uint32_t* vpData, uint32_t vpLen) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Host-side VP Interpreter
+//
+// Executes a decoded NV40 vertex program on the CPU. One vertex at a
+// time. Used by the CUDA raster bridge to transform decoded vertex
+// streams when a vertex program is uploaded through the FIFO.
+//
+// Conventions:
+//   inputs[16][4]    — vertex attributes (in_attr). 0=pos, 3=color, 8=uv.
+//   constants[256][4]— vpConstants (c[]).
+//   temps[48][4]     — scratch registers, zero-initialised.
+//   outputs[16][4]   — output registers (o[]). 0=pos (HPOS), 1=diffuse
+//                      (COL0), 4..7=texcoord0..3 in common PS3 shaders.
+//                      RSX HPOS is expected in clip space {x,y,z,w}.
+//
+// Implements the common subset of the NV40 VP ISA: vector MOV, MUL,
+// ADD, MAD, DP3, DP4, MIN, MAX; scalar MOV, RCP, RSQ. End flag.
+// ═══════════════════════════════════════════════════════════════════
+
+struct VPFloat4 { float v[4]; };
+
+inline void vp_read_src(const VPDecodedSrc& s,
+                        uint32_t inputIdx, uint32_t constIdx,
+                        const VPFloat4 inputs[16],
+                        const VPFloat4 constants[256],
+                        const VPFloat4 temps[48],
+                        float out[4]) {
+    const float* base = nullptr;
+    float zeros[4] = {0, 0, 0, 0};
+    switch (s.regType) {
+    case VP_REG_TEMP:
+        base = temps[s.regIdx & 0x3F].v;
+        break;
+    case VP_REG_INPUT:
+        base = inputs[inputIdx & 0xF].v;
+        break;
+    case VP_REG_CONSTANT:
+        base = constants[constIdx & 0xFF].v;
+        break;
+    default:
+        base = zeros;
+        break;
+    }
+    uint32_t sx = s.swzX, sy = s.swzY, sz = s.swzZ, sw = s.swzW;
+    out[0] = base[sx]; out[1] = base[sy];
+    out[2] = base[sz]; out[3] = base[sw];
+    if (s.abs) {
+        for (int i = 0; i < 4; ++i) out[i] = out[i] < 0 ? -out[i] : out[i];
+    }
+    if (s.neg) {
+        for (int i = 0; i < 4; ++i) out[i] = -out[i];
+    }
+}
+
+inline void vp_write_dst(float value[4],
+                         bool mx, bool my, bool mz, bool mw,
+                         bool saturate,
+                         float dst[4]) {
+    if (saturate) {
+        for (int i = 0; i < 4; ++i) {
+            if (value[i] < 0) value[i] = 0;
+            if (value[i] > 1) value[i] = 1;
+        }
+    }
+    if (mx) dst[0] = value[0];
+    if (my) dst[1] = value[1];
+    if (mz) dst[2] = value[2];
+    if (mw) dst[3] = value[3];
+}
+
+inline void vp_execute(const uint32_t* vpData, uint32_t vpLen, uint32_t vpStart,
+                       const VPFloat4 inputs[16],
+                       const VPFloat4 constants[256],
+                       VPFloat4 outputs[16]) {
+    VPFloat4 temps[48] = {};
+    uint32_t numInsns = vpLen / 4;
+    for (uint32_t i = vpStart; i < numInsns; ++i) {
+        VPDecodedInsn insn = vp_decode(&vpData[i * 4]);
+
+        // Read sources
+        float src0[4], src1[4], src2[4];
+        vp_read_src(insn.src[0], insn.inputIdx, insn.constIdx,
+                    inputs, constants, temps, src0);
+        vp_read_src(insn.src[1], insn.inputIdx, insn.constIdx,
+                    inputs, constants, temps, src1);
+        vp_read_src(insn.src[2], insn.inputIdx, insn.constIdx,
+                    inputs, constants, temps, src2);
+
+        // Vector op
+        if (insn.vecOp != VP_VEC_NOP) {
+            float r[4] = {0, 0, 0, 0};
+            switch (insn.vecOp) {
+            case VP_VEC_MOV:
+                for (int k = 0; k < 4; ++k) r[k] = src0[k];
+                break;
+            case VP_VEC_MUL:
+                for (int k = 0; k < 4; ++k) r[k] = src0[k] * src1[k];
+                break;
+            case VP_VEC_ADD:
+                for (int k = 0; k < 4; ++k) r[k] = src0[k] + src2[k];
+                break;
+            case VP_VEC_MAD:
+                for (int k = 0; k < 4; ++k) r[k] = src0[k] * src1[k] + src2[k];
+                break;
+            case VP_VEC_DP3: {
+                float d = src0[0]*src1[0] + src0[1]*src1[1] + src0[2]*src1[2];
+                r[0] = r[1] = r[2] = r[3] = d;
+                break;
+            }
+            case VP_VEC_DP4:
+            case VP_VEC_DPH: {
+                float d;
+                if (insn.vecOp == VP_VEC_DPH)
+                    d = src0[0]*src1[0] + src0[1]*src1[1] + src0[2]*src1[2] + src1[3];
+                else
+                    d = src0[0]*src1[0] + src0[1]*src1[1] + src0[2]*src1[2] + src0[3]*src1[3];
+                r[0] = r[1] = r[2] = r[3] = d;
+                break;
+            }
+            case VP_VEC_MIN:
+                for (int k = 0; k < 4; ++k) r[k] = src0[k] < src1[k] ? src0[k] : src1[k];
+                break;
+            case VP_VEC_MAX:
+                for (int k = 0; k < 4; ++k) r[k] = src0[k] > src1[k] ? src0[k] : src1[k];
+                break;
+            case VP_VEC_FRC:
+                for (int k = 0; k < 4; ++k) {
+                    float f = src0[k];
+                    r[k] = f - (int)f;
+                    if (r[k] < 0) r[k] += 1.0f;
+                }
+                break;
+            case VP_VEC_FLR:
+                for (int k = 0; k < 4; ++k) {
+                    float f = src0[k];
+                    r[k] = (float)((int)f - (f < 0 && f != (int)f ? 1 : 0));
+                }
+                break;
+            case VP_VEC_SLT:
+                for (int k = 0; k < 4; ++k) r[k] = src0[k] <  src1[k] ? 1.0f : 0.0f;
+                break;
+            case VP_VEC_SGE:
+                for (int k = 0; k < 4; ++k) r[k] = src0[k] >= src1[k] ? 1.0f : 0.0f;
+                break;
+            default:
+                for (int k = 0; k < 4; ++k) r[k] = src0[k];
+                break;
+            }
+
+            float* dst = insn.vecWriteResult ? outputs[insn.vecDstOut & 0xF].v
+                                             : temps[insn.vecDstTmp & 0x3F].v;
+            vp_write_dst(r,
+                         insn.vecMaskX, insn.vecMaskY, insn.vecMaskZ, insn.vecMaskW,
+                         insn.saturate, dst);
+        }
+
+        // Scalar op (uses src2, result broadcast to vector dst channels)
+        if (insn.scaOp != VP_SCA_NOP) {
+            float s = src2[0];
+            float r[4] = {0, 0, 0, 0};
+            switch (insn.scaOp) {
+            case VP_SCA_MOV: r[0] = r[1] = r[2] = r[3] = s; break;
+            case VP_SCA_RCP: r[0] = r[1] = r[2] = r[3] = (s != 0 ? 1.0f / s : 0); break;
+            case VP_SCA_RSQ: {
+                float a = s < 0 ? -s : s;
+                float inv = (a != 0 ? 1.0f / __builtin_sqrtf(a) : 0);
+                r[0] = r[1] = r[2] = r[3] = inv;
+                break;
+            }
+            default:
+                r[0] = r[1] = r[2] = r[3] = s;
+                break;
+            }
+            float* dst = temps[insn.scaDstTmp & 0x3F].v;
+            vp_write_dst(r,
+                         insn.scaMaskX, insn.scaMaskY, insn.scaMaskZ, insn.scaMaskW,
+                         insn.saturate, dst);
+        }
+
+        if (insn.endFlag) break;
+    }
+}
+
 } // namespace rsx

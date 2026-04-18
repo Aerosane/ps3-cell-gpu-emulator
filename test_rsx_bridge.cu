@@ -292,6 +292,85 @@ int main() {
     raster.savePPM("/tmp/rsx_bridge_blend.ppm");
 
 
+    // ── FIFO vertex-program interpreter ─────────────────────────────
+    // Upload a 2-instruction VP:
+    //   MUL o[0], in[0], c[0]   ; scale position
+    //   MOV o[1], in[3]         ; pass-through color   (end)
+    // Set c[0] = (0.5, 0.5, 1, 1) and re-draw the slot-0/3 triangle from
+    // VB_POS1/VB_COL1. The triangle (40,40)-(280,40)-(160,200) should
+    // shrink to (20,20)-(140,20)-(80,100).
+    std::printf("\n── FIFO vertex-program interpreter:\n");
+
+    // Rebuild original yellow vertex data (cols2 overwrote slot-3 memory
+    // for the blend scenario, but slot-0 offset is still VB_POS2 from the
+    // blend FIFO — reset both arrays).
+    // NOTE: VB_POS1/VB_COL1 already hold the yellow triangle from scenario 2.
+    uint32_t fifo5[128];
+    m = 0;
+    fifo5[m++] = fifo_incr(NV4097_SET_COLOR_CLEAR_VALUE, 1); fifo5[m++] = 0xFF000000u;
+    fifo5[m++] = fifo_incr(NV4097_CLEAR_SURFACE, 1);         fifo5[m++] = CLEAR_COLOR | CLEAR_DEPTH;
+    fifo5[m++] = fifo_incr(NV4097_SET_DEPTH_TEST_ENABLE, 1); fifo5[m++] = 0;
+    fifo5[m++] = fifo_incr(NV4097_SET_BLEND_ENABLE, 1);      fifo5[m++] = 0;
+    fifo5[m++] = fifo_incr(NV4097_SET_CULL_FACE_ENABLE, 1);  fifo5[m++] = 0;
+
+    // Point slot 0 back to VB_POS1 (scenario 4 had moved it to VB_POS2).
+    fifo5[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 0*4, 1);
+    fifo5[m++] = VB_POS1;
+    fifo5[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 3*4, 1);
+    fifo5[m++] = VB_COL1;
+
+    // Upload VP: start at instruction 0.
+    fifo5[m++] = fifo_incr(NV4097_SET_TRANSFORM_PROGRAM_START, 1);
+    fifo5[m++] = 0;
+    // 2 instructions = 8 dwords.
+    fifo5[m++] = fifo_incr(NV4097_SET_TRANSFORM_PROGRAM, 8);
+    // Instr 1: MUL o[0], in[0].xyzw, c[0].xyzw
+    fifo5[m++] = 0x20000000u;
+    fifo5[m++] = 0x0080000Du;
+    fifo5[m++] = 0x8106C0C0u;
+    fifo5[m++] = 0x0001E000u;
+    // Instr 2: MOV o[1], in[3].xyzw  (end)
+    fifo5[m++] = 0x20000000u;
+    fifo5[m++] = 0x0040030Du;
+    fifo5[m++] = 0x87000000u;
+    fifo5[m++] = 0x0001E005u;
+
+    // Upload c[0] = (0.5, 0.5, 1.0, 1.0).
+    // (No explicit LOAD handler in Phase 4a — SET_TRANSFORM_CONSTANT
+    // writes relative to its own method offset, so starting at c[0].)
+    fifo5[m++] = fifo_incr(NV4097_SET_TRANSFORM_CONSTANT, 4);
+    {
+        float cv[4] = { 0.5f, 0.5f, 1.0f, 1.0f };
+        uint32_t* cu = reinterpret_cast<uint32_t*>(cv);
+        fifo5[m++] = cu[0]; fifo5[m++] = cu[1];
+        fifo5[m++] = cu[2]; fifo5[m++] = cu[3];
+    }
+
+    // Draw.
+    fifo5[m++] = fifo_incr(NV4097_SET_BEGIN_END, 1);         fifo5[m++] = PRIM_TRIANGLES;
+    fifo5[m++] = fifo_incr(NV4097_DRAW_ARRAYS, 1);           fifo5[m++] = (2u << 24) | 0;
+    fifo5[m++] = fifo_incr(NV4097_SET_BEGIN_END, 1);         fifo5[m++] = 0;
+    fifo5[m++] = fifo_incr(NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP, 1); fifo5[m++] = 0;
+    rsx_process_fifo(&st, fifo5, (uint32_t)m, vram, 4096);
+
+    raster.readback(fb.data());
+    // After scaling by (0.5, 0.5), triangle spans roughly x=[20,140] y=[20,100].
+    // Sample inside scaled triangle at (80, 40).
+    uint32_t vpInsidePx  = fb[40 * W + 80];
+    // Sample outside scaled triangle but inside the original (160, 100).
+    uint32_t vpOutsidePx = fb[100 * W + 160];
+    std::printf("  vp inside  (80,40)  : 0x%08x (want yellow)\n", vpInsidePx);
+    std::printf("  vp outside (160,100): 0x%08x (want clear/black)\n", vpOutsidePx);
+    CHECK(((vpInsidePx  >> 16) & 0xFF) > 200 &&
+          ((vpInsidePx  >>  8) & 0xFF) > 200 &&
+          ( vpInsidePx         & 0xFF) < 32,
+          "VP-scaled triangle visible at shrunk interior");
+    CHECK(((vpOutsidePx >> 16) & 0xFF) < 32 &&
+          ((vpOutsidePx >>  8) & 0xFF) < 32,
+          "VP-scaled triangle no longer covers original outer region");
+    raster.savePPM("/tmp/rsx_bridge_vp.ppm");
+
+
     raster.shutdown();
     rsx_shutdown(&st);
     std::free(vram);

@@ -391,6 +391,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
                        (method - NV4097_SET_TRANSFORM_PROGRAM) / 4;
         if (idx < 512 * 4) {
             state->vpData[idx] = data;
+            state->vpValid = 1;
         }
         return;
     }

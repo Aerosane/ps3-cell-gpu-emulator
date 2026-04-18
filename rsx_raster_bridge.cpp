@@ -2,6 +2,7 @@
 
 #include "rsx_raster_bridge.h"
 #include "rsx_defs.h"
+#include "rsx_vp_shader.h"
 
 #include <cstdio>
 #include <cstring>
@@ -265,6 +266,41 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         base = pool_ + first;
     } else {
         return;
+    }
+
+    // If a vertex program has been uploaded, run it per-vertex on the
+    // decoded/pool stream. Output register 0 is HPOS (expected in
+    // screen-space xyz for this simplified pipeline — a full MVP-based
+    // clip-space VP is still TODO), o[1] is diffuse color, o[4] is uv.
+    std::vector<RasterVertex> transformed;
+    if (s.vpValid) {
+        if (base == nullptr) return;
+        transformed.resize(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            VPFloat4 inputs[16] = {};
+            inputs[0].v[0] = base[i].x; inputs[0].v[1] = base[i].y;
+            inputs[0].v[2] = base[i].z; inputs[0].v[3] = 1.0f;
+            inputs[3].v[0] = base[i].r; inputs[3].v[1] = base[i].g;
+            inputs[3].v[2] = base[i].b; inputs[3].v[3] = base[i].a;
+            inputs[8].v[0] = base[i].u; inputs[8].v[1] = base[i].v;
+
+            const VPFloat4* consts = reinterpret_cast<const VPFloat4*>(s.vpConstants);
+            VPFloat4 outputs[16] = {};
+            // Default pass-through: pos=in0, color=in3, uv=in8
+            outputs[0] = inputs[0];
+            outputs[1] = inputs[3];
+            outputs[4] = inputs[8];
+
+            vp_execute(s.vpData, 512u * 4u, s.vpStart,
+                       inputs, consts, outputs);
+
+            RasterVertex& v = transformed[i];
+            v.x = outputs[0].v[0]; v.y = outputs[0].v[1]; v.z = outputs[0].v[2];
+            v.r = outputs[1].v[0]; v.g = outputs[1].v[1];
+            v.b = outputs[1].v[2]; v.a = outputs[1].v[3];
+            v.u = outputs[4].v[0]; v.v = outputs[4].v[1];
+        }
+        base = transformed.data();
     }
 
     switch (s.currentPrim) {
