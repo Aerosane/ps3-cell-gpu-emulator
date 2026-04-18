@@ -708,6 +708,91 @@ int main() {
         CHECK(all_ok, "All 4 MRT planes cleared to 0xFFAABBCC and readback OK");
     }
 
+    // ── Scenario 12: indexed draw via host pool + index buffer ──────
+    //
+    // FIFO-driven NV4097_DRAW_INDEX_ARRAY exercises the bridge's
+    // onDrawIndexed → CudaRasterizer::drawIndexed path. We feed a
+    // 4-vertex quad (red/green/blue/yellow) plus a 6-index list that
+    // forms two triangles, and verify pixel coverage in the FB.
+    {
+        std::printf("\n── Indexed draw via FIFO DRAW_INDEX_ARRAY:\n");
+
+        // Reset MRT count so readback hits plane A cleanly.
+        raster.setMRTCount(1);
+
+        constexpr uint32_t W = 320, H = 240;
+        raster.clearPlane(0, 0xFF000000u); // black
+
+        // 4 vertices forming a screen-space quad with distinct colors.
+        // (CudaRasterizer expects pixel coordinates, like scenario 1's pool.)
+        RasterVertex quad[4] = {};
+        auto setV = [](RasterVertex& v, float x, float y,
+                       float r, float g, float b){
+            v.x = x; v.y = y; v.z = 0.5f;
+            v.r = r; v.g = g; v.b = b; v.a = 1.0f;
+            v.u = 0.0f; v.v = 0.0f;
+        };
+        setV(quad[0],  32.f, 216.f, 1.0f, 0.0f, 0.0f); // bottom-left  red
+        setV(quad[1], 288.f, 216.f, 0.0f, 1.0f, 0.0f); // bottom-right green
+        setV(quad[2], 288.f,  24.f, 0.0f, 0.0f, 1.0f); // top-right    blue
+        setV(quad[3],  32.f,  24.f, 1.0f, 1.0f, 0.0f); // top-left     yellow
+
+        // Two triangles: (0,1,2) + (0,2,3)
+        uint16_t idx[6] = { 0, 1, 2, 0, 2, 3 };
+
+        bridge.setVRAM(nullptr, 0);          // force pool path
+        bridge.setVertexPool(quad, 4);
+        bridge.setIndexPool(idx, 6);
+        st.vulkanEmitter = &bridge;          // restore primary bridge as active emitter
+
+        // Disable any VP/texture state from earlier scenarios so the
+        // rasterizer just Gourauds the per-vertex colors.
+        st.vpValid = 0;
+        for (auto& t : st.textures) t.enabled = false;
+
+        // Push BEGIN(triangles) → DRAW_INDEX_ARRAY(first=0,count=6) → END.
+        std::vector<uint32_t> fifo;
+        fifo.push_back(fifo_incr(NV4097_SET_BEGIN_END, 1));
+        fifo.push_back(0x04);                             // PRIM_TRIANGLES
+        fifo.push_back(fifo_incr(NV4097_DRAW_INDEX_ARRAY, 1));
+        fifo.push_back(((6 - 1) << 24) | 0u);             // count=6, first=0
+        fifo.push_back(fifo_incr(NV4097_SET_BEGIN_END, 1));
+        fifo.push_back(0x00);                             // END
+
+        uint32_t before = bridge.counters.drawIndexed;
+        rsx_process_fifo(&st, fifo.data(), (uint32_t)fifo.size(),
+                         (uint8_t*)vram, fifo.size());
+        uint32_t after = bridge.counters.drawIndexed;
+
+        CHECK(after == before + 1, "FIFO emitted exactly one indexed draw");
+
+        std::vector<uint32_t> fb(W * H, 0);
+        raster.readbackPlane(0, fb.data());
+
+        uint32_t lit = 0, red = 0, green = 0, blue = 0, yellow = 0;
+        for (uint32_t y = 0; y < H; ++y) {
+            for (uint32_t x = 0; x < W; ++x) {
+                uint32_t p = fb[y * W + x];
+                if (p == 0xFF000000u) continue;
+                ++lit;
+                uint8_t R = (p >> 16) & 0xFF;
+                uint8_t G = (p >>  8) & 0xFF;
+                uint8_t B =  p        & 0xFF;
+                if (R > 200 && G <  60 && B <  60) ++red;
+                if (R <  60 && G > 200 && B <  60) ++green;
+                if (R <  60 && G <  60 && B > 200) ++blue;
+                if (R > 200 && G > 200 && B <  60) ++yellow;
+            }
+        }
+        std::printf("  lit=%u   pure-red=%u  pure-green=%u  "
+                    "pure-blue=%u  pure-yellow=%u\n",
+                    lit, red, green, blue, yellow);
+
+        CHECK(lit > 30000, "Quad covers a large area of the framebuffer");
+        CHECK(red > 50 && green > 50 && blue > 50 && yellow > 50,
+              "All four corner colors visible (Gouraud-interpolated)");
+    }
+
 
     raster.shutdown();
     rsx_shutdown(&st);
