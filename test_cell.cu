@@ -663,6 +663,108 @@ static void bench_ppe_throughput() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Performance Benchmark: HBM2 unified-memory throughput
+//
+// PS3 architecture:
+//   XDR (256 MB main RAM)  →  25.6 GB/s   (Rambus XDR @ 3.2 GHz)
+//   GDDR3 (256 MB VRAM)    →  22.4 GB/s   (RSX local memory)
+//   FlexIO (XDR ↔ RSX)     →  20–35 GB/s
+//   Total addressable bw   ≈  ~70 GB/s peak fragmented
+//
+// V100 HBM2 (4 stacks, 4096-bit, 877 MHz) → 900 GB/s.
+// We allocate one PS3_SANDBOX_SIZE (512 MB) buffer so PPE, all 6 SPUs
+// and RSX share the same physical HBM2 pages and the same L2. This
+// bench shows what bandwidth that single allocation actually delivers.
+// ═══════════════════════════════════════════════════════════════
+
+__global__ void hbm_stream_int4(const int4* __restrict__ src,
+                                int4* __restrict__ dst, uint64_t n)
+{
+    uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) dst[i] = src[i];                       // 16 B load + 16 B store
+}
+
+__global__ void hbm_stream_ldg(const int4* __restrict__ src,
+                               int4* __restrict__ dst, uint64_t n)
+{
+    uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) dst[i] = __ldg(&src[i]);               // read-only L1/tex cache
+}
+
+__global__ void hbm_read_only(const int4* __restrict__ src,
+                              uint64_t n, int4* sink)
+{
+    int4 acc = {0,0,0,0};
+    uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
+    for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         i < n; i += stride) {
+        int4 v = __ldg(&src[i]);
+        acc.x ^= v.x; acc.y ^= v.y; acc.z ^= v.z; acc.w ^= v.w;
+    }
+    if (threadIdx.x == 0 && blockIdx.x == 0) *sink = acc;  // anti-DCE
+}
+
+static void bench_hbm_unified() {
+    printf("\n╔═══════════════════════════════════════╗\n");
+    printf("║  BENCH: HBM2 Unified-Memory Bandwidth ║\n");
+    printf("╚═══════════════════════════════════════╝\n");
+
+    const uint64_t bytes  = PS3_SANDBOX_SIZE;          // 512 MB
+    const uint64_t n_int4 = bytes / sizeof(int4);      // 32 M elements
+    int4* src; int4* dst; int4* sink;
+    cudaMalloc(&src,  bytes);
+    cudaMalloc(&dst,  bytes);
+    cudaMalloc(&sink, sizeof(int4));
+    cudaMemset(src, 0xAB, bytes);
+
+    dim3 block(256);
+    dim3 grid((unsigned)((n_int4 + block.x - 1) / block.x));
+
+    cudaEvent_t a, b;
+    cudaEventCreate(&a); cudaEventCreate(&b);
+    auto run = [&](auto kernel, int passes, uint64_t bytesPerPass,
+                   const char* label) {
+        for (int w = 0; w < 2; ++w) kernel();           // warmup
+        cudaDeviceSynchronize();
+        cudaEventRecord(a);
+        for (int p = 0; p < passes; ++p) kernel();
+        cudaEventRecord(b);
+        cudaEventSynchronize(b);
+        float ms = 0; cudaEventElapsedTime(&ms, a, b);
+        double gbs = (double)bytesPerPass * passes / (ms / 1000.0) / 1e9;
+        double xPS3 = gbs / 25.6;                        // vs PS3 XDR
+        printf("  %-32s  %7.1f GB/s   (%.1f× PS3 XDR)\n",
+               label, gbs, xPS3);
+    };
+
+    // 1) Sandbox-sized copy with vectorized 16-byte loads/stores.
+    run([&]{ hbm_stream_int4<<<grid, block>>>(src, dst, n_int4); },
+        4, bytes * 2, "int4 stream copy (load+store)");
+
+    // 2) Same but routed through __ldg (read-only cache) — what the
+    //    RSX texture sampler should use on device.
+    run([&]{ hbm_stream_ldg<<<grid, block>>>(src, dst, n_int4); },
+        4, bytes * 2, "__ldg copy (RSX texture path)");
+
+    // 3) Read-only streaming (closest to PPE icache miss + SPU LS DMA in).
+    run([&]{ hbm_read_only<<<2048, 256>>>(src, n_int4, sink); },
+        4, bytes, "read-only streaming load");
+
+    cudaFree(src); cudaFree(dst); cudaFree(sink);
+    cudaEventDestroy(a); cudaEventDestroy(b);
+
+    printf("\n  Reference points:\n");
+    printf("    PS3 XDR (main RAM)    25.6 GB/s\n");
+    printf("    PS3 RSX GDDR3         22.4 GB/s\n");
+    printf("    PS3 EIB (Cell ring)   204.8 GB/s\n");
+    printf("    V100 HBM2 (peak)      900.0 GB/s\n");
+    printf("\n  Implication: a single cudaMalloc(512MB) of HBM2 lets the\n");
+    printf("  emulator put all of XDR + VRAM in one address space with\n");
+    printf("  zero PCIe round-trips. PPE icache, SPU LS DMA fill, RSX\n");
+    printf("  texture fetch and FIFO command read all share the L2.\n");
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Main
 // ═══════════════════════════════════════════════════════════════
 
@@ -688,6 +790,7 @@ int main() {
     printf("═══════════════════════════════════════════\n");
 
     bench_ppe_throughput();
+    bench_hbm_unified();
 
     return (passed == total) ? 0 : 1;
 }
