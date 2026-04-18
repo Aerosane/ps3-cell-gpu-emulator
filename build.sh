@@ -84,10 +84,25 @@ $NVCC $NVCC_FLAGS \
   -lnvrtc -lcuda \
   -o elf_boot_test
 
-echo "[12/12] Building cellGcm HLE shim test..."
+echo "[12/15] Building cellGcm HLE shim test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_hle.cu rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
   -o gcm_hle_test
+
+echo "[13/15] Building MFC DMA engine test..."
+$NVCC $NVCC_FLAGS \
+  test_mfc_dma.cu \
+  -o mfc_dma_test
+
+echo "[14/15] Building SPU channels test..."
+$NVCC $NVCC_FLAGS \
+  test_spu_channels.cu \
+  -o spu_channels_test
+
+echo "[15/15] Building ELF loader unit tests..."
+$NVCC $NVCC_FLAGS \
+  test_elf_loader.cu \
+  -o elf_loader_test
 
 echo ""
 echo "═══════════════════════════════════════════"
@@ -97,4 +112,5 @@ echo "  ./turbo_test  ./hyper_test  ./ppc_jit_test"
 echo "  ./rsx_vulkan_test  ./rsx_replay_test"
 echo "  ./rsx_raster_test  ./rsx_bridge_test"
 echo "  ./elf_boot_test  ./gcm_hle_test"
+echo "  ./mfc_dma_test  ./spu_channels_test  ./elf_loader_test"
 echo "═══════════════════════════════════════════"
