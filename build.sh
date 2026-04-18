@@ -78,6 +78,12 @@ $NVCC $NVCC_FLAGS --extended-lambda \
   test_rsx_bridge.cu rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
   -o rsx_bridge_test
 
+echo "[11/11] Building ELF loader → PPC warp-JIT bringup test..."
+$NVCC $NVCC_FLAGS \
+  test_elf_boot.cu ppc_jit.cu \
+  -lnvrtc -lcuda \
+  -o elf_boot_test
+
 echo ""
 echo "═══════════════════════════════════════════"
 echo "  ✅ Build complete"
@@ -85,4 +91,5 @@ echo "  ./cell_test  ./jit_test  ./mega_jit_test"
 echo "  ./turbo_test  ./hyper_test  ./ppc_jit_test"
 echo "  ./rsx_vulkan_test  ./rsx_replay_test"
 echo "  ./rsx_raster_test  ./rsx_bridge_test"
+echo "  ./elf_boot_test"
 echo "═══════════════════════════════════════════"
