@@ -619,6 +619,41 @@ int main() {
     }
 
 
+    // ── MRT state capture: 3 color planes via SURFACE_COLOR_{A,B,C}_OFFSET ──
+    std::printf("\n── MRT surface state capture:\n");
+    {
+        uint32_t mfifo[32]; size_t mk = 0;
+        mfifo[mk++] = fifo_incr(NV4097_SET_SURFACE_PITCH_A, 1);    mfifo[mk++] = 1280;
+        mfifo[mk++] = fifo_incr(NV4097_SET_SURFACE_PITCH_B, 1);    mfifo[mk++] = 1280;
+        mfifo[mk++] = fifo_incr(NV4097_SET_SURFACE_PITCH_C, 1);    mfifo[mk++] = 1280;
+        mfifo[mk++] = fifo_incr(NV4097_SET_SURFACE_PITCH_D, 1);    mfifo[mk++] = 1280;
+        mfifo[mk++] = fifo_incr(NV4097_SET_SURFACE_COLOR_AOFFSET, 1); mfifo[mk++] = 0x100000;
+        mfifo[mk++] = fifo_incr(NV4097_SET_SURFACE_COLOR_BOFFSET, 1); mfifo[mk++] = 0x200000;
+        mfifo[mk++] = fifo_incr(NV4097_SET_SURFACE_COLOR_COFFSET, 1); mfifo[mk++] = 0x300000;
+        mfifo[mk++] = fifo_incr(NV4097_SET_SURFACE_COLOR_DOFFSET, 1); mfifo[mk++] = 0x400000;
+        mfifo[mk++] = fifo_incr(NV4097_SET_SURFACE_COLOR_TARGET, 1);  mfifo[mk++] = SURFACE_TARGET_MRT2; // ABC
+
+        rsx_process_fifo(&st, mfifo, (uint32_t)mk, vram, 64);
+
+        std::printf("  pitch  A/B/C/D = %u/%u/%u/%u\n",
+                    st.surfacePitchA, st.surfacePitchB,
+                    st.surfacePitchC, st.surfacePitchD);
+        std::printf("  offset A/B/C/D = 0x%x/0x%x/0x%x/0x%x\n",
+                    st.surfaceOffsetA, st.surfaceOffsetB,
+                    st.surfaceOffsetC, st.surfaceOffsetD);
+        std::printf("  target         = 0x%x (MRT2=ABC expected 0x17)\n",
+                    st.surfaceColorTarget);
+        CHECK(st.surfacePitchA == 1280 && st.surfacePitchB == 1280 &&
+              st.surfacePitchC == 1280 && st.surfacePitchD == 1280,
+              "All four SURFACE_PITCH_{A,B,C,D} captured");
+        CHECK(st.surfaceOffsetA == 0x100000 && st.surfaceOffsetB == 0x200000 &&
+              st.surfaceOffsetC == 0x300000 && st.surfaceOffsetD == 0x400000,
+              "All four SURFACE_COLOR_{A,B,C,D}_OFFSET captured");
+        CHECK(st.surfaceColorTarget == SURFACE_TARGET_MRT2,
+              "SURFACE_COLOR_TARGET captured as MRT2 (ABC = 0x17)");
+    }
+
+
     raster.shutdown();
     rsx_shutdown(&st);
     std::free(vram);

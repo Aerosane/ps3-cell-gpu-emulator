@@ -83,6 +83,31 @@ static constexpr uint32_t NV4097_SET_TRANSFORM_PROGRAM       = 0x00000B80;
 static constexpr uint32_t NV4097_SET_VERTEX_DATA_ARRAY_OFFSET = 0x00001680;
 static constexpr uint32_t NV4097_SET_VERTEX_DATA_ARRAY_FORMAT = 0x00001740;
 
+// Surface state — full MRT (up to 4 color planes).
+// Layout on real NV47:
+//   0x0208 PITCH_A   0x020C CLIP_V        0x0210 COLOR_AOFFSET
+//   0x0214 COLOR_BOFFSET                 0x0218 COLOR_BOFFSET? (varies)
+//   0x022C COLOR_COFFSET                 0x0230 COLOR_DOFFSET
+//   0x0234 PITCH_B   0x0238 PITCH_C      0x023C PITCH_D
+// (Approximate — we follow the method indices from NV4097 docs and
+// RPCS3's gcm header.)
+static constexpr uint32_t NV4097_SET_SURFACE_COLOR_COFFSET   = 0x0000022C;
+static constexpr uint32_t NV4097_SET_SURFACE_COLOR_DOFFSET   = 0x00000230;
+static constexpr uint32_t NV4097_SET_SURFACE_PITCH_B         = 0x00000234;
+static constexpr uint32_t NV4097_SET_SURFACE_PITCH_C         = 0x00000238;
+static constexpr uint32_t NV4097_SET_SURFACE_PITCH_D         = 0x0000023C;
+
+// NV4097 surface target encodings.
+enum SurfaceColorTarget : uint32_t {
+    SURFACE_TARGET_NONE = 0,
+    SURFACE_TARGET_A    = 1,
+    SURFACE_TARGET_B    = 2,
+    SURFACE_TARGET_AB   = 3,
+    SURFACE_TARGET_MRT1 = 0x13,  // AB
+    SURFACE_TARGET_MRT2 = 0x17,  // ABC
+    SURFACE_TARGET_MRT3 = 0x1F,  // ABCD
+};
+
 // Draw commands
 static constexpr uint32_t NV4097_SET_BEGIN_END               = 0x00001808;
 static constexpr uint32_t NV4097_DRAW_ARRAYS               = 0x00001814;
@@ -182,9 +207,13 @@ struct RSXState {
     uint32_t surfaceHeight;
     uint32_t surfacePitchA;
     uint32_t surfacePitchB;
+    uint32_t surfacePitchC;
+    uint32_t surfacePitchD;
     uint32_t surfaceOffsetA;   // color buffer A offset in VRAM
     uint32_t surfaceOffsetB;   // color buffer B
-    uint32_t surfaceColorTarget;
+    uint32_t surfaceOffsetC;   // color buffer C (MRT)
+    uint32_t surfaceOffsetD;   // color buffer D (MRT)
+    uint32_t surfaceColorTarget;  // encoded: 0=NONE,1=A,2=B,3=AB,0x13=MRT1,0x17=MRT2,0x1F=MRT3
     uint32_t depthOffset;
     uint32_t depthPitch;
     uint32_t depthFormat;

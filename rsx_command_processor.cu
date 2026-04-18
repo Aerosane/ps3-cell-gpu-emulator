@@ -178,11 +178,26 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     case NV4097_SET_SURFACE_PITCH_A:
         state->surfacePitchA = data;
         return;
+    case NV4097_SET_SURFACE_PITCH_B:
+        state->surfacePitchB = data;
+        return;
+    case NV4097_SET_SURFACE_PITCH_C:
+        state->surfacePitchC = data;
+        return;
+    case NV4097_SET_SURFACE_PITCH_D:
+        state->surfacePitchD = data;
+        return;
     case NV4097_SET_SURFACE_COLOR_AOFFSET:
         state->surfaceOffsetA = data;
         return;
     case NV4097_SET_SURFACE_COLOR_BOFFSET:
         state->surfaceOffsetB = data;
+        return;
+    case NV4097_SET_SURFACE_COLOR_COFFSET:
+        state->surfaceOffsetC = data;
+        return;
+    case NV4097_SET_SURFACE_COLOR_DOFFSET:
+        state->surfaceOffsetD = data;
         return;
     case NV4097_SET_SURFACE_COLOR_TARGET:
         state->surfaceColorTarget = data;
