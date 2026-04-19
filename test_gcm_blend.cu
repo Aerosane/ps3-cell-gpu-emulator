@@ -1,0 +1,172 @@
+// test_gcm_blend.cu — PPC-driven alpha blending.
+// Opaque green triangle first, then a half-alpha red triangle at the
+// same footprint. With SRC_ALPHA / ONE_MINUS_SRC_ALPHA the overlap must
+// become a red/green mix (not pure green, not pure red).
+
+#include <cstdio>
+#include <cstring>
+#include <cstdint>
+#include <vector>
+
+#include "ppc_defs.h"
+#include "rsx_defs.h"
+#include "rsx_raster.h"
+#include "rsx_raster_bridge.h"
+
+using namespace ppc;
+using namespace rsx;
+
+extern "C" {
+    int   megakernel_init();
+    int   megakernel_load(uint64_t, const void*, size_t);
+    int   megakernel_set_entry(uint64_t, uint64_t, uint64_t);
+    float megakernel_run(uint32_t);
+    int   megakernel_read_state(PPEState*);
+    int   megakernel_read_mem(uint64_t, void*, size_t);
+    void  megakernel_shutdown();
+}
+namespace rsx {
+    int  rsx_init(RSXState*);
+    int  rsx_process_fifo(RSXState*, const uint32_t*, uint32_t, uint8_t*, uint32_t);
+    void rsx_shutdown(RSXState*);
+}
+
+static uint32_t ppc_addis(int rD, int rA, int16_t imm) { return (15u<<26)|((uint32_t)rD<<21)|((uint32_t)rA<<16)|(uint16_t)imm; }
+static uint32_t ppc_ori  (int rA, int rS, uint16_t imm){ return (24u<<26)|((uint32_t)rS<<21)|((uint32_t)rA<<16)|imm; }
+static uint32_t ppc_sc   () { return (17u<<26)|(1u<<1); }
+static void emit_li32(std::vector<uint32_t>& c, int rD, uint32_t v) {
+    c.push_back(ppc_addis(rD, 0, (int16_t)(uint16_t)(v>>16)));
+    c.push_back(ppc_ori  (rD, rD, (uint16_t)v));
+}
+static void emit_method(std::vector<uint32_t>& c, uint32_t m, uint32_t d) {
+    emit_li32(c, 3, m); emit_li32(c, 4, d); emit_li32(c, 11, 0xC710u); c.push_back(ppc_sc());
+}
+
+static int fails = 0;
+#define CHECK(x,m) do { if (x) std::printf("  OK: %s\n", m); \
+    else { std::printf("  FAIL: %s\n", m); fails++; } } while(0)
+
+int main() {
+    std::printf("══════════════════════════════════════════════════════\n");
+    std::printf("  PPC alpha-blend scene (SRC_ALPHA / 1-SRC_ALPHA)\n");
+    std::printf("══════════════════════════════════════════════════════\n");
+
+    constexpr uint32_t W = 320, H = 240;
+    constexpr uint64_t kLoadAddr = 0x10000;
+    constexpr uint32_t VRAM_BYTES = 2u * 1024u * 1024u;
+    std::vector<uint8_t> vram(VRAM_BYTES, 0);
+    constexpr uint32_t VB_POS = 0x100000;
+    constexpr uint32_t VB_COL = 0x101000;
+
+    float positions[6 * 3] = {
+        // Opaque green (drawn first)
+          60.f, 200.f, 0.5f,
+         260.f, 200.f, 0.5f,
+         160.f,  40.f, 0.5f,
+        // Translucent red (alpha=0x80), same footprint, drawn second
+          60.f, 200.f, 0.5f,
+         260.f, 200.f, 0.5f,
+         160.f,  40.f, 0.5f,
+    };
+    std::memcpy(vram.data() + VB_POS, positions, sizeof(positions));
+
+    // BGRA in memory: B=0 G=0xFF R=0 A=0xFF → 0xFF00FF00 green.
+    //                 B=0 G=0    R=0xFF A=0x80 → 0x80FF0000 half-alpha red.
+    uint32_t cols[6] = {
+        0xFF00FF00u, 0xFF00FF00u, 0xFF00FF00u,
+        0x80FF0000u, 0x80FF0000u, 0x80FF0000u,
+    };
+    std::memcpy(vram.data() + VB_COL, cols, sizeof(cols));
+
+    std::vector<uint32_t> code; code.reserve(512);
+    emit_method(code, NV4097_SET_SURFACE_CLIP_HORIZONTAL, W);
+    emit_method(code, NV4097_SET_SURFACE_CLIP_VERTICAL,   H);
+    emit_method(code, NV4097_SET_SURFACE_PITCH_A,         W * 4);
+    emit_method(code, NV4097_SET_SURFACE_COLOR_AOFFSET,   0);
+    emit_method(code, NV4097_SET_SURFACE_FORMAT,          SURFACE_A8R8G8B8);
+    emit_method(code, NV4097_SET_VIEWPORT_HORIZONTAL, (W << 16));
+    emit_method(code, NV4097_SET_VIEWPORT_VERTICAL,   (H << 16));
+    emit_method(code, NV4097_SET_COLOR_CLEAR_VALUE,   0xFF202020u);
+    emit_method(code, NV4097_CLEAR_SURFACE,           CLEAR_COLOR | CLEAR_DEPTH);
+
+    // Blend pipeline state. RGB factors low16, alpha high16.
+    //   SRC_ALPHA=0x0302, ONE_MINUS_SRC_ALPHA=0x0303, ONE=0x0001, ADD=0x8006
+    emit_method(code, NV4097_SET_BLEND_ENABLE,       1);
+    emit_method(code, NV4097_SET_BLEND_FUNC_SFACTOR, (0x0302u) | (0x0001u << 16));
+    emit_method(code, NV4097_SET_BLEND_FUNC_DFACTOR, (0x0303u) | (0x0000u << 16));
+    emit_method(code, NV4097_SET_BLEND_EQUATION,     (0x8006u) | (0x8006u << 16));
+
+    emit_method(code, NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 0 * 4,
+                (12u << 8) | (3u << 4) | VERTEX_F);
+    emit_method(code, NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 0 * 4, VB_POS);
+    emit_method(code, NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 3 * 4,
+                (4u << 8) | (4u << 4) | VERTEX_UB);
+    emit_method(code, NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 3 * 4, VB_COL);
+
+    auto emit_draw = [&](uint32_t prim, uint32_t first, uint32_t count) {
+        emit_method(code, NV4097_SET_BEGIN_END, prim);
+        emit_method(code, NV4097_DRAW_ARRAYS, ((count - 1) << 24) | first);
+        emit_method(code, NV4097_SET_BEGIN_END, 0u);
+    };
+    emit_draw(PRIM_TRIANGLES, 0, 3);  // green (opaque under blend → green * 1 + dst * 0 = green)
+    emit_draw(PRIM_TRIANGLES, 3, 3);  // red alpha=0.5 → 0.5*red + 0.5*green
+
+    emit_method(code, NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP, 0);
+    emit_li32(code, 11, 1); code.push_back(ppc_sc());
+
+    std::printf("\n  PPC program: %zu instructions\n", code.size());
+
+    std::vector<uint8_t> codeBE(code.size() * 4);
+    for (size_t i = 0; i < code.size(); ++i) {
+        uint32_t be = __builtin_bswap32(code[i]);
+        std::memcpy(&codeBE[i * 4], &be, 4);
+    }
+
+    if (!megakernel_init()) return 1;
+    megakernel_load(kLoadAddr, codeBE.data(), codeBE.size());
+    megakernel_set_entry(kLoadAddr, 0x00F00000ULL, 0);
+    float ms = megakernel_run(16384);
+    PPEState st{}; megakernel_read_state(&st);
+    std::printf("  megakernel: %.3f ms  halted=%u\n", ms, st.halted);
+    CHECK(st.halted == 1, "PPC program halted");
+
+    uint32_t cursor = 0;
+    megakernel_read_mem(PS3_GCM_FIFO_BASE, &cursor, sizeof(cursor));
+    std::vector<uint32_t> fifo(cursor, 0);
+    megakernel_read_mem(PS3_GCM_FIFO_BASE + 4, fifo.data(), cursor * 4);
+    megakernel_shutdown();
+
+    CudaRasterizer raster; raster.init(W, H);
+    RasterBridge bridge; bridge.attach(&raster); bridge.setVRAM(vram.data(), VRAM_BYTES);
+    RSXState rs; rsx_init(&rs); rs.vulkanEmitter = &bridge;
+
+    rsx_process_fifo(&rs, fifo.data(), cursor, vram.data(), cursor);
+
+    CHECK(rs.blendEnable, "RSX blend enabled via PPC");
+    CHECK(bridge.counters.draws == 2, "2 draws dispatched");
+
+    std::vector<uint32_t> fb(W * H, 0);
+    raster.readbackPlane(0, fb.data());
+
+    uint32_t pureGreen = 0, pureRed = 0, mixed = 0;
+    for (uint32_t i = 0; i < W * H; ++i) {
+        uint32_t p = fb[i];
+        if ((p & 0x00FFFFFFu) == 0x00202020u) continue;
+        uint8_t R = (p >> 16) & 0xFF, G = (p >> 8) & 0xFF, B = p & 0xFF;
+        if (R < 40  && G > 200 && B < 40) ++pureGreen;
+        else if (R > 200 && G < 40  && B < 40) ++pureRed;
+        else if (R > 80  && G > 80  && B < 80) ++mixed;
+    }
+    std::printf("  pureGreen=%u  pureRed=%u  mixed=%u\n", pureGreen, pureRed, mixed);
+
+    // Red triangle is drawn AFTER green and covers the same footprint with
+    // alpha=0.5 → every green pixel must be blended into a yellow/orange
+    // mixed color. There should be essentially no pure-green pixels left,
+    // and very few pure-red pixels (only if aliasing misses the blend).
+    CHECK(mixed > 5000,    "Blended-color pixels (green+red mix) present");
+    CHECK(pureGreen < 100, "Very few unblended green pixels");
+
+    raster.shutdown(); rsx_shutdown(&rs);
+    std::printf("\n%s (%d failures)\n", fails == 0 ? "ALL PASSED" : "SOME FAILED", fails);
+    return fails ? 1 : 0;
+}
