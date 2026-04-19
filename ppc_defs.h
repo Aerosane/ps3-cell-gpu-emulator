@@ -103,11 +103,14 @@ PPE_HD inline uint32_t LK(uint32_t inst) { return inst & 1; }
 PPE_HD inline uint32_t BO(uint32_t inst) { return (inst >> 21) & 0x1F; }
 PPE_HD inline uint32_t BI(uint32_t inst) { return (inst >> 16) & 0x1F; }
 
-// SPR encoding (split field: bits 16-20 | bits 11-15, swapped)
+// SPR encoding: bits 11-20 of insn hold raw 10-bit field.
+// Real SPR number = spr_5:9 || spr_0:4, where spr_0:4 is in insn bits 11-15
+// (== (inst>>16)&0x1F in LSB numbering) and spr_5:9 is in bits 16-20
+// (== (inst>>11)&0x1F).
 PPE_HD inline uint32_t SPR(uint32_t inst) {
-    uint32_t lo = (inst >> 16) & 0x1F;
-    uint32_t hi = (inst >> 11) & 0x1F;
-    return (lo << 5) | hi;
+    uint32_t spr_0_4 = (inst >> 16) & 0x1F;   // insn[11:15]
+    uint32_t spr_5_9 = (inst >> 11) & 0x1F;   // insn[16:20]
+    return (spr_5_9 << 5) | spr_0_4;
 }
 
 // CRM field for mtcrf
