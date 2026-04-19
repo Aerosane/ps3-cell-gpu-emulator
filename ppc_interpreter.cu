@@ -1860,6 +1860,73 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             __threadfence();
             break;
 
+        // ── VMX load/store (quadword, 16-byte aligned) ─────────
+        case 103: { // lvx VRD, rA, rB
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            ea &= ~0xFULL;
+            uint32_t vd = RD(inst);
+            s.vr[vd][0] = mem_read32(mem, ea + 0);
+            s.vr[vd][1] = mem_read32(mem, ea + 4);
+            s.vr[vd][2] = mem_read32(mem, ea + 8);
+            s.vr[vd][3] = mem_read32(mem, ea + 12);
+            break;
+        }
+        case 359: // lvxl (same as lvx for us)
+        {
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            ea &= ~0xFULL;
+            uint32_t vd = RD(inst);
+            s.vr[vd][0] = mem_read32(mem, ea + 0);
+            s.vr[vd][1] = mem_read32(mem, ea + 4);
+            s.vr[vd][2] = mem_read32(mem, ea + 8);
+            s.vr[vd][3] = mem_read32(mem, ea + 12);
+            break;
+        }
+        case 231: { // stvx VRS, rA, rB
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            ea &= ~0xFULL;
+            uint32_t vs = RD(inst);
+            mem_write32(mem, ea + 0,  s.vr[vs][0]);
+            mem_write32(mem, ea + 4,  s.vr[vs][1]);
+            mem_write32(mem, ea + 8,  s.vr[vs][2]);
+            mem_write32(mem, ea + 12, s.vr[vs][3]);
+            break;
+        }
+        case 487: { // stvxl
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            ea &= ~0xFULL;
+            uint32_t vs = RD(inst);
+            mem_write32(mem, ea + 0,  s.vr[vs][0]);
+            mem_write32(mem, ea + 4,  s.vr[vs][1]);
+            mem_write32(mem, ea + 8,  s.vr[vs][2]);
+            mem_write32(mem, ea + 12, s.vr[vs][3]);
+            break;
+        }
+        case 7: { // lvebx — byte element (we treat as full lvx for simplicity)
+        case 39:  // lvehx
+        case 71: // lvewx
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            ea &= ~0xFULL;
+            uint32_t vd = RD(inst);
+            s.vr[vd][0] = mem_read32(mem, ea + 0);
+            s.vr[vd][1] = mem_read32(mem, ea + 4);
+            s.vr[vd][2] = mem_read32(mem, ea + 8);
+            s.vr[vd][3] = mem_read32(mem, ea + 12);
+            break;
+        }
+        case 135: // stvebx
+        case 167: // stvehx
+        case 199: { // stvewx
+            uint64_t ea = ((ra == 0) ? 0 : s.gpr[ra]) + s.gpr[rb];
+            ea &= ~0xFULL;
+            uint32_t vs = RD(inst);
+            mem_write32(mem, ea + 0,  s.vr[vs][0]);
+            mem_write32(mem, ea + 4,  s.vr[vs][1]);
+            mem_write32(mem, ea + 8,  s.vr[vs][2]);
+            mem_write32(mem, ea + 12, s.vr[vs][3]);
+            break;
+        }
+
         default:
             return 2;
         }
@@ -2228,6 +2295,35 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
         break;
     }
 
+    case 4: {
+        // VMX / Altivec. Minimal subset for CRT struct-zeroing + memcpy fast paths.
+        uint32_t vd = (inst >> 21) & 0x1F;
+        uint32_t va = (inst >> 16) & 0x1F;
+        uint32_t vb = (inst >> 11) & 0x1F;
+        uint32_t xo = inst & 0x7FF;   // VX-form uses 11-bit XO
+        switch (xo) {
+            case 1220: // vxor
+                for (int i = 0; i < 4; i++) s.vr[vd][i] = s.vr[va][i] ^ s.vr[vb][i];
+                break;
+            case 1156: // vor
+                for (int i = 0; i < 4; i++) s.vr[vd][i] = s.vr[va][i] | s.vr[vb][i];
+                break;
+            case 1028: // vand
+                for (int i = 0; i < 4; i++) s.vr[vd][i] = s.vr[va][i] & s.vr[vb][i];
+                break;
+            case 1092: // vandc
+                for (int i = 0; i < 4; i++) s.vr[vd][i] = s.vr[va][i] & ~s.vr[vb][i];
+                break;
+            case 1284: // vnor
+                for (int i = 0; i < 4; i++) s.vr[vd][i] = ~(s.vr[va][i] | s.vr[vb][i]);
+                break;
+            default:
+                // Treat unknown VMX as NOP; PC still advances below.
+                break;
+        }
+        break;
+    }
+
     default:
         return 2; // unimplemented primary opcode
     }
@@ -2253,6 +2349,17 @@ __global__ void ppeMegakernel(PPEState* states, uint8_t* mem,
     PPEState& s = states[tid];
 
     for (uint32_t cycle = 0; cycle < maxCycles && !s.halted; cycle++) {
+        // Bogus-call rescue: if we're executing from a region that reads
+        // as all zeros (uninitialized BSS, un-relocated OPD targets),
+        // synthesize a `blr` so we unwind back into real code instead of
+        // linearly strolling through megabytes of zero memory.
+        {
+            uint32_t fetch = mem_read32(mem, s.pc);
+            if (fetch == 0 && s.lr != 0 && s.lr != s.pc) {
+                s.pc = s.lr;
+                continue;
+            }
+        }
         int result = execOne(s, mem, hle_log, hle_signal);
         if (result == 1) break; // halted
         if (result == 2) {

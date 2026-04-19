@@ -48,6 +48,10 @@ struct PPEState {
     uint64_t tbl;      // Time Base Lower
     uint64_t tbu;      // Time Base Upper
 
+    // Vector/Altivec (VMX) registers — 32 × 128-bit
+    uint32_t vr[32][4];
+    uint32_t vscr;
+
     // Execution state
     uint32_t halted;   // 1 = stopped (HLE syscall / breakpoint)
     uint32_t cycles;   // Cycle counter for throttling
