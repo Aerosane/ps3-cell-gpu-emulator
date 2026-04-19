@@ -2312,6 +2312,22 @@ int megakernel_read_state(PPEState* out) {
     return 1;
 }
 
+// Push a PPE state back to the device (used by the host-side HLE
+// dispatcher to simulate a `blr` and return value after handling an
+// imported function call).
+int megakernel_write_state(const PPEState* in) {
+    if (!g_ctx.ready || !in) return 0;
+    cudaMemcpy(g_ctx.d_states, in, sizeof(PPEState), cudaMemcpyHostToDevice);
+    return 1;
+}
+
+// Write guest memory (mirror of megakernel_load for smaller regions).
+int megakernel_write_mem(uint64_t offset, const void* src, size_t size) {
+    if (!g_ctx.ready || offset + size > PS3_SANDBOX_SIZE) return 0;
+    cudaMemcpy(g_ctx.d_mem + offset, src, size, cudaMemcpyHostToDevice);
+    return 1;
+}
+
 // Readback HLE log
 int megakernel_read_hle_log(uint32_t* out, int maxEntries) {
     if (!g_ctx.ready || !out) return 0;

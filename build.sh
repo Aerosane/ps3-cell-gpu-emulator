@@ -6,7 +6,7 @@ set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 NVCC=/usr/local/cuda-12.9/bin/nvcc
-NVCC_FLAGS="-O3 -arch=sm_70 --compiler-options=-fPIC -Wno-deprecated-gpu-targets"
+NVCC_FLAGS="-O3 -arch=sm_70 --compiler-options=-fPIC -Wno-deprecated-gpu-targets --extended-lambda"
 LDFLAGS_EXTRA="-lz"
 
 echo "╔══════════════════════════════════════════╗"
@@ -215,11 +215,18 @@ $NVCC $NVCC_FLAGS \
   $LDFLAGS_EXTRA \
   -o self_phdr_scan_test
 
-echo "[34/34] Building PPU HLE FNID → name resolver..."
+echo "[34/35] Building PPU HLE FNID → name resolver..."
 $NVCC $NVCC_FLAGS \
   test_ppu_hle_resolve.cu \
   $LDFLAGS_EXTRA \
   -o ppu_hle_resolve_test
+
+echo "[35/35] Building real SDK triangle-ELF boot attempt..."
+$NVCC $NVCC_FLAGS \
+  test_triangle_boot.cu ppc_interpreter.o \
+  rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
+  $LDFLAGS_EXTRA \
+  -o triangle_boot_test
 
 echo ""
 echo "═══════════════════════════════════════════"
@@ -230,5 +237,5 @@ echo "  ./rsx_vulkan_test  ./rsx_replay_test"
 echo "  ./rsx_raster_test  ./rsx_bridge_test"
 echo "  ./elf_boot_test  ./gcm_hle_test"
 echo "  ./mfc_dma_test  ./spu_channels_test  ./elf_loader_test"
-echo "  ./gcm_syscall_test  ./gcm_frame_test  ./gcm_prims_test  ./gcm_depth_test  ./gcm_blend_test  ./gcm_scissor_test  ./gcm_cull_test  ./gcm_elf_test  ./gcm_stencil_test  ./gcm_indexed_test  ./gcm_vp_test  ./gcm_fp_tex_test  ./gcm_mrt_test  ./gcm_vp_exec_test  ./real_self_test  ./real_self_exec_test  ./real_self_disasm_test  ./self_phdr_scan_test  ./ppu_hle_resolve_test"
+echo "  ./gcm_syscall_test  ./gcm_frame_test  ./gcm_prims_test  ./gcm_depth_test  ./gcm_blend_test  ./gcm_scissor_test  ./gcm_cull_test  ./gcm_elf_test  ./gcm_stencil_test  ./gcm_indexed_test  ./gcm_vp_test  ./gcm_fp_tex_test  ./gcm_mrt_test  ./gcm_vp_exec_test  ./real_self_test  ./real_self_exec_test  ./real_self_disasm_test  ./self_phdr_scan_test  ./ppu_hle_resolve_test  ./triangle_boot_test"
 echo "═══════════════════════════════════════════"
