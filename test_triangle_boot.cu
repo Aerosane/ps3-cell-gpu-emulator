@@ -192,6 +192,7 @@ int main() {
     // is the callee. This gives us a call-graph histogram without
     // instrumenting the interpreter.
     std::unordered_map<uint32_t, uint64_t> blTargets;
+    std::unordered_map<uint32_t, uint64_t> bogusCallSites;
     uint64_t prevLR = 0;
     for (steps = 0; steps < maxSteps && !stopped; ++steps) {
         megakernel_run(1);
@@ -216,6 +217,12 @@ int main() {
         // current PC is the callee entry.
         if (st.lr != prevLR) {
             blTargets[pc]++;
+            // If we jumped to a bogus (out-of-code-range) PC, the callsite
+            // is LR-4 on PPC64 (bl returns to insn after bl; LR holds that).
+            if (pc >= 0x30330 || pc < 0x10000) {
+                uint32_t site = (uint32_t)(st.lr - 4);
+                bogusCallSites[site]++;
+            }
             prevLR = st.lr;
         }
         if ((steps % 200000) == 0 && pc != lastReportedPc) {
@@ -303,6 +310,20 @@ int main() {
         std::sort(sorted.begin(), sorted.end(),
                   [](const auto& a, const auto& b) { return a.second > b.second; });
         std::printf("  top bl targets (function entry → call count):\n");
+        int n = 0;
+        for (const auto& p : sorted) {
+            std::printf("    0x%08x  %llu\n", p.first, (unsigned long long)p.second);
+            if (++n >= 10) break;
+        }
+    }
+    // Bogus-call sites: addresses that issued a bl to an out-of-range
+    // target. These are the callers whose function pointer is broken.
+    if (!bogusCallSites.empty()) {
+        std::vector<std::pair<uint32_t, uint64_t>> sorted(
+            bogusCallSites.begin(), bogusCallSites.end());
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        std::printf("  bogus-call sites (LR-4 of rescued bl/bctrl):\n");
         int n = 0;
         for (const auto& p : sorted) {
             std::printf("    0x%08x  %llu\n", p.first, (unsigned long long)p.second);
