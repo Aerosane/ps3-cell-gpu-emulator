@@ -143,6 +143,14 @@ int main() {
     megakernel_load(0, mem.data(), loadSpan);
     std::printf("  loaded %lu bytes; entry=0x%x toc=0x%x\n",
                 (unsigned long)loadSpan, descEntry, descTOC);
+    // DEBUG: verify critical TOC entry present in host mem and GPU mem
+    {
+        uint32_t hostVal = be32(mem.data() + 0x40fd8);
+        uint8_t gpubuf[4] = {};
+        megakernel_read_mem(0x40fd8, gpubuf, 4);
+        uint32_t gpuVal = ((uint32_t)gpubuf[0]<<24)|((uint32_t)gpubuf[1]<<16)|((uint32_t)gpubuf[2]<<8)|gpubuf[3];
+        std::printf("  DBG mem[0x40fd8]: host=0x%x  gpu=0x%x  (should match)\n", hostVal, gpuVal);
+    }
 
     megakernel_set_entry(descEntry, 0x00F00000ULL, descTOC);
 
@@ -169,18 +177,17 @@ int main() {
         megakernel_read_state(&st);
         uint32_t pc = (uint32_t)st.pc;
         // Trace entry/exit boundaries of the looping CRT function
-        if (steps >= 2400 && steps <= 2490 && traceCount < traceMax) {
+        if (pc == 0x1b2b4 && traceCount < traceMax) {
             uint8_t ibuf[4] = {};
             megakernel_read_mem(pc, ibuf, 4);
             uint32_t ibytes = ((uint32_t)ibuf[0]<<24)|((uint32_t)ibuf[1]<<16)|((uint32_t)ibuf[2]<<8)|ibuf[3];
-            std::printf("  trace#%d step=%d PC=0x%x(%08x) LR=0x%llx CTR=0x%llx r0=0x%llx r3=0x%llx r11=0x%llx r12=0x%llx\n",
-                        traceCount, steps, pc, ibytes,
-                        (unsigned long long)st.lr,
-                        (unsigned long long)st.ctr,
-                        (unsigned long long)st.gpr[0],
-                        (unsigned long long)st.gpr[3],
-                        (unsigned long long)st.gpr[11],
-                        (unsigned long long)st.gpr[12]);
+            std::printf("  trace#%d step=%d PC=0x%x r6=0x%llx r7=0x%llx r8=0x%llx r9=0x%llx r31=0x%llx\n",
+                        traceCount, steps, pc,
+                        (unsigned long long)st.gpr[6],
+                        (unsigned long long)st.gpr[7],
+                        (unsigned long long)st.gpr[8],
+                        (unsigned long long)st.gpr[9],
+                        (unsigned long long)st.gpr[31]);
             traceCount++;
         }
         if ((steps % 200000) == 0 && pc != lastReportedPc) {

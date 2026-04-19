@@ -442,6 +442,10 @@ enum LV2Syscall : uint32_t {
     SYS_TIME_GET_CURRENT_TIME   = 145,
     SYS_TIME_GET_TIMEBASE_FREQUENCY = 147,
 
+    // TTY / debug
+    SYS_TTY_READ                = 402,
+    SYS_TTY_WRITE               = 403,
+
     // SPU management
     SYS_RAW_SPU_CREATE          = 160,
     SYS_RAW_SPU_DESTROY         = 161,

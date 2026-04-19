@@ -210,6 +210,20 @@ __device__ static void handleSyscall(PPEState& s, uint8_t* mem, uint32_t* hle_lo
         s.gpr[4] = 79800000ULL; // 79.8 MHz
         break;
 
+    // ─── TTY / debug output ──────────────────────────────────────
+    case SYS_TTY_READ:
+        // (fd, buf, len, nread_ptr) — signal 0 bytes read
+        if (s.gpr[6] && s.gpr[6] < PS3_SANDBOX_SIZE - 4)
+            mem_write32(mem, s.gpr[6], 0);
+        s.gpr[3] = 0;
+        break;
+    case SYS_TTY_WRITE:
+        // (fd, buf, len, nwritten_ptr) — swallow output, pretend all written
+        if (s.gpr[6] && s.gpr[6] < PS3_SANDBOX_SIZE - 4)
+            mem_write32(mem, s.gpr[6], (uint32_t)s.gpr[5]);
+        s.gpr[3] = 0;
+        break;
+
     // ─── Timer ───────────────────────────────────────────────────
     case SYS_TIMER_CREATE:
         s.gpr[3] = 0;

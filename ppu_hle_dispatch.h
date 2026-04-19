@@ -26,6 +26,8 @@
 #include "ppc_defs.h"
 #include "ppu_hle_names.h"
 
+extern "C" int megakernel_write_mem(uint64_t addr, const void* src, size_t n);
+
 struct PpuHleDispatcher {
     struct Entry {
         uint32_t fnid;
@@ -108,6 +110,20 @@ struct PpuHleDispatcher {
 
         st.gpr[3] = retval;
         st.pc     = st.lr;    // blr
+        // PPC64 ELFv1: real PRX stubs save caller's r2 to [r1+0x28]
+        // before TOC switch, and caller issues `ld r2, 0x28(r1)` right
+        // after the bl to restore. Since we skip the real stub code,
+        // emulate that save so r2 survives the HLE call.
+        {
+            uint32_t sp = (uint32_t)st.gpr[1];
+            uint8_t be[8];
+            uint64_t v = st.gpr[2];
+            for (int i = 0; i < 8; ++i) be[i] = (uint8_t)(v >> (56 - 8*i));
+            if (sp + 0x30 <= memSize) {
+                std::memcpy(mem + sp + 0x28, be, 8);
+                megakernel_write_mem((uint64_t)sp + 0x28, be, 8);
+            }
+        }
         return e.name.c_str();
     }
 
