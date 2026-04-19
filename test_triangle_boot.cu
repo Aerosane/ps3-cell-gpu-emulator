@@ -30,6 +30,7 @@ extern "C" {
     int   megakernel_write_state(const ppc::PPEState*);
     int   megakernel_read_mem(uint64_t, void*, size_t);
     int   megakernel_write_mem(uint64_t, const void*, size_t);
+    int   megakernel_read_hle_log(uint32_t*, int);
     void  megakernel_shutdown();
 }
 
@@ -154,26 +155,42 @@ int main() {
                  kv.second.mod, kv.second.name);
     }
 
-    // Single-step and dispatch HLE trampolines as we encounter them.
-    int hleHits = 0, steps = 0, maxSteps = 100000;
+    // Single-step dispatch — reliable capture of trampoline entries.
+    int hleHits = 0, steps = 0, maxSteps = 2000000;
     bool stopped = false;
+    int stallCount = 0;
+    uint32_t stallPc = 0;
+    uint32_t lastReportedPc = 0;
     for (steps = 0; steps < maxSteps && !stopped; ++steps) {
         megakernel_run(1);
         ppc::PPEState st{};
         megakernel_read_state(&st);
         uint32_t pc = (uint32_t)st.pc;
+        if ((steps % 200000) == 0 && pc != lastReportedPc) {
+            std::printf("  progress: step=%d PC=0x%x LR=0x%llx\n",
+                        steps, pc, (unsigned long long)st.lr);
+            lastReportedPc = pc;
+        }
+        if (pc == stallPc) {
+            if (++stallCount > 32768) {
+                std::printf("  stalled at PC=0x%x for %d steps; stopping.\n",
+                            pc, stallCount);
+                break;
+            }
+        } else {
+            stallPc = pc; stallCount = 0;
+        }
         if (disp.byPc.count(pc)) {
             bool haltReq = false;
             const char* nm = disp.dispatch(st, mem.data(), mem.size(),
                                            haltReq);
             megakernel_write_state(&st);
             hleHits++;
-            if (hleHits <= 12 || haltReq) {
-                std::printf("  HLE #%d step=%d  %s::%s  r3→0x%llx  LR→0x%llx\n",
-                            hleHits, steps,
+            if (hleHits <= 40 || haltReq) {
+                std::printf("  HLE #%d step=%d PC=0x%x  %s::%s  LR→0x%llx\n",
+                            hleHits, steps, pc,
                             disp.byPc[pc].mod.c_str(),
                             nm ? nm : "?",
-                            (unsigned long long)st.gpr[3],
                             (unsigned long long)st.pc);
             }
             if (haltReq) {
@@ -188,8 +205,7 @@ int main() {
             break;
         }
     }
-    std::printf("  total steps=%d  HLE calls dispatched=%d\n",
-                steps, hleHits);
+    std::printf("  steps=%d  HLE=%d\n", steps, hleHits);
     {
         ppc::PPEState fs{};
         megakernel_read_state(&fs);
@@ -198,6 +214,21 @@ int main() {
                     (unsigned long long)fs.lr,
                     (unsigned long long)fs.gpr[1],
                     (unsigned long long)fs.gpr[3]);
+    }
+    {
+        uint32_t log[257] = {};
+        int n = megakernel_read_hle_log(log, 256);
+        if (n > 0) {
+            std::printf("  unknown syscall log (%d entries):", n);
+            int seen = 0;
+            for (int i = 0; i < n && seen < 16; ++i) {
+                std::printf(" 0x%x", log[1 + i]);
+                seen++;
+            }
+            std::printf("\n");
+        } else {
+            std::printf("  no unknown syscalls logged\n");
+        }
     }
     disp.print_summary();
     CHECK(hleHits >= 1, "at least one HLE dispatch happened");

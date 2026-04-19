@@ -364,10 +364,69 @@ __device__ static void handleSyscall(PPEState& s, uint8_t* mem, uint32_t* hle_lo
         s.gpr[3] = 0; // CELL_OK (no-op for bump allocator)
         break;
 
-    case SYS_MEMORY_GET_PAGE_SIZE:
+    case SYS_MEMORY_GET_PAGE_ATTRIBUTE:
+        // r3 = address; r4 = sys_page_attr_t* (output)
+        if (s.gpr[4] && s.gpr[4] + 32 < PS3_SANDBOX_SIZE) {
+            // zero the 32-byte page attribute struct, then stamp
+            // attribute=read/write, page_size=0x10000 (64 KB).
+            for (int i = 0; i < 32; i += 4) mem_write32(mem, s.gpr[4] + i, 0);
+            mem_write32(mem, s.gpr[4] + 0,  0x00000000); // attribute hi
+            mem_write32(mem, s.gpr[4] + 4,  0x00040000); // page_size 64KB
+            mem_write32(mem, s.gpr[4] + 8,  0);
+            mem_write32(mem, s.gpr[4] + 12, 0);
+        }
         s.gpr[3] = 0;
-        s.gpr[4] = 4096; // 4KB
         break;
+
+    case SYS_MEMORY_GET_USER_MEMORY_SIZE: {
+        // r3 = sys_memory_info_t* (2 × u32 BE: total_user_memory, available)
+        const uint32_t total = 0x10000000; // 256 MB
+        const uint32_t avail = 0x08000000; // 128 MB
+        if (s.gpr[3] && s.gpr[3] + 8 < PS3_SANDBOX_SIZE) {
+            mem_write32(mem, s.gpr[3] + 0, total);
+            mem_write32(mem, s.gpr[3] + 4, avail);
+        }
+        s.gpr[3] = 0;
+        break;
+    }
+
+    case SYS_MEMORY_GET_USER_MEMORY_STAT:
+        if (s.gpr[3] && s.gpr[3] + 16 < PS3_SANDBOX_SIZE) {
+            for (int i = 0; i < 16; i += 4) mem_write32(mem, s.gpr[3] + i, 0);
+        }
+        s.gpr[3] = 0;
+        break;
+
+    case SYS_MEMORY_CONTAINER_CREATE:
+    case SYS_MEMORY_CONTAINER_CREATE2: {
+        // r3 = out id*, r4 = size
+        uint32_t id = hle_alloc_id();
+        if (s.gpr[3] && s.gpr[3] + 4 < PS3_SANDBOX_SIZE)
+            mem_write32(mem, s.gpr[3], id);
+        s.gpr[3] = 0;
+        break;
+    }
+    case SYS_MEMORY_CONTAINER_DESTROY:
+    case SYS_MEMORY_CONTAINER_DESTROY2:
+        s.gpr[3] = 0;
+        break;
+    case SYS_MEMORY_CONTAINER_GET_SIZE:
+        if (s.gpr[3] && s.gpr[3] + 8 < PS3_SANDBOX_SIZE) {
+            mem_write32(mem, s.gpr[3] + 0, 0x04000000);
+            mem_write32(mem, s.gpr[3] + 4, 0x02000000);
+        }
+        s.gpr[3] = 0;
+        break;
+    case SYS_MEMORY_ALLOCATE_FROM_CONTAINER: {
+        uint64_t size = s.gpr[3];
+        uint64_t align = 0x10000;
+        uint64_t ptr = (g_heapPtr + align - 1) & ~(align - 1);
+        if (s.gpr[5] && s.gpr[5] + 4 < PS3_SANDBOX_SIZE)
+            mem_write32(mem, s.gpr[5], (uint32_t)ptr);
+        g_heapPtr = ptr + size;
+        s.gpr[3] = 0;
+        break;
+    }
 
     case SYS_MMAPPER_ALLOCATE_ADDRESS: {
         // r3 = size, r4 = flags, r5 = alignment, r6 = alloc_addr_ptr
