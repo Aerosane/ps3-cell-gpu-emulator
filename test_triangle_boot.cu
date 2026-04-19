@@ -281,11 +281,32 @@ int main() {
         if (n > 0) {
             std::printf("  unknown syscall log (%d entries):", n);
             int seen = 0;
+            std::unordered_map<uint32_t, int> opCounts;
             for (int i = 0; i < n && seen < 16; ++i) {
                 std::printf(" 0x%x", log[1 + i]);
                 seen++;
             }
             std::printf("\n");
+            for (int i = 0; i < n; ++i) {
+                uint32_t tag = log[1 + i];
+                if ((tag & 0xFF000000u) == 0xDE000000u) {
+                    uint32_t key = tag & 0xFFFFFu;  // OPCD<<10 | XO
+                    opCounts[key]++;
+                }
+            }
+            if (!opCounts.empty()) {
+                std::vector<std::pair<uint32_t,int>> v(opCounts.begin(), opCounts.end());
+                std::sort(v.begin(), v.end(),
+                          [](auto& a, auto& b){ return a.second > b.second; });
+                std::printf("  unimpl opcode histogram (OPCD/XO → count):\n");
+                int k = 0;
+                for (auto& p : v) {
+                    uint32_t opcd = (p.first >> 10) & 0x3F;
+                    uint32_t xo   =  p.first        & 0x3FF;
+                    std::printf("    OPCD=%u XO=%u  (%d)\n", opcd, xo, p.second);
+                    if (++k >= 12) break;
+                }
+            }
         } else {
             std::printf("  no unknown syscalls logged\n");
         }

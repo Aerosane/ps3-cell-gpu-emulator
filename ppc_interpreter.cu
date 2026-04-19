@@ -2363,6 +2363,13 @@ __global__ void ppeMegakernel(PPEState* states, uint8_t* mem,
                               (s.pc < d_codeBegin || s.pc >= d_codeEnd);
             uint32_t fetch = mem_read32(mem, s.pc);
             if ((fetch == 0 || outOfRange) && s.lr != 0 && s.lr != s.pc) {
+                // Callers using this rescue are invoking an unresolved
+                // function pointer. Return "success" (r3=0) so pollers of
+                // the form `if (rc != 0) goto retry;` terminate. We
+                // deliberately do NOT stomp CR because the bctrl sequence
+                // restores r2 after the call and the next real insn may
+                // read CR from a later comparison unrelated to r3.
+                s.gpr[3] = 0;
                 s.pc = s.lr;
                 continue;
             }
@@ -2378,7 +2385,11 @@ __global__ void ppeMegakernel(PPEState* states, uint8_t* mem,
             if (hle_log) {
                 uint32_t idx = atomicAdd(hle_log, 1);
                 if (idx < 255) {
-                    hle_log[1 + idx] = 0xDEAD0000 | OPCD(inst);
+                    // Pack OPCD+XO into the low 24 bits so post-run
+                    // analysis can count which opcodes we're missing.
+                    hle_log[1 + idx] = 0xDE000000u |
+                                       ((OPCD(inst) & 0x3Fu) << 10) |
+                                       (((inst >> 1) & 0x3FFu));
                 }
             }
             s.pc += 4;
@@ -2535,7 +2546,11 @@ int megakernel_read_hle_log(uint32_t* out, int maxEntries) {
     if (!g_ctx.ready || !out) return 0;
     cudaMemcpy(out, g_ctx.d_hle_log, (1 + maxEntries) * sizeof(uint32_t),
                cudaMemcpyDeviceToHost);
-    return out[0]; // count
+    // out[0] is the raw on-device counter and may exceed the capped
+    // slot count. Clamp to what actually fits in the caller's buffer
+    // so post-run iterators don't walk off the end.
+    uint32_t raw = out[0];
+    return (int)(raw < (uint32_t)maxEntries ? raw : (uint32_t)maxEntries);
 }
 
 void megakernel_shutdown() {
