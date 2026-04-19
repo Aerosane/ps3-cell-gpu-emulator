@@ -169,21 +169,18 @@ int main() {
         megakernel_read_state(&st);
         uint32_t pc = (uint32_t)st.pc;
         // Trace entry/exit boundaries of the looping CRT function
-        if (steps >= 60 && steps <= 140 && traceCount < traceMax) {
-            uint32_t ibytesBE[2] = {0, 0};
+        if (steps >= 2400 && steps <= 2490 && traceCount < traceMax) {
             uint8_t ibuf[4] = {};
             megakernel_read_mem(pc, ibuf, 4);
             uint32_t ibytes = ((uint32_t)ibuf[0]<<24)|((uint32_t)ibuf[1]<<16)|((uint32_t)ibuf[2]<<8)|ibuf[3];
-            uint8_t lrbuf[4] = {};
-            megakernel_read_mem(0xeffe94, lrbuf, 4);
-            uint32_t savedLrSlot = ((uint32_t)lrbuf[0]<<24)|((uint32_t)lrbuf[1]<<16)|((uint32_t)lrbuf[2]<<8)|lrbuf[3];
-            (void)ibytesBE;
-            std::printf("  trace#%d step=%d PC=0x%x(%08x) LR=0x%llx r0=0x%llx r1=0x%llx savedLr[0xeffe90]=0x%x\n",
+            std::printf("  trace#%d step=%d PC=0x%x(%08x) LR=0x%llx CTR=0x%llx r0=0x%llx r3=0x%llx r11=0x%llx r12=0x%llx\n",
                         traceCount, steps, pc, ibytes,
                         (unsigned long long)st.lr,
+                        (unsigned long long)st.ctr,
                         (unsigned long long)st.gpr[0],
-                        (unsigned long long)st.gpr[1],
-                        savedLrSlot);
+                        (unsigned long long)st.gpr[3],
+                        (unsigned long long)st.gpr[11],
+                        (unsigned long long)st.gpr[12]);
             traceCount++;
         }
         if ((steps % 200000) == 0 && pc != lastReportedPc) {
