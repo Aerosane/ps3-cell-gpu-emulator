@@ -2256,14 +2256,18 @@ __global__ void ppeMegakernel(PPEState* states, uint8_t* mem,
         int result = execOne(s, mem, hle_log, hle_signal);
         if (result == 1) break; // halted
         if (result == 2) {
-            // Unimplemented — log the PC and instruction, then skip
-            uint32_t inst = mem_read32(mem, s.pc - 4); // already advanced
+            // Unimplemented — read the stuck instruction, log it, then
+            // step over it so we don't spin. Advancing PC is required
+            // for any program that uses ops we haven't implemented yet
+            // (e.g. VMX struct-zeroing, fused FP ops).
+            uint32_t inst = mem_read32(mem, s.pc);
             if (hle_log) {
                 uint32_t idx = atomicAdd(hle_log, 1);
                 if (idx < 255) {
                     hle_log[1 + idx] = 0xDEAD0000 | OPCD(inst);
                 }
             }
+            s.pc += 4;
         }
     }
 

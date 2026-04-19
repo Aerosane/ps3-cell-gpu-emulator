@@ -43,6 +43,20 @@ struct PpuHleDispatcher {
     uint32_t tlsNext     = 0x00E00000;
     uint64_t virtTime    = 0;
 
+    // Libc heap scratch arena (used when we HLE-patch the ELF's
+    // internal allocator; address grows upward).
+    uint32_t libcHeapBase = 0x00900000;
+    uint32_t libcHeapNext = 0x00900000;
+    uint32_t libcHeapEnd  = 0x00D00000;
+
+    // Extra PC-indexed handlers for non-import functions we want to
+    // short-circuit (e.g. the ELF's internal malloc/free).
+    enum class Builtin { Malloc, Free, None };
+    std::unordered_map<uint32_t, Builtin> builtinByPc;
+
+    void addBuiltinMalloc(uint32_t pc) { builtinByPc[pc] = Builtin::Malloc; }
+    void addBuiltinFree(uint32_t pc)   { builtinByPc[pc] = Builtin::Free;   }
+
     void add(uint32_t pc, uint32_t fnid,
              const char* mod, const char* name) {
         byPc[pc] = { fnid, mod, name };
@@ -57,6 +71,41 @@ struct PpuHleDispatcher {
                          bool& halted_out) {
         halted_out = false;
         uint32_t pc = (uint32_t)st.pc;
+        // Check builtin PC patches first (ELF-internal malloc/free).
+        {
+            auto bit = builtinByPc.find(pc);
+            if (bit != builtinByPc.end()) {
+                callCount++;
+                if (bit->second == Builtin::Malloc) {
+                    // r3 = size (PS3 libc wrapper passes ptr-to-heap as
+                    // r3 and size as r4; but the outer wrapper at 0x1fed4
+                    // is called with r3=size, r4=alignment maybe).  We
+                    // treat r3 OR r4 as the size — pick the largest
+                    // non-zero value up to 16 MB.
+                    uint64_t s3 = st.gpr[3], s4 = st.gpr[4];
+                    uint64_t size = (s3 && s3 < 0x1000000) ? s3 :
+                                    (s4 && s4 < 0x1000000) ? s4 : 0x100;
+                    uint32_t align = 16;
+                    libcHeapNext = (libcHeapNext + align - 1) & ~(align - 1);
+                    uint32_t ptr = libcHeapNext;
+                    if (libcHeapNext + size <= libcHeapEnd) {
+                        libcHeapNext += (uint32_t)size;
+                    } else {
+                        ptr = 0; // oom
+                    }
+                    // zero the returned region in both host & guest mem
+                    if (ptr && ptr + size <= memSize) {
+                        std::memset(mem + ptr, 0, (size_t)size);
+                        megakernel_write_mem(ptr, mem + ptr, (size_t)size);
+                    }
+                    st.gpr[3] = ptr;
+                } else {
+                    st.gpr[3] = 0;
+                }
+                st.pc = st.lr;
+                return "libc_malloc_hle";
+            }
+        }
         auto it = byPc.find(pc);
         if (it == byPc.end()) return nullptr;
         const Entry& e = it->second;
@@ -66,10 +115,13 @@ struct PpuHleDispatcher {
         // --- Minimal handler set ---
         if (e.name == "sys_initialize_tls") {
             retval = 0;
-        } else if (e.name == "sys_process_exit" ||
-                   e.name == "_sys_process_atexitspawn" ||
-                   e.name == "_sys_process_at_Exitspawn") {
+        } else if (e.name == "sys_process_exit") {
             halted_out = true;
+            retval = 0;
+        } else if (e.name == "_sys_process_atexitspawn" ||
+                   e.name == "_sys_process_at_Exitspawn") {
+            // Registration of exit handlers during CRT init — not an
+            // actual exit.
             retval = 0;
         } else if (e.name == "sys_time_get_system_time") {
             retval = 0;

@@ -162,6 +162,15 @@ int main() {
         disp.add(kv.first, kv.second.fnid,
                  kv.second.mod, kv.second.name);
     }
+    // HLE-patch the ELF's internal libc allocator — its heap descriptor
+    // never gets initialised because we don't run cellGcmInitBody, so
+    // calls return NULL and downstream code (memset, strcpy) spins
+    // forever. Short-circuit to a bump arena.
+    disp.addBuiltinMalloc(0x1fed4);
+    disp.addBuiltinMalloc(0x1ff10);
+    disp.addBuiltinMalloc(0x1ff44);
+    disp.addBuiltinMalloc(0x1ff70);  // realloc-style, still returns a ptr
+    disp.addBuiltinMalloc(0x1ffa0);
 
     // Single-step dispatch — reliable capture of trampoline entries.
     int hleHits = 0, steps = 0, maxSteps = 2000000;
@@ -177,16 +186,13 @@ int main() {
         megakernel_read_state(&st);
         uint32_t pc = (uint32_t)st.pc;
         // Trace entry/exit boundaries of the looping CRT function
-        if (pc == 0x1b2b4 && traceCount < traceMax) {
-            uint8_t ibuf[4] = {};
-            megakernel_read_mem(pc, ibuf, 4);
-            uint32_t ibytes = ((uint32_t)ibuf[0]<<24)|((uint32_t)ibuf[1]<<16)|((uint32_t)ibuf[2]<<8)|ibuf[3];
-            std::printf("  trace#%d step=%d PC=0x%x r6=0x%llx r7=0x%llx r8=0x%llx r9=0x%llx r31=0x%llx\n",
+        if ((pc == 0x13598 || pc == 0x1358c || pc == 0x13588 || pc == 0x123d0 || pc == 0x12410) && traceCount < traceMax) {
+            std::printf("  trace#%d step=%d PC=0x%x r3=0x%llx r4=0x%llx r5=0x%llx r30=0x%llx r31=0x%llx\n",
                         traceCount, steps, pc,
-                        (unsigned long long)st.gpr[6],
-                        (unsigned long long)st.gpr[7],
-                        (unsigned long long)st.gpr[8],
-                        (unsigned long long)st.gpr[9],
+                        (unsigned long long)st.gpr[3],
+                        (unsigned long long)st.gpr[4],
+                        (unsigned long long)st.gpr[5],
+                        (unsigned long long)st.gpr[30],
                         (unsigned long long)st.gpr[31]);
             traceCount++;
         }
@@ -204,16 +210,17 @@ int main() {
         } else {
             stallPc = pc; stallCount = 0;
         }
-        if (disp.byPc.count(pc)) {
+        if (disp.byPc.count(pc) || disp.builtinByPc.count(pc)) {
             bool haltReq = false;
             const char* nm = disp.dispatch(st, mem.data(), mem.size(),
                                            haltReq);
             megakernel_write_state(&st);
             hleHits++;
             if (hleHits <= 40 || haltReq) {
+                const char* mod = disp.byPc.count(pc) ? disp.byPc[pc].mod.c_str() : "libc-hle";
                 std::printf("  HLE #%d step=%d PC=0x%x  %s::%s  LR→0x%llx\n",
                             hleHits, steps, pc,
-                            disp.byPc[pc].mod.c_str(),
+                            mod,
                             nm ? nm : "?",
                             (unsigned long long)st.pc);
             }
