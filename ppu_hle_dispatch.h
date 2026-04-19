@@ -56,8 +56,17 @@ struct PpuHleDispatcher {
     // GCM shared-memory-ish regions. Real PS3 maps these to RSX IO
     // memory; we just use guest-visible scratch addresses.
     uint32_t gcmControlRegPtr = 0x00D00000;  // CellGcmControl (put/get/ref)
+    uint32_t gcmContextAddr   = 0x00D00100;  // CellGcmContextData { begin,end,current,callback }
     uint32_t gcmLabelBase     = 0x00D01000;  // Flip status labels
     bool     gcmControlInited = false;
+    // The IO buffer the game passed to cellGcmInitBody. [ioBase, ioBase+ioSize)
+    // is the FIFO buffer region; cellGcmContextData::current grows from
+    // ioBase+0x1000 (4KB reserved at the head) toward ioBase+cmdSize.
+    uint32_t gcmIoBase   = 0;
+    uint32_t gcmIoSize   = 0;
+    uint32_t gcmCmdSize  = 0;
+    uint32_t gcmFifoBegin = 0;
+    uint32_t gcmFifoEnd   = 0;
 
     // Extra PC-indexed handlers for non-import functions we want to
     // short-circuit (e.g. the ELF's internal malloc/free).
@@ -203,9 +212,44 @@ struct PpuHleDispatcher {
             retval = 0;
         } else if (e.name == "_cellGcmInitBody" ||
                    e.name == "cellGcmInit") {
-            // Real init sets up command buffer + label area + default
-            // config. We populate the control-register struct here so
-            // ready-made code paths can read back sane values.
+            // Per rpcs3 cellGcmSys.cpp `_cellGcmInitBody`:
+            //   r3 = pptr<CellGcmContextData>   (out: *r3 := context_addr)
+            //   r4 = cmdSize
+            //   r5 = ioSize
+            //   r6 = ioAddress (EA of guest's FIFO buffer)
+            //
+            // We populate a CellGcmContextData { begin, end, current,
+            // callback } at `gcmContextAddr`, with begin = ioAddress +
+            // 4096 (first 4KB reserved), end = ioAddress + 32*1024 - 4,
+            // current = begin, callback = 0. Then write *r3 =
+            // gcmContextAddr (BE u32) in both host and GPU mem.
+            uint32_t pPtr    = (uint32_t)st.gpr[3];
+            uint32_t cmdSize = (uint32_t)st.gpr[4];
+            uint32_t ioSize  = (uint32_t)st.gpr[5];
+            uint32_t ioAddr  = (uint32_t)st.gpr[6];
+            gcmCmdSize = cmdSize ? cmdSize : 0x8000;   // 32KB default
+            gcmIoSize  = ioSize;
+            gcmIoBase  = ioAddr;
+            gcmFifoBegin = ioAddr + 0x1000;
+            gcmFifoEnd   = ioAddr + gcmCmdSize - 4;
+
+            auto put_be32 = [&](uint32_t addr, uint32_t v) {
+                if (addr + 4 > memSize) return;
+                uint8_t b[4] = {
+                    (uint8_t)(v >> 24), (uint8_t)(v >> 16),
+                    (uint8_t)(v >> 8),  (uint8_t)v
+                };
+                std::memcpy(mem + addr, b, 4);
+                megakernel_write_mem((uint64_t)addr, b, 4);
+            };
+            // CellGcmContextData layout (16 bytes): begin, end, current, callback.
+            put_be32(gcmContextAddr + 0,  gcmFifoBegin);
+            put_be32(gcmContextAddr + 4,  gcmFifoEnd);
+            put_be32(gcmContextAddr + 8,  gcmFifoBegin);
+            put_be32(gcmContextAddr + 12, 0);
+            // *r3 = gcmContextAddr
+            if (pPtr) put_be32(pPtr, gcmContextAddr);
+            // Seed CellGcmControl { put, get, ref } = { 0, 0, 0 }.
             if (!gcmControlInited && gcmControlRegPtr + 12 <= memSize) {
                 std::memset(mem + gcmControlRegPtr, 0, 12);
                 megakernel_write_mem((uint64_t)gcmControlRegPtr,

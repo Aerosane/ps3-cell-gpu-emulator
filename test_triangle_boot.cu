@@ -284,6 +284,50 @@ int main() {
             if (++n >= 20) break;
         }
     }
+    // FIFO drain diagnostic — if cellGcmInitBody ran, we have a real
+    // CellGcmContextData in guest memory. Scan the region between
+    // `begin` and `current` looking for NV method headers as a proxy
+    // for "did the game actually submit RSX commands?"
+    if (disp.gcmIoBase) {
+        std::printf("  GCM FIFO: io=[0x%x..0x%x) cmdSize=0x%x\n",
+                    disp.gcmIoBase, disp.gcmIoBase + disp.gcmIoSize,
+                    disp.gcmCmdSize);
+        // Read current cellGcmContextData.current from GPU mem.
+        uint8_t ctxBytes[16] = {};
+        megakernel_read_mem(disp.gcmContextAddr, ctxBytes, 16);
+        auto rd = [&](int off) {
+            return (uint32_t)ctxBytes[off]<<24 | (uint32_t)ctxBytes[off+1]<<16
+                 | (uint32_t)ctxBytes[off+2]<<8 | ctxBytes[off+3];
+        };
+        uint32_t ctxBegin = rd(0), ctxEnd = rd(4), ctxCur = rd(8), ctxCb = rd(12);
+        std::printf("  GCM ctx: begin=0x%x end=0x%x current=0x%x cb=0x%x\n",
+                    ctxBegin, ctxEnd, ctxCur, ctxCb);
+        if (ctxCur > ctxBegin && ctxCur - ctxBegin < 0x100000) {
+            uint32_t bytes = ctxCur - ctxBegin;
+            std::vector<uint8_t> fifoBE(bytes);
+            megakernel_read_mem(ctxBegin, fifoBE.data(), bytes);
+            // Scan as big-endian u32 and count non-zero headers.
+            uint32_t words = bytes / 4;
+            uint32_t nonzero = 0, methods = 0;
+            for (uint32_t i = 0; i < words; ++i) {
+                uint32_t w = (uint32_t)fifoBE[i*4]<<24
+                           | (uint32_t)fifoBE[i*4+1]<<16
+                           | (uint32_t)fifoBE[i*4+2]<<8
+                           | fifoBE[i*4+3];
+                if (w) nonzero++;
+                // NV method header: bits [15:2] = method offset, bits [29:18] = count.
+                uint32_t count = (w >> 18) & 0x7FF;
+                uint32_t method = w & 0xFFFC;
+                if (count > 0 && count < 32 && method > 0 && method < 0x2000) methods++;
+            }
+            std::printf("  GCM FIFO bytes written: %u  (%u nonzero words, ~%u plausible method headers)\n",
+                        bytes, nonzero, methods);
+        } else {
+            std::printf("  GCM FIFO: current == begin (no commands submitted yet)\n");
+        }
+    } else {
+        std::printf("  GCM FIFO: cellGcmInitBody never called\n");
+    }
     CHECK(hleHits >= 1, "at least one HLE dispatch happened");
 
     if (haltedInStub) {
