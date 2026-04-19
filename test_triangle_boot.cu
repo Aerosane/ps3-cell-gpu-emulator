@@ -15,6 +15,8 @@
 #include <vector>
 #include <fstream>
 #include <unordered_map>
+#include <algorithm>
+#include <utility>
 
 #include "elf_loader.h"
 #include "ppu_hle_names.h"
@@ -182,6 +184,9 @@ int main() {
     uint32_t lastReportedPc = 0;
     int traceCount = 0;
     const int traceMax = 0;
+    // PC histogram — coarse 64-byte bucket sampling every 16 steps so we
+    // can see where the CRT spins without paying per-step map cost.
+    std::unordered_map<uint32_t, uint64_t> pcBuckets;
     for (steps = 0; steps < maxSteps && !stopped; ++steps) {
         megakernel_run(1);
         ppc::PPEState st{};
@@ -197,6 +202,9 @@ int main() {
                         (unsigned long long)st.gpr[30],
                         (unsigned long long)st.gpr[31]);
             traceCount++;
+        }
+        if ((steps & 0xF) == 0) {
+            pcBuckets[pc & ~0x3Fu]++;
         }
         if ((steps % 200000) == 0 && pc != lastReportedPc) {
             std::printf("  progress: step=%d PC=0x%x LR=0x%llx\n",
@@ -264,6 +272,18 @@ int main() {
         }
     }
     disp.print_summary();
+    // Top-20 hot PC buckets (64-byte aligned) from 1-in-16 sampling.
+    {
+        std::vector<std::pair<uint32_t, uint64_t>> sorted(pcBuckets.begin(), pcBuckets.end());
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        std::printf("  hot PC buckets (64B, sampled 1:16):\n");
+        int n = 0;
+        for (const auto& p : sorted) {
+            std::printf("    0x%08x  %llu\n", p.first, (unsigned long long)p.second);
+            if (++n >= 20) break;
+        }
+    }
     CHECK(hleHits >= 1, "at least one HLE dispatch happened");
 
     if (haltedInStub) {
