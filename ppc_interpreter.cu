@@ -2338,6 +2338,9 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
 // Persistent Megakernel — one thread = one PPE core
 // ═══════════════════════════════════════════════════════════════
 
+__device__ uint64_t d_codeBegin = 0;
+__device__ uint64_t d_codeEnd   = 0;
+
 __global__ void ppeMegakernel(PPEState* states, uint8_t* mem,
                                uint32_t maxCycles,
                                uint32_t* hle_log,
@@ -2350,12 +2353,16 @@ __global__ void ppeMegakernel(PPEState* states, uint8_t* mem,
 
     for (uint32_t cycle = 0; cycle < maxCycles && !s.halted; cycle++) {
         // Bogus-call rescue: if we're executing from a region that reads
-        // as all zeros (uninitialized BSS, un-relocated OPD targets),
-        // synthesize a `blr` so we unwind back into real code instead of
-        // linearly strolling through megabytes of zero memory.
+        // as all zeros (uninitialized BSS, un-relocated OPD targets) OR
+        // if PC has drifted outside the loaded code segment, synthesize
+        // a `blr` so we unwind back into real code. Without this, a
+        // bctrl to a bad descriptor causes PC to stroll through
+        // megabytes of zero / data memory for the rest of the run.
         {
+            bool outOfRange = (d_codeEnd != 0) &&
+                              (s.pc < d_codeBegin || s.pc >= d_codeEnd);
             uint32_t fetch = mem_read32(mem, s.pc);
-            if (fetch == 0 && s.lr != 0 && s.lr != s.pc) {
+            if ((fetch == 0 || outOfRange) && s.lr != 0 && s.lr != s.pc) {
                 s.pc = s.lr;
                 continue;
             }
@@ -2459,6 +2466,17 @@ int megakernel_set_entry(uint64_t pc, uint64_t sp, uint64_t toc) {
                      cudaMemcpyHostToDevice, g_ctx.stream);
     fprintf(stderr, "[PPE] Entry: PC=0x%llx SP=0x%llx TOC=0x%llx\n",
             (unsigned long long)pc, (unsigned long long)sp, (unsigned long long)toc);
+    return 1;
+}
+
+// Tell the megakernel the legal code range so it can rescue from
+// bctrl-to-unmapped-data drifts.
+int megakernel_set_code_range(uint64_t begin, uint64_t end) {
+    if (!g_ctx.ready) return 0;
+    cudaMemcpyToSymbolAsync(d_codeBegin, &begin, sizeof(begin), 0,
+                            cudaMemcpyHostToDevice, g_ctx.stream);
+    cudaMemcpyToSymbolAsync(d_codeEnd, &end, sizeof(end), 0,
+                            cudaMemcpyHostToDevice, g_ctx.stream);
     return 1;
 }
 

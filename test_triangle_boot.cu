@@ -25,6 +25,7 @@ extern "C" {
     int   megakernel_init();
     int   megakernel_load(uint64_t, const void*, size_t);
     int   megakernel_set_entry(uint64_t, uint64_t, uint64_t);
+    int   megakernel_set_code_range(uint64_t, uint64_t);
     float megakernel_run(uint32_t);
     int   megakernel_read_state(ppc::PPEState*);
     int   megakernel_write_state(const ppc::PPEState*);
@@ -153,6 +154,7 @@ int main() {
     }
 
     megakernel_set_entry(descEntry, 0x00F00000ULL, descTOC);
+    megakernel_set_code_range(0x10000, 0x30330);
 
     uint32_t haltedInStub = 0;
     (void)haltedInStub;
