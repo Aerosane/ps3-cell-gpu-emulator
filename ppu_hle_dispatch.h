@@ -22,6 +22,9 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <vector>
+#include <algorithm>
+#include <utility>
 
 #include "ppc_defs.h"
 #include "ppu_hle_names.h"
@@ -35,6 +38,7 @@ struct PpuHleDispatcher {
         std::string name;
     };
     std::unordered_map<uint32_t, Entry> byPc;   // trampoline PC → entry
+    std::unordered_map<std::string, uint64_t> unhandledHistogram;
     uint64_t callCount = 0;
     uint64_t unknownCount = 0;
 
@@ -48,6 +52,12 @@ struct PpuHleDispatcher {
     uint32_t libcHeapBase = 0x00900000;
     uint32_t libcHeapNext = 0x00900000;
     uint32_t libcHeapEnd  = 0x00D00000;
+
+    // GCM shared-memory-ish regions. Real PS3 maps these to RSX IO
+    // memory; we just use guest-visible scratch addresses.
+    uint32_t gcmControlRegPtr = 0x00D00000;  // CellGcmControl (put/get/ref)
+    uint32_t gcmLabelBase     = 0x00D01000;  // Flip status labels
+    bool     gcmControlInited = false;
 
     // Extra PC-indexed handlers for non-import functions we want to
     // short-circuit (e.g. the ELF's internal malloc/free).
@@ -154,9 +164,109 @@ struct PpuHleDispatcher {
             retval = 0;
         } else if (e.name == "sys_prx_register_library") {
             retval = 0;
+        } else if (e.name == "cellGcmAddressToOffset") {
+            // r3 = effective address, r4 = out pointer to u32 offset.
+            // Real HW: subtracts the RSX IO map base. We just pass the
+            // address through — our "VRAM" is flat at the same EA.
+            uint32_t addr = (uint32_t)st.gpr[3];
+            uint32_t outp = (uint32_t)st.gpr[4];
+            if (outp + 4 <= memSize) {
+                uint8_t be[4] = {
+                    (uint8_t)(addr >> 24), (uint8_t)(addr >> 16),
+                    (uint8_t)(addr >> 8),  (uint8_t)addr
+                };
+                std::memcpy(mem + outp, be, 4);
+                megakernel_write_mem((uint64_t)outp, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellGcmGetControlRegister") {
+            // Returns pointer to CellGcmControl { u32 put, get, ref }.
+            if (!gcmControlInited && gcmControlRegPtr + 12 <= memSize) {
+                std::memset(mem + gcmControlRegPtr, 0, 12);
+                megakernel_write_mem((uint64_t)gcmControlRegPtr,
+                                     mem + gcmControlRegPtr, 12);
+                gcmControlInited = true;
+            }
+            retval = gcmControlRegPtr;
+        } else if (e.name == "cellGcmGetFlipStatus") {
+            // 0 => "last flip completed". Loop waits for this before
+            // submitting the next frame. Always return 0 so we don't
+            // spin forever.
+            retval = 0;
+        } else if (e.name == "cellGcmResetFlipStatus") {
+            retval = 0;
+        } else if (e.name == "_cellGcmSetFlipCommand" ||
+                   e.name == "cellGcmSetFlipCommand") {
+            // Real HW writes a NV flip command into the FIFO. Skip; the
+            // game's FIFO is being processed by our RSX emulator
+            // separately (or will be once we wire it up).
+            retval = 0;
+        } else if (e.name == "_cellGcmInitBody" ||
+                   e.name == "cellGcmInit") {
+            // Real init sets up command buffer + label area + default
+            // config. We populate the control-register struct here so
+            // ready-made code paths can read back sane values.
+            if (!gcmControlInited && gcmControlRegPtr + 12 <= memSize) {
+                std::memset(mem + gcmControlRegPtr, 0, 12);
+                megakernel_write_mem((uint64_t)gcmControlRegPtr,
+                                     mem + gcmControlRegPtr, 12);
+                gcmControlInited = true;
+            }
+            retval = 0;
+        } else if (e.name == "cellGcmSetDisplayBuffer" ||
+                   e.name == "cellGcmSetFlipMode" ||
+                   e.name == "cellGcmGetConfiguration") {
+            retval = 0;
+        } else if (e.name == "cellVideoOutConfigure" ||
+                   e.name == "cellVideoOutGetResolution" ||
+                   e.name == "cellVideoOutGetState") {
+            // Clear the output-state struct if given; return success.
+            uint32_t outp = (uint32_t)st.gpr[5];
+            if (outp && outp + 64 <= memSize) {
+                std::memset(mem + outp, 0, 64);
+                megakernel_write_mem((uint64_t)outp, mem + outp, 64);
+            }
+            retval = 0;
+        } else if (e.name == "cellSysutilRegisterCallback" ||
+                   e.name == "cellSysutilUnregisterCallback" ||
+                   e.name == "cellSysutilCheckCallback") {
+            retval = 0;
+        } else if (e.name == "cellFsOpen") {
+            // r3=path, r4=flags, r5=fd_out, ...
+            uint32_t fdOut = (uint32_t)st.gpr[5];
+            if (fdOut + 4 <= memSize) {
+                uint8_t be[4] = { 0, 0, 0, 3 };  // arbitrary fd #3
+                std::memcpy(mem + fdOut, be, 4);
+                megakernel_write_mem((uint64_t)fdOut, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellFsWrite") {
+            // r3=fd, r4=buf, r5=nbytes, r6=nwritten_out
+            uint32_t nbytes   = (uint32_t)st.gpr[5];
+            uint32_t nwritten = (uint32_t)st.gpr[6];
+            if (nwritten && nwritten + 4 <= memSize) {
+                uint8_t be[4] = {
+                    (uint8_t)(nbytes >> 24), (uint8_t)(nbytes >> 16),
+                    (uint8_t)(nbytes >> 8),  (uint8_t)nbytes
+                };
+                std::memcpy(mem + nwritten, be, 4);
+                megakernel_write_mem((uint64_t)nwritten, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellFsRead") {
+            uint32_t nread = (uint32_t)st.gpr[6];
+            if (nread && nread + 4 <= memSize) {
+                std::memset(mem + nread, 0, 4);
+                megakernel_write_mem((uint64_t)nread, mem + nread, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellFsClose" ||
+                   e.name == "cellFsLseek") {
+            retval = 0;
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;
+            unhandledHistogram[e.name]++;
             retval = 0;
         }
 
@@ -183,5 +293,15 @@ struct PpuHleDispatcher {
         std::printf("  HLE dispatcher: %llu calls (%llu unhandled)\n",
                     (unsigned long long)callCount,
                     (unsigned long long)unknownCount);
+        std::vector<std::pair<std::string, uint64_t>> sorted(
+            unhandledHistogram.begin(), unhandledHistogram.end());
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        int printed = 0;
+        for (const auto& p : sorted) {
+            std::printf("    unhandled: %-40s %llu\n",
+                        p.first.c_str(), (unsigned long long)p.second);
+            if (++printed >= 20) break;
+        }
     }
 };
