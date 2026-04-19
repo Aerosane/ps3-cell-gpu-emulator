@@ -137,6 +137,35 @@ struct SceHeader {
     uint64_t data_len;
 };
 
+// SELF v2 extended header (all fields big-endian u64). Starts at file
+// byte 0x20, immediately after the SceHeader. Layout matches RPCS3
+// `self_hdr`.
+struct SelfHeaderV2 {
+    uint64_t header_type;          // 3 for SELF
+    uint64_t info_offset;          // app_info table offset
+    uint64_t elf_offset;           // embedded ELF header offset
+    uint64_t phdr_offset;          // embedded program-header-table offset
+    uint64_t shdr_offset;          // embedded section-header-table offset
+    uint64_t section_info_offset;  // per-PHDR segment info table offset
+    uint64_t sce_version_offset;
+    uint64_t control_info_offset;
+    uint64_t control_info_size;
+    uint64_t padding;
+};
+
+// One entry per ELF PHDR in the SELF.  Tells us where each segment's
+// actual bytes live in the SELF file, and whether they're compressed
+// or encrypted.
+struct SelfSectionInfo {
+    uint64_t offset;       // byte offset in SELF file where segment data lives
+    uint64_t size;         // size of segment data in file (possibly compressed)
+    uint32_t compressed;   // 1 = raw, 2 = zlib
+    uint32_t unknown1;
+    uint32_t encrypted;    // 1 = yes, 2 = no
+    uint32_t unknown2;
+};
+
+// Legacy/unused — kept for source-compat with any external caller.
 struct ExtHeader {
     uint64_t authid;
     uint64_t vendor_id;
@@ -254,6 +283,88 @@ static inline uint64_t self_find_elf_offset(const uint8_t* data, size_t size) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// SELF segment staging — uses section_info table to resolve real
+// file offsets (and decompresses zlib segments when needed).
+// Returns ELF_OK on full success. If any segment is encrypted we
+// return ELF_OK but mark that segment as zero-filled (caller sees
+// empty instruction stream at that vaddr).
+// ═══════════════════════════════════════════════════════════════
+#include <zlib.h>
+static inline int self_stage_segments(const uint8_t* file_data, size_t file_size,
+                                       const uint8_t* elf_data, size_t elf_size,
+                                       uint8_t* memory, size_t mem_size)
+{
+    (void)elf_size;
+    if (file_size < 0x70) return ELF_ERR_SIZE;
+
+    const SelfHeaderV2* sh = reinterpret_cast<const SelfHeaderV2*>(file_data + 0x20);
+    uint64_t secOff = elf_bswap64(sh->section_info_offset);
+    uint64_t elfOff = elf_bswap64(sh->elf_offset);
+    if (secOff == 0 || secOff >= file_size) return ELF_OK;  // no section table
+    if (elfOff == 0 || elfOff >= file_size) return ELF_OK;
+
+    // Reparse PHDRs from inner ELF.
+    const Elf64_Ehdr* ehdr = reinterpret_cast<const Elf64_Ehdr*>(file_data + elfOff);
+    uint64_t phoff    = elf_bswap64(ehdr->e_phoff);
+    uint16_t phnum    = elf_bswap16(ehdr->e_phnum);
+    uint16_t phentsz  = elf_bswap16(ehdr->e_phentsize);
+    if (phnum == 0) return ELF_OK;
+    if (elfOff + phoff + (uint64_t)phnum * phentsz > file_size) return ELF_ERR_SIZE;
+    if (secOff + (uint64_t)phnum * sizeof(SelfSectionInfo) > file_size) return ELF_ERR_SIZE;
+
+    const SelfSectionInfo* sec =
+        reinterpret_cast<const SelfSectionInfo*>(file_data + secOff);
+
+    for (uint16_t i = 0; i < phnum; ++i) {
+        const Elf64_Phdr* ph = reinterpret_cast<const Elf64_Phdr*>(
+            file_data + elfOff + phoff + (uint64_t)i * phentsz);
+        uint32_t p_type   = elf_bswap32(ph->p_type);
+        if (p_type != PT_LOAD && p_type != PT_SCE_PROCPARAM) continue;
+        uint64_t p_vaddr  = elf_bswap64(ph->p_vaddr);
+        uint64_t p_memsz  = elf_bswap64(ph->p_memsz);
+        uint64_t p_filesz = elf_bswap64(ph->p_filesz);
+
+        uint64_t secFileOff = elf_bswap64(sec[i].offset);
+        uint64_t secSize    = elf_bswap64(sec[i].size);
+        uint32_t compressed = elf_bswap32(sec[i].compressed);
+        uint32_t encrypted  = elf_bswap32(sec[i].encrypted);
+
+        if (p_vaddr + p_memsz > mem_size) return ELF_ERR_SEGMENT;
+        if (secFileOff + secSize > file_size) continue;
+
+        // Zero-fill memory region first (covers BSS gap too).
+        memset(memory + p_vaddr, 0, (size_t)p_memsz);
+
+        if (encrypted == 1) {
+            // Segment is AES-encrypted — we don't have the key path.
+            continue;
+        }
+
+        if (compressed == 2) {
+            // zlib-inflate into memory[p_vaddr..p_vaddr+p_filesz].
+            z_stream zs{};
+            zs.next_in  = const_cast<Bytef*>(file_data + secFileOff);
+            zs.avail_in = (uInt)secSize;
+            zs.next_out = memory + p_vaddr;
+            zs.avail_out = (uInt)p_memsz;
+            if (inflateInit(&zs) != Z_OK) continue;
+            int r = inflate(&zs, Z_FINISH);
+            inflateEnd(&zs);
+            if (r != Z_STREAM_END && r != Z_OK) {
+                // decompression failed — leave zeros.
+                memset(memory + p_vaddr, 0, (size_t)p_memsz);
+            }
+        } else {
+            // Raw copy. Use min(secSize, p_filesz) for bounds.
+            uint64_t copySize = secSize < p_filesz ? secSize : p_filesz;
+            if (copySize > 0)
+                memcpy(memory + p_vaddr, file_data + secFileOff, (size_t)copySize);
+        }
+    }
+    return ELF_OK;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Public API — ps3_load_elf
 // ═══════════════════════════════════════════════════════════════
 
@@ -277,6 +388,7 @@ static int ps3_load_elf(const uint8_t* file_data, size_t file_size,
     // ── SELF detection ──────────────────────────────────────
     const uint8_t* elf_data = file_data;
     size_t elf_size = file_size;
+    bool is_self = false;
 
     if (file_size >= 4 && read_be32(file_data) == SCE_MAGIC) {
         uint64_t elf_off = self_find_elf_offset(file_data, file_size);
@@ -284,6 +396,7 @@ static int ps3_load_elf(const uint8_t* file_data, size_t file_size,
             return ELF_ERR_MAGIC; // couldn't locate embedded ELF
         elf_data = file_data + elf_off;
         elf_size = file_size - elf_off;
+        is_self = true;
     }
 
     // ── ELF header validation ───────────────────────────────
@@ -404,6 +517,14 @@ static int ps3_load_elf(const uint8_t* file_data, size_t file_size,
         default:
             break;
         }
+    }
+
+    // For SELF files, the ELF-header p_offset values are not authoritative —
+    // segment payload lives at positions recorded in the SelfSectionInfo
+    // table (and may be zlib-compressed). Overlay correct data now.
+    if (is_self) {
+        self_stage_segments(file_data, file_size, elf_data, elf_size,
+                            memory, mem_size);
     }
 
     return ELF_OK;

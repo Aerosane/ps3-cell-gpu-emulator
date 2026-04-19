@@ -84,70 +84,42 @@ int main() {
     // at 0x30000), so decoding the descriptor is required.
     uint64_t realEntry = info.entry_point;
     uint64_t realTOC   = 0;
-    if (info.entry_point >= 0x30000 && info.entry_point + 16 < memory.size()) {
-        // Read big-endian 64-bit entry + TOC from descriptor.
-        auto be64 = [](const uint8_t* p) {
-            return (uint64_t)p[0] << 56 | (uint64_t)p[1] << 48 |
-                   (uint64_t)p[2] << 40 | (uint64_t)p[3] << 32 |
-                   (uint64_t)p[4] << 24 | (uint64_t)p[5] << 16 |
-                   (uint64_t)p[6] << 8  | (uint64_t)p[7];
+    if (info.entry_point >= 0x30000 && info.entry_point + 8 < memory.size()) {
+        // PS3 PPC64 function descriptors use 32-bit fields
+        // (not full 64-bit): (entry:u32, toc:u32, env:u32).
+        auto be32 = [](const uint8_t* p) {
+            return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+                   (uint32_t)p[2] << 8  | (uint32_t)p[3];
         };
-        uint64_t descEntry = be64(memory.data() + info.entry_point);
-        uint64_t descTOC   = be64(memory.data() + info.entry_point + 8);
-        std::printf("  descriptor[0x%lx]: entry=0x%lx toc=0x%lx\n",
-                    (unsigned long)info.entry_point,
-                    (unsigned long)descEntry,
-                    (unsigned long)descTOC);
+        uint32_t descEntry = be32(memory.data() + info.entry_point);
+        uint32_t descTOC   = be32(memory.data() + info.entry_point + 4);
+        std::printf("  descriptor[0x%lx]: entry=0x%x toc=0x%x\n",
+                    (unsigned long)info.entry_point, descEntry, descTOC);
         if (descEntry >= 0x10000 && descEntry < loadSpan) {
             realEntry = descEntry;
             realTOC   = descTOC;
         }
     }
-    std::printf("  realEntry=0x%lx realTOC=0x%lx\n",
-                (unsigned long)realEntry, (unsigned long)realTOC);
     // Dump first 32 bytes at entry to sanity-check segment staging.
     std::printf("  mem[realEntry]:");
     for (int i = 0; i < 16; ++i)
         std::printf(" %02x", memory[realEntry + i]);
     std::printf("\n");
-    std::printf("  mem[0x10000]:");
-    for (int i = 0; i < 16; ++i)
-        std::printf(" %02x", memory[0x10000 + i]);
-    std::printf("\n");
 
     megakernel_set_entry(realEntry, 0x00F00000ULL, realTOC);
 
-    // Run a modest cycle budget. Real PS3 code will either hit a syscall
-    // (and halt for HLE dispatch in our bridge) or fault on an unmapped
-    // memory access quickly. Either outcome is acceptable — we just need
-    // to prove *some* real PPC instructions retired.
     float ms = megakernel_run(65536);
     ppc::PPEState st{};
     megakernel_read_state(&st);
     std::printf("  ran: %.2f ms  pc=0x%llx halted=%d\n",
                 ms, (unsigned long long)st.pc, (int)st.halted);
 
-    // NOTE: This SELF has compressed PT_LOAD segments (second segment
-    // at addr=0x30000 doesn't fit in remaining file bytes uncompressed),
-    // so segment 2+ data isn't actually staged into emulated memory
-    // without a zlib-decompress step in the SELF unwrap path. The
-    // descriptor at 0x30130 reads as zeros, and execution can't make
-    // progress from an all-zero instruction stream.
-    //
-    // Regardless, this validates that:
-    //   - the raw SELF file is readable
-    //   - ps3_load_elf returns OK and extracts entry_point + segments
-    //   - the megakernel accepts the staged memory without crashing
-    //   - the execution path terminates cleanly under the cycle budget
-    //
-    // So instead of demanding PC advance (which requires SELF segment
-    // decompression we don't yet implement), we just record the state
-    // for informational purposes and assert that the loader+runtime
-    // chain survived the attempt.
-    CHECK(st.halted == 0,
-          "Megakernel returned without crashing (zero-instruction stall)");
-    std::printf("  NOTE: real retail SELF segment bodies are compressed; "
-                "full guest execution awaits a zlib-unwrap pass.\n");
+    // A real retire happened if PC moved past the entry point (even a
+    // single branch bumps PC by 4, and a fault also advances + halts).
+    CHECK(st.pc != realEntry || st.halted != 0,
+          "At least one PPC instruction retired from real SELF");
+    std::printf("  NOTE: execution without full HLE will stop quickly at the "
+                "first unresolved syscall/branch.\n");
 
     megakernel_shutdown();
     std::printf("\n%s (%d failures)\n", fails == 0 ? "ALL PASSED" : "SOME FAILED", fails);

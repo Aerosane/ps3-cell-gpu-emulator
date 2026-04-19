@@ -7,6 +7,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 NVCC=/usr/local/cuda-12.9/bin/nvcc
 NVCC_FLAGS="-O3 -arch=sm_70 --compiler-options=-fPIC -Wno-deprecated-gpu-targets"
+LDFLAGS_EXTRA="-lz"
 
 echo "╔══════════════════════════════════════════╗"
 echo "║  🎮 Project Megakernel — PS3 Emulator   ║"
@@ -81,7 +82,7 @@ $NVCC $NVCC_FLAGS --extended-lambda \
 echo "[11/11] Building ELF loader → PPC warp-JIT bringup test..."
 $NVCC $NVCC_FLAGS \
   test_elf_boot.cu ppc_jit.cu \
-  -lnvrtc -lcuda \
+  -lnvrtc -lcuda $LDFLAGS_EXTRA \
   -o elf_boot_test
 
 echo "[12/31] Building cellGcm HLE shim test..."
@@ -102,6 +103,7 @@ $NVCC $NVCC_FLAGS \
 echo "[15/31] Building ELF loader unit tests..."
 $NVCC $NVCC_FLAGS \
   test_elf_loader.cu \
+  $LDFLAGS_EXTRA \
   -o elf_loader_test
 
 echo "[16/31] Building PPC HLE syscall → RSX FIFO bridge test..."
@@ -149,6 +151,7 @@ echo "[23/31] Building PS3 ELF → PPC → RSX end-to-end test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_elf.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
+  $LDFLAGS_EXTRA \
   -o gcm_elf_test
 
 echo "[24/31] Building PPC-driven two-pass stencil masking test..."
@@ -190,11 +193,14 @@ $NVCC $NVCC_FLAGS --extended-lambda \
 echo "[30/31] Building real PS3 SELF loader test..."
 $NVCC $NVCC_FLAGS \
   test_real_self.cu \
+  $LDFLAGS_EXTRA \
   -o real_self_test
 
 echo "[31/31] Building real PS3 SELF execution attempt test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_real_self_exec.cu ppc_interpreter.o \
+  rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
+  $LDFLAGS_EXTRA \
   -o real_self_exec_test
 
 echo ""
