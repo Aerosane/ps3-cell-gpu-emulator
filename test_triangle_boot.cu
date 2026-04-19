@@ -187,6 +187,12 @@ int main() {
     // PC histogram — coarse 64-byte bucket sampling every 16 steps so we
     // can see where the CRT spins without paying per-step map cost.
     std::unordered_map<uint32_t, uint64_t> pcBuckets;
+    // Branch-and-link target tracer: when LR changes between steps, the
+    // new LR holds the return address (PC+4 at the bl) and the *new* PC
+    // is the callee. This gives us a call-graph histogram without
+    // instrumenting the interpreter.
+    std::unordered_map<uint32_t, uint64_t> blTargets;
+    uint64_t prevLR = 0;
     for (steps = 0; steps < maxSteps && !stopped; ++steps) {
         megakernel_run(1);
         ppc::PPEState st{};
@@ -205,6 +211,12 @@ int main() {
         }
         if ((steps & 0xF) == 0) {
             pcBuckets[pc & ~0x3Fu]++;
+        }
+        // bl detector: LR changed → previous instruction was bl/blrl/bctrl;
+        // current PC is the callee entry.
+        if (st.lr != prevLR) {
+            blTargets[pc]++;
+            prevLR = st.lr;
         }
         if ((steps % 200000) == 0 && pc != lastReportedPc) {
             std::printf("  progress: step=%d PC=0x%x LR=0x%llx\n",
@@ -282,6 +294,19 @@ int main() {
         for (const auto& p : sorted) {
             std::printf("    0x%08x  %llu\n", p.first, (unsigned long long)p.second);
             if (++n >= 20) break;
+        }
+    }
+    // Top-10 bl targets — these are the most-called functions regardless
+    // of how long each call takes, complementing the PC bucket view.
+    {
+        std::vector<std::pair<uint32_t, uint64_t>> sorted(blTargets.begin(), blTargets.end());
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        std::printf("  top bl targets (function entry → call count):\n");
+        int n = 0;
+        for (const auto& p : sorted) {
+            std::printf("    0x%08x  %llu\n", p.first, (unsigned long long)p.second);
+            if (++n >= 10) break;
         }
     }
     // FIFO drain diagnostic — if cellGcmInitBody ran, we have a real
