@@ -72,8 +72,8 @@ int main() {
     constexpr uint32_t VB_POS = 0x100000;
     constexpr uint32_t VB_COL = 0x101000;
 
-    // 11 vertices: 3 (tri) + 4 (strip) + 4 (quads)
-    float positions[11 * 3] = {
+    // 3 + 4 + 4 + 4 + 4 = 19 vertices across 5 primitive types.
+    float positions[19 * 3] = {
         // triangle — upper-left red
           20.f,  60.f, 0.5f,
          100.f,  60.f, 0.5f,
@@ -88,14 +88,26 @@ int main() {
          120.f, 220.f, 0.5f,
          120.f, 150.f, 0.5f,
           20.f, 150.f, 0.5f,
+        // triangle fan — center yellow (4 verts = 2 tris off pivot)
+         160.f, 120.f, 0.5f,
+         200.f, 100.f, 0.5f,
+         220.f, 140.f, 0.5f,
+         180.f, 150.f, 0.5f,
+        // lines — 2 segments (4 verts), cyan
+         150.f,  30.f, 0.5f,
+         260.f,  30.f, 0.5f,
+         150.f,  50.f, 0.5f,
+         260.f,  50.f, 0.5f,
     };
     std::memcpy(vram.data() + VB_POS, positions, sizeof(positions));
 
     // BGRA stored → little-endian uint32 per vertex.
-    uint32_t cols[11] = {
-        0xFFFF0000u, 0xFFFF0000u, 0xFFFF0000u,       // red triangle
-        0xFF00FF00u, 0xFF00FF00u, 0xFF00FF00u, 0xFF00FF00u,  // green strip
-        0xFF0000FFu, 0xFF0000FFu, 0xFF0000FFu, 0xFF0000FFu,  // blue quad
+    uint32_t cols[19] = {
+        0xFFFF0000u, 0xFFFF0000u, 0xFFFF0000u,
+        0xFF00FF00u, 0xFF00FF00u, 0xFF00FF00u, 0xFF00FF00u,
+        0xFF0000FFu, 0xFF0000FFu, 0xFF0000FFu, 0xFF0000FFu,
+        0xFFFFFF00u, 0xFFFFFF00u, 0xFFFFFF00u, 0xFFFFFF00u,
+        0xFF00FFFFu, 0xFF00FFFFu, 0xFF00FFFFu, 0xFF00FFFFu,
     };
     std::memcpy(vram.data() + VB_COL, cols, sizeof(cols));
 
@@ -127,6 +139,8 @@ int main() {
     emit_draw(PRIM_TRIANGLES,      0, 3);
     emit_draw(PRIM_TRIANGLE_STRIP, 3, 4);
     emit_draw(PRIM_QUADS,          7, 4);
+    emit_draw(PRIM_TRIANGLE_FAN,   11, 4);
+    emit_draw(PRIM_LINES,          15, 4);
 
     emit_method(code, NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP, 0);
 
@@ -170,13 +184,13 @@ int main() {
     std::printf("\n  bridge counters: surf=%u clears=%u draws=%u flips=%u\n",
                 bridge.counters.surfaceSetups, bridge.counters.clears,
                 bridge.counters.draws, bridge.counters.flips);
-    CHECK(bridge.counters.draws == 3, "All three draw_arrays dispatched");
+    CHECK(bridge.counters.draws == 5, "All five draw_arrays dispatched");
     CHECK(bridge.counters.flips == 1, "FLIP dispatched");
 
     std::vector<uint32_t> fb(W * H, 0);
     raster.readbackPlane(0, fb.data());
 
-    uint32_t red = 0, green = 0, blue = 0, clear = 0;
+    uint32_t red = 0, green = 0, blue = 0, yellow = 0, cyan = 0, clear = 0;
     for (uint32_t i = 0; i < W * H; ++i) {
         uint32_t p = fb[i];
         if ((p & 0x00FFFFFFu) == 0x00202020u) { ++clear; continue; }
@@ -184,12 +198,16 @@ int main() {
         if (R > 200 && G <  60 && B <  60) ++red;
         if (R <  60 && G > 200 && B <  60) ++green;
         if (R <  60 && G <  60 && B > 200) ++blue;
+        if (R > 200 && G > 200 && B <  60) ++yellow;
+        if (R <  60 && G > 200 && B > 200) ++cyan;
     }
-    std::printf("  pixels: clear=%u red=%u green=%u blue=%u\n",
-                clear, red, green, blue);
+    std::printf("  pixels: clear=%u red=%u green=%u blue=%u yellow=%u cyan=%u\n",
+                clear, red, green, blue, yellow, cyan);
     CHECK(red   > 500,  "TRIANGLES primitive rasterized (red region)");
     CHECK(green > 3000, "TRIANGLE_STRIP quad rasterized (green region)");
     CHECK(blue  > 3000, "QUADS primitive rasterized (blue region)");
+    CHECK(yellow > 100, "TRIANGLE_FAN rasterized (yellow region)");
+    CHECK(cyan   > 50,  "LINES rasterized (cyan segments)");
 
     raster.shutdown();
     rsx_shutdown(&rs);
