@@ -34,6 +34,8 @@ extern "C" {
     int   megakernel_read_mem(uint64_t, void*, size_t);
     int   megakernel_write_mem(uint64_t, const void*, size_t);
     int   megakernel_read_hle_log(uint32_t*, int);
+    int   megakernel_read_poll_state(uint64_t*, uint32_t*, uint64_t*, uint32_t*);
+    void  megakernel_dump_poll_state();
     void  megakernel_shutdown();
 }
 
@@ -266,6 +268,14 @@ int main() {
         }
     }
     std::printf("  steps=%d  HLE=%d\n", steps, hleHits);
+    {
+        uint64_t pt=0, at=0; uint32_t pc_c=0, ac=0;
+        megakernel_read_poll_state(&pt, &pc_c, &at, &ac);
+        std::printf("  poll detector: primary=0x%llx (hits=%u), alt=0x%llx (hits=%u)\n",
+                    (unsigned long long)pt, pc_c,
+                    (unsigned long long)at, ac);
+        megakernel_dump_poll_state();
+    }
     {
         ppc::PPEState fs{};
         megakernel_read_state(&fs);

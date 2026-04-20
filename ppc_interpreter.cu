@@ -2341,6 +2341,21 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
 __device__ uint64_t d_codeBegin = 0;
 __device__ uint64_t d_codeEnd   = 0;
 
+// Spin-poll detector state, persistent across kernel launches (the test
+// harness invokes the megakernel with maxCycles=1 in a loop). 4-way
+// Misra-Gries heavy-hitter table so that once the first couple of back-
+// branch hot spots have been patched and stopped firing, slower-to-
+// dominate targets (like CRT exit/atexit-drain loops) still get caught
+// instead of being starved by the earlier slots' residual decrements.
+#define POLL_SLOTS 4
+__device__ uint64_t d_poll_target[POLL_SLOTS] = {0,0,0,0};
+__device__ uint32_t d_poll_count [POLL_SLOTS] = {0,0,0,0};
+__device__ uint32_t d_back_branch_total = 0;
+__device__ uint32_t d_back_branch_fires = 0;
+#define POLL_RECENT 8
+__device__ uint64_t d_back_branch_recent[POLL_RECENT] = {0,0,0,0,0,0,0,0};
+__device__ uint32_t d_back_branch_recent_cnt[POLL_RECENT] = {0,0,0,0,0,0,0,0};
+
 __global__ void ppeMegakernel(PPEState* states, uint8_t* mem,
                                uint32_t maxCycles,
                                uint32_t* hle_log,
@@ -2350,6 +2365,8 @@ __global__ void ppeMegakernel(PPEState* states, uint8_t* mem,
     if (tid >= 1) return;  // Single PPE thread for now
 
     PPEState& s = states[tid];
+
+    const uint32_t POLL_THRESHOLD = 20000;
 
     for (uint32_t cycle = 0; cycle < maxCycles && !s.halted; cycle++) {
         // Bogus-call rescue: if we're executing from a region that reads
@@ -2374,8 +2391,122 @@ __global__ void ppeMegakernel(PPEState* states, uint8_t* mem,
                 continue;
             }
         }
+        uint64_t prev_pc = s.pc;
         int result = execOne(s, mem, hle_log, hle_signal);
         if (result == 1) break; // halted
+
+        // Spin-poll detector: count backward branches (new pc < prev pc)
+        // per target using a 2-way candidate table. When either counter
+        // exceeds POLL_THRESHOLD, walk [target, prev_pc] for `lbz` and
+        // zero each flag byte to release a cross-thread spin wait.
+        if (result == 0 && s.pc < prev_pc &&
+            s.pc >= d_codeBegin && prev_pc < d_codeEnd) {
+            uint64_t tgt = s.pc;
+            uint64_t body_end = prev_pc;
+            d_back_branch_total++;
+            // Track top-N recent back-branch targets for diagnostics.
+            {
+                int rs = -1;
+                for (int i = 0; i < POLL_RECENT; i++) {
+                    if (d_back_branch_recent[i] == tgt) { rs = i; break; }
+                }
+                if (rs < 0) {
+                    for (int i = 0; i < POLL_RECENT; i++) {
+                        if (d_back_branch_recent_cnt[i] == 0) { rs = i; break; }
+                    }
+                }
+                if (rs >= 0) {
+                    d_back_branch_recent[rs] = tgt;
+                    d_back_branch_recent_cnt[rs]++;
+                }
+            }
+            uint32_t* hit_count = nullptr;
+            int slot_found = -1;
+            for (int i = 0; i < POLL_SLOTS; i++) {
+                if (d_poll_target[i] == tgt && d_poll_count[i] > 0) {
+                    d_poll_count[i]++;
+                    hit_count = &d_poll_count[i];
+                    slot_found = i;
+                    break;
+                }
+            }
+            if (slot_found < 0) {
+                int empty = -1;
+                for (int i = 0; i < POLL_SLOTS; i++)
+                    if (d_poll_count[i] == 0) { empty = i; break; }
+                if (empty >= 0) {
+                    d_poll_target[empty] = tgt;
+                    d_poll_count [empty] = 1;
+                } else {
+                    for (int i = 0; i < POLL_SLOTS; i++) d_poll_count[i]--;
+                }
+            }
+            // Diagnostic: no per-increment logging (would flood log).
+            if (hit_count && *hit_count >= POLL_THRESHOLD) {
+                // Walk loop body for memory-load → compare → branch-back
+                // idiom. For each load, peek at the following instruction
+                // to find the comparison target and force the load's
+                // memory to satisfy it next time through.
+                for (uint64_t scan = tgt; scan + 4 < body_end; scan += 4) {
+                    uint32_t si = mem_read32(mem, scan);
+                    uint32_t op = OPCD(si);
+                    bool is_lbz = (op == OP_LBZ);
+                    bool is_lwz = (op == OP_LWZ);
+                    if (!is_lbz && !is_lwz) continue;
+                    uint32_t rd = RD(si);
+                    uint32_t ra = RA(si);
+                    int64_t disp = SIMM16(si);
+                    uint64_t ea = disp + ((ra == 0) ? 0 : s.gpr[ra]);
+                    // Only patch when we find a compare that tests the
+                    // value we just loaded — otherwise we'd clobber GOT
+                    // slots, stack saves, or arbitrary pointers whose
+                    // next instruction happens to be another load.
+                    uint64_t patch_val = 0;
+                    bool has_compare = false;
+                    uint32_t ni = mem_read32(mem, scan + 4);
+                    uint32_t nop = OPCD(ni);
+                    if (nop == OP_CMPI || nop == OP_CMPLI) {
+                        if (RA(ni) == rd) {
+                            patch_val = (uint64_t)SIMM16(ni);
+                            has_compare = true;
+                        }
+                    } else if (nop == 31) {
+                        uint32_t xo = (ni >> 1) & 0x3FFu;
+                        if (xo == 0 || xo == 32) {
+                            uint32_t cra = RA(ni), crb = RB(ni);
+                            if (cra == rd) {
+                                patch_val = s.gpr[crb];
+                                has_compare = true;
+                            } else if (crb == rd) {
+                                patch_val = s.gpr[cra];
+                                has_compare = true;
+                            }
+                        }
+                    }
+                    if (!has_compare) continue;
+                    // Safety: only patch addresses inside mapped RAM, never
+                    // code. ea can come from a stale register and point
+                    // anywhere; guard against writing into the ELF text.
+                    if (ea >= d_codeBegin && ea < d_codeEnd) continue;
+                    if (is_lbz) mem_write8(mem, ea, (uint8_t)patch_val);
+                    else        mem_write32(mem, ea, (uint32_t)patch_val);
+                }
+                if (hle_log) {
+                    uint32_t idx = atomicAdd(hle_log, 1);
+                    if (idx < 255) {
+                        hle_log[1 + idx] = 0xDF000000u |
+                            (uint32_t)(tgt & 0xFFFFFF);
+                    }
+                }
+                *hit_count = 0;
+                d_back_branch_fires++;
+                // Also clear the target so the slot is truly freed for
+                // the next hot spot instead of re-accumulating on the
+                // same PC after it's been patched.
+                if (slot_found >= 0) d_poll_target[slot_found] = 0;
+            }
+        }
+
         if (result == 2) {
             // Unimplemented — read the stuck instruction, log it, then
             // step over it so we don't spin. Advancing PC is required
@@ -2489,6 +2620,52 @@ int megakernel_set_code_range(uint64_t begin, uint64_t end) {
     cudaMemcpyToSymbolAsync(d_codeEnd, &end, sizeof(end), 0,
                             cudaMemcpyHostToDevice, g_ctx.stream);
     return 1;
+}
+
+// Read spin-poll detector state. Reports the first two slots (primary +
+// alt) for backwards compatibility with existing test harnesses; the
+// other slots are silently tracked.
+int megakernel_read_poll_state(uint64_t* primary_target, uint32_t* primary_count,
+                                uint64_t* alt_target, uint32_t* alt_count) {
+    if (!g_ctx.ready) return 0;
+    cudaStreamSynchronize(g_ctx.stream);
+    uint64_t tgts[POLL_SLOTS] = {0};
+    uint32_t cnts[POLL_SLOTS] = {0};
+    cudaMemcpyFromSymbol(tgts, d_poll_target, sizeof(tgts));
+    cudaMemcpyFromSymbol(cnts, d_poll_count,  sizeof(cnts));
+    if (primary_target) *primary_target = tgts[0];
+    if (primary_count)  *primary_count  = cnts[0];
+    if (alt_target)     *alt_target     = tgts[1];
+    if (alt_count)      *alt_count      = cnts[1];
+    return 1;
+}
+
+// Diagnostic: dump full detector state to stdout.
+void megakernel_dump_poll_state() {
+    if (!g_ctx.ready) return;
+    cudaStreamSynchronize(g_ctx.stream);
+    uint64_t tgts[POLL_SLOTS] = {0};
+    uint32_t cnts[POLL_SLOTS] = {0};
+    uint32_t total = 0, fires = 0;
+    uint64_t rt[POLL_RECENT] = {0};
+    uint32_t rc[POLL_RECENT] = {0};
+    cudaMemcpyFromSymbol(tgts, d_poll_target, sizeof(tgts));
+    cudaMemcpyFromSymbol(cnts, d_poll_count,  sizeof(cnts));
+    cudaMemcpyFromSymbol(&total, d_back_branch_total, sizeof(total));
+    cudaMemcpyFromSymbol(&fires, d_back_branch_fires, sizeof(fires));
+    cudaMemcpyFromSymbol(rt, d_back_branch_recent, sizeof(rt));
+    cudaMemcpyFromSymbol(rc, d_back_branch_recent_cnt, sizeof(rc));
+    std::printf("  poll-diag: back_branches=%u fires=%u\n", total, fires);
+    for (int i = 0; i < POLL_SLOTS; i++) {
+        if (cnts[i] || tgts[i])
+            std::printf("    slot[%d] tgt=0x%llx cnt=%u\n", i,
+                        (unsigned long long)tgts[i], cnts[i]);
+    }
+    for (int i = 0; i < POLL_RECENT; i++) {
+        if (rc[i])
+            std::printf("    recent[%d] tgt=0x%llx cnt=%u\n", i,
+                        (unsigned long long)rt[i], rc[i]);
+    }
 }
 
 // Run N cycles of the megakernel
