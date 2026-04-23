@@ -39,6 +39,7 @@ struct PpuHleDispatcher {
     };
     std::unordered_map<uint32_t, Entry> byPc;   // trampoline PC → entry
     std::unordered_map<std::string, uint64_t> unhandledHistogram;
+    std::unordered_map<std::string, uint64_t> handledHistogram;
     uint64_t callCount = 0;
     uint64_t unknownCount = 0;
 
@@ -129,6 +130,7 @@ struct PpuHleDispatcher {
         if (it == byPc.end()) return nullptr;
         const Entry& e = it->second;
         callCount++;
+        handledHistogram[e.name]++;
         uint32_t retval = 0;
 
         // --- Minimal handler set ---
@@ -337,6 +339,21 @@ struct PpuHleDispatcher {
         std::printf("  HLE dispatcher: %llu calls (%llu unhandled)\n",
                     (unsigned long long)callCount,
                     (unsigned long long)unknownCount);
+        {
+            std::vector<std::pair<std::string, uint64_t>> sorted(
+                handledHistogram.begin(), handledHistogram.end());
+            std::sort(sorted.begin(), sorted.end(),
+                      [](const auto& a, const auto& b) { return a.second > b.second; });
+            std::printf("  top handled imports:\n");
+            int printed = 0;
+            for (const auto& p : sorted) {
+                std::printf("    %-40s %llu\n",
+                            p.first.c_str(), (unsigned long long)p.second);
+                if (++printed >= 20) break;
+            }
+            bool gotInitBody = handledHistogram.count("_cellGcmInitBody") > 0;
+            std::printf("  _cellGcmInitBody fired: %s\n", gotInitBody ? "YES" : "NO");
+        }
         std::vector<std::pair<std::string, uint64_t>> sorted(
             unhandledHistogram.begin(), unhandledHistogram.end());
         std::sort(sorted.begin(), sorted.end(),

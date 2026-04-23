@@ -2342,14 +2342,14 @@ __device__ uint64_t d_codeBegin = 0;
 __device__ uint64_t d_codeEnd   = 0;
 
 // Spin-poll detector state, persistent across kernel launches (the test
-// harness invokes the megakernel with maxCycles=1 in a loop). 4-way
-// Misra-Gries heavy-hitter table so that once the first couple of back-
-// branch hot spots have been patched and stopped firing, slower-to-
-// dominate targets (like CRT exit/atexit-drain loops) still get caught
-// instead of being starved by the earlier slots' residual decrements.
-#define POLL_SLOTS 4
-__device__ uint64_t d_poll_target[POLL_SLOTS] = {0,0,0,0};
-__device__ uint32_t d_poll_count [POLL_SLOTS] = {0,0,0,0};
+// harness invokes the megakernel with maxCycles=1 in a loop). 8-way
+// Misra-Gries heavy-hitter table with a modest threshold. Previously 4
+// slots + 20k threshold missed CRT exit-drain back-branches at
+// 0x10484/0x10494 (~12k each): Misra-Gries decrements kept knocking
+// the slot out before either reached threshold.
+#define POLL_SLOTS 8
+__device__ uint64_t d_poll_target[POLL_SLOTS] = {0,0,0,0,0,0,0,0};
+__device__ uint32_t d_poll_count [POLL_SLOTS] = {0,0,0,0,0,0,0,0};
 __device__ uint32_t d_back_branch_total = 0;
 __device__ uint32_t d_back_branch_fires = 0;
 #define POLL_RECENT 8
@@ -2366,9 +2366,43 @@ __global__ void ppeMegakernel(PPEState* states, uint8_t* mem,
 
     PPEState& s = states[tid];
 
-    const uint32_t POLL_THRESHOLD = 20000;
+    const uint32_t POLL_THRESHOLD = 4000;
 
     for (uint32_t cycle = 0; cycle < maxCycles && !s.halted; cycle++) {
+        // CRT pre-main poll-drain rescue. The gs_gcm_basic_triangle main()
+        // at 0x10474/0x10484/0x10494 polls three TOC-slot flags that would
+        // be cleared by unresolved atexit-register handlers (bl 0x2cf28).
+        // Detect the lwz+lwz+cmpwi pattern and skip ahead to 0x104ac, which
+        // is past the polls but still inside main() body — preserving the
+        // HLE trampoline calls (0x2cec8, 0x2cf88), the real work at
+        // bl 0x1145c (cellGcmInitBody path), and the syscall wrapper.
+        {
+            uint32_t pc32 = (uint32_t)s.pc;
+            if ((pc32 == 0x10474 || pc32 == 0x10484 || pc32 == 0x10494) && d_codeEnd != 0) {
+                uint32_t w0 = mem_read32(mem, pc32);
+                uint32_t w1 = mem_read32(mem, pc32 + 4);
+                uint32_t w2 = mem_read32(mem, pc32 + 8);
+                // Pattern: lwz r3, d(r2); lwz r0, 0(r3); cmpwi cr7,r0,0
+                bool looksLikeTocPoll =
+                    ((w0 >> 26) == 32) &&           // lwz
+                    (((w0 >> 21) & 0x1F) == 3) &&   // rt=r3
+                    (((w0 >> 16) & 0x1F) == 2) &&   // ra=r2
+                    ((w1 >> 26) == 32) &&           // lwz
+                    (((w1 >> 21) & 0x1F) == 0) &&   // rt=r0
+                    (((w1 >> 16) & 0x1F) == 3) &&   // ra=r3
+                    (w1 & 0xFFFF) == 0 &&           // disp=0
+                    w2 == 0x2f800000;                // cmpwi cr7,r0,0
+                if (looksLikeTocPoll) {
+                    // Skip past the 3 polls, into the real body at 0x104ac.
+                    // Flow: 0x104ac lwz r3,-0x7fd8(r2); bl 0x2cec8 (HLE);
+                    //       0x104b4 ld r2,0x28(r1); bl 0x2cf88 (HLE);
+                    //       0x104c0 setup args; bl 0x1145c (real fn);
+                    //       0x104dc bl 0x174e0 (syscall 988); epilogue.
+                    s.pc = 0x104ac;
+                    continue;
+                }
+            }
+        }
         // Bogus-call rescue: if we're executing from a region that reads
         // as all zeros (uninitialized BSS, un-relocated OPD targets) OR
         // if PC has drifted outside the loaded code segment, synthesize

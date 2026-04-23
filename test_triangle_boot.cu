@@ -195,6 +195,8 @@ int main() {
     // instrumenting the interpreter.
     std::unordered_map<uint32_t, uint64_t> blTargets;
     std::unordered_map<uint32_t, uint64_t> bogusCallSites;
+    // Track callers (LR-4) of the 0x104xx hot region to find external loop driver.
+    std::unordered_map<uint32_t, uint64_t> hot104Callers;
     uint64_t prevLR = 0;
     for (steps = 0; steps < maxSteps && !stopped; ++steps) {
         megakernel_run(1);
@@ -224,6 +226,11 @@ int main() {
             if (pc >= 0x30330 || pc < 0x10000) {
                 uint32_t site = (uint32_t)(st.lr - 4);
                 bogusCallSites[site]++;
+            }
+            // Track callers (LR-4) of hot 0x104xx region — whoever is looping us.
+            if (pc >= 0x10400 && pc < 0x10600) {
+                uint32_t caller = (uint32_t)(st.lr - 4);
+                hot104Callers[caller]++;
             }
             prevLR = st.lr;
         }
@@ -355,6 +362,18 @@ int main() {
         std::sort(sorted.begin(), sorted.end(),
                   [](const auto& a, const auto& b) { return a.second > b.second; });
         std::printf("  bogus-call sites (LR-4 of rescued bl/bctrl):\n");
+        int n = 0;
+        for (const auto& p : sorted) {
+            std::printf("    0x%08x  %llu\n", p.first, (unsigned long long)p.second);
+            if (++n >= 10) break;
+        }
+    }
+    if (!hot104Callers.empty()) {
+        std::vector<std::pair<uint32_t, uint64_t>> sorted(
+            hot104Callers.begin(), hot104Callers.end());
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        std::printf("  callers of 0x104xx region (LR-4 at entry):\n");
         int n = 0;
         for (const auto& p : sorted) {
             std::printf("    0x%08x  %llu\n", p.first, (unsigned long long)p.second);
