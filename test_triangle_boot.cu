@@ -384,7 +384,9 @@ int main() {
     // CellGcmContextData in guest memory. Scan the region between
     // `begin` and `current` looking for NV method headers as a proxy
     // for "did the game actually submit RSX commands?"
-    if (disp.gcmIoBase) {
+    bool gcmInitRan = disp.handledHistogram.count("_cellGcmInitBody") > 0 ||
+                      disp.handledHistogram.count("cellGcmInit") > 0;
+    if (gcmInitRan && disp.gcmIoBase) {
         std::printf("  GCM FIFO: io=[0x%x..0x%x) cmdSize=0x%x\n",
                     disp.gcmIoBase, disp.gcmIoBase + disp.gcmIoSize,
                     disp.gcmCmdSize);
@@ -398,14 +400,16 @@ int main() {
         uint32_t ctxBegin = rd(0), ctxEnd = rd(4), ctxCur = rd(8), ctxCb = rd(12);
         std::printf("  GCM ctx: begin=0x%x end=0x%x current=0x%x cb=0x%x\n",
                     ctxBegin, ctxEnd, ctxCur, ctxCb);
-        if (ctxCur > ctxBegin && ctxCur - ctxBegin < 0x100000) {
+        if (ctxCur > ctxBegin && ctxCur - ctxBegin < 0x2000000) {
             uint32_t bytes = ctxCur - ctxBegin;
             std::vector<uint8_t> fifoBE(bytes);
             megakernel_read_mem(ctxBegin, fifoBE.data(), bytes);
             // Scan as big-endian u32 and count non-zero headers.
             uint32_t words = bytes / 4;
             uint32_t nonzero = 0, methods = 0;
-            for (uint32_t i = 0; i < words; ++i) {
+            std::unordered_map<uint32_t, uint32_t> methodHist;
+            uint32_t i = 0;
+            while (i < words) {
                 uint32_t w = (uint32_t)fifoBE[i*4]<<24
                            | (uint32_t)fifoBE[i*4+1]<<16
                            | (uint32_t)fifoBE[i*4+2]<<8
@@ -414,13 +418,65 @@ int main() {
                 // NV method header: bits [15:2] = method offset, bits [29:18] = count.
                 uint32_t count = (w >> 18) & 0x7FF;
                 uint32_t method = w & 0xFFFC;
-                if (count > 0 && count < 32 && method > 0 && method < 0x2000) methods++;
+                bool isMethod = (count > 0 && count < 2048 &&
+                                 method > 0 && method < 0x2000 &&
+                                 (w & 0x00030000) == 0);  // non-jump/call/ret
+                if (isMethod) {
+                    methods++;
+                    methodHist[method]++;
+                    i += 1 + count;  // skip over data words
+                } else {
+                    i++;
+                }
             }
-            std::printf("  GCM FIFO bytes written: %u  (%u nonzero words, ~%u plausible method headers)\n",
+            std::printf("  GCM FIFO bytes written: %u  (%u nonzero words, ~%u method packets)\n",
                         bytes, nonzero, methods);
+            // Top methods by frequency
+            std::vector<std::pair<uint32_t,uint32_t>> sorted(
+                methodHist.begin(), methodHist.end());
+            std::sort(sorted.begin(), sorted.end(),
+                      [](const auto& a, const auto& b){ return a.second > b.second; });
+            auto nvMethodName = [](uint32_t m) -> const char* {
+                switch (m) {
+                    case 0x0000: return "NOP";
+                    case 0x0040: return "SET_OBJECT";
+                    case 0x0050: return "SET_SURFACE_CLIP_HORIZONTAL";
+                    case 0x0100: return "REF";
+                    case 0x017C: return "SURFACE_COLOR_A_OFFSET";
+                    case 0x0194: return "SURFACE_PITCH_A";
+                    case 0x0204: return "SURFACE_FORMAT";
+                    case 0x0208: return "SURFACE_PITCH_Z";
+                    case 0x0220: return "SURFACE_Z_OFFSET";
+                    case 0x022C: return "SURFACE_WINDOW_ORIGIN_Y";
+                    case 0x0300: return "CLEAR_RECT_HORIZONTAL";
+                    case 0x0304: return "CLEAR_DEPTH_STENCIL_VALUE";
+                    case 0x030C: return "CLEAR_COLOR_VALUE";
+                    case 0x0310: return "CLEAR_SURFACE";
+                    case 0x1720: return "DRAW_INDEX_ARRAY";
+                    case 0x1800: return "BEGIN_END";
+                    case 0x1808: return "DRAW_ARRAYS";
+                    case 0x1828: return "BIND_VERTEX_ATTRIB";
+                    case 0x1838: return "VIEWPORT_HORIZONTAL";
+                    case 0x1A1C: return "VIEWPORT_SCALE";
+                    case 0x1B40: return "BLEND_ENABLE";
+                    case 0x1B68: return "DEPTH_TEST_ENABLE";
+                    case 0x1D94: return "CLEAR_DEPTH_ENABLE";
+                    case 0x1EF8: return "SHADER_PROGRAM";
+                    default:     return "?";
+                }
+            };
+            std::printf("  top RSX methods (offset → count → name):\n");
+            int kk = 0;
+            for (const auto& p : sorted) {
+                std::printf("    0x%04x  %6u  %s\n",
+                            p.first, p.second, nvMethodName(p.first));
+                if (++kk >= 12) break;
+            }
         } else {
             std::printf("  GCM FIFO: current == begin (no commands submitted yet)\n");
         }
+    } else if (gcmInitRan) {
+        std::printf("  GCM FIFO: cellGcmInitBody ran but ioBase=0 (args likely 0)\n");
     } else {
         std::printf("  GCM FIFO: cellGcmInitBody never called\n");
     }
