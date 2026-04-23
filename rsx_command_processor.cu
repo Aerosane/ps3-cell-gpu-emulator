@@ -42,12 +42,15 @@ int rsx_init(RSXState* state) {
     if (!state) return -1;
     memset(state, 0, sizeof(RSXState));
 
-    // Default surface: 1280×720 A8R8G8B8
+    // Default surface: 1280×720 A8R8G8B8 targeting a high VRAM region
+    // so clears don't stomp low-memory guest structures (vertex/index
+    // buffers that games frequently place at small EAs like 0x400).
     state->surfaceFormat  = SURFACE_A8R8G8B8;
     state->surfaceWidth   = 1280;
     state->surfaceHeight  = 720;
     state->surfacePitchA  = 1280 * 4;
     state->surfacePitchB  = 1280 * 4;
+    state->surfaceOffsetA = 0x02000000;   // 32 MB into VRAM
     state->surfaceColorTarget = 1;  // color A only
 
     // Default viewport / scissor
@@ -200,16 +203,16 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         state->surfacePitchD = data;
         return;
     case NV4097_SET_SURFACE_COLOR_AOFFSET:
-        state->surfaceOffsetA = data;
+        if (data) state->surfaceOffsetA = data;
         return;
     case NV4097_SET_SURFACE_COLOR_BOFFSET:
-        state->surfaceOffsetB = data;
+        if (data) state->surfaceOffsetB = data;
         return;
     case NV4097_SET_SURFACE_COLOR_COFFSET:
-        state->surfaceOffsetC = data;
+        if (data) state->surfaceOffsetC = data;
         return;
     case NV4097_SET_SURFACE_COLOR_DOFFSET:
-        state->surfaceOffsetD = data;
+        if (data) state->surfaceOffsetD = data;
         return;
     case NV4097_SET_SURFACE_COLOR_TARGET:
         state->surfaceColorTarget = data;
@@ -342,7 +345,16 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     // ── Shader programs ────────────────────────────────────────
     case NV4097_SET_TRANSFORM_PROGRAM_START:
         state->vpStart = data;
-        state->vpLoadOffset = data * 4;  // each instruction is 4 words
+        return;
+    case NV4097_SET_TRANSFORM_PROGRAM_LOAD:
+        // Sets the word-index into vpData[] where the next 0x0B80 window
+        // write lands. Hardware stores programs as 4-word instructions;
+        // "data" is the instruction index.
+        state->vpLoadOffset = data * 4;
+        return;
+    case NV4097_SET_TRANSFORM_CONSTANT_LOAD:
+        // Base vec4 index for subsequent 0x1F00 window writes.
+        state->vpConstantLoad = data;
         return;
     case NV4097_SET_SHADER_PROGRAM:
         state->fpOffset  = data & 0xFFFFFFF0;  // bits [31:4] = offset
@@ -462,14 +474,17 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         return;
     }
 
-    // ── Transform constants (256 vec4s) ────────────────────────
+    // ── Transform constants (468 vec4s on NV47) ────────────────
+    // Window at 0x1F00 holds up to 32 words (= 8 vec4s) per batch; the
+    // real constant target index is vpConstantLoad + byteIndex/16. This
+    // matches set_transform_constant::decode_one in rpcs3/NV47/HW/nv4097.
     if (method >= NV4097_SET_TRANSFORM_CONSTANT &&
-        method <  NV4097_SET_TRANSFORM_CONSTANT + 256 * 16) {
+        method <  NV4097_SET_TRANSFORM_CONSTANT + 32 * 4) {
         uint32_t byteOff  = method - NV4097_SET_TRANSFORM_CONSTANT;
-        uint32_t floatIdx = byteOff / 4;
-        if (floatIdx < 256 * 4) {
-            uint32_t vec  = floatIdx / 4;
-            uint32_t comp = floatIdx % 4;
+        uint32_t vecOff   = byteOff / 16;          // vec4 offset within batch
+        uint32_t comp     = (byteOff / 4) % 4;     // component inside vec4
+        uint32_t vec      = state->vpConstantLoad + vecOff;
+        if (vec < 512) {
             float fval;
             memcpy(&fval, &data, sizeof(float));
             state->vpConstants[vec][comp] = fval;

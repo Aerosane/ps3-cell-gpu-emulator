@@ -71,13 +71,13 @@ struct VPDecodedInsn {
     VPDecodedSrc src[3];
 
     // Vector destination
-    uint32_t vecDstTmp;     // temp register index (D0.dst_tmp)
-    uint32_t vecDstOut;     // output register index (D3.dst)
-    bool vecWriteResult;    // D0.vec_result — write to output vs temp
+    uint32_t vecDstTmp;     // temp register index (D0.dst_tmp, 0x3F = no temp write)
+    uint32_t vecDstOut;     // output register index (D3.dst, 0x1F = no output write)
+    bool vecWriteResult;    // D0.vec_result — 1: VEC writes to o[], 0: SCA writes to o[]
     bool vecMaskX, vecMaskY, vecMaskZ, vecMaskW;
 
-    // Scalar destination
-    uint32_t scaDstTmp;     // scalar temp dest (D3.sca_dst_tmp)
+    // Scalar destination (same output reg — vecDstOut — shared field D3.dst)
+    uint32_t scaDstTmp;     // scalar temp dest (D3.sca_dst_tmp, 0x3F = no temp write)
     bool scaMaskX, scaMaskY, scaMaskZ, scaMaskW;
 
     // Modifiers
@@ -93,18 +93,30 @@ struct VPDecodedInsn {
 inline VPDecodedInsn vp_decode(const uint32_t d[4]) {
     VPDecodedInsn insn = {};
 
-    // D0 fields
+    // D0 fields (NV47 vertex program instruction word 0; bit layout per
+    // rpcs3 RSXVertexProgram.h D0 union)
     uint32_t d0 = d[0];
-    insn.vecMaskX     = !((d0 >> 8) & 0x3); // mask_x: 0=write, non-0=skip (inverted)
-    insn.vecMaskY     = !((d0 >> 6) & 0x3);
-    insn.vecMaskZ     = !((d0 >> 4) & 0x3);
-    insn.vecMaskW     = !((d0 >> 2) & 0x3);
-    insn.vecDstTmp    = (d0 >> 14) & 0x3F;   // dst_tmp: 6 bits
+    //   bits  0-1 addr_swz
+    //   bits  2-3 mask_w  (ignored — real masks live in D3)
+    //   bits  4-5 mask_z
+    //   bits  6-7 mask_y
+    //   bits  8-9 mask_x
+    //   bits 10-12 cond
+    //   bit  13   cond_test_enable
+    //   bit  14   cond_update_enable_0
+    //   bits 15-20 dst_tmp              (6 bits)
+    //   bits 21-23 src0_abs..src2_abs
+    //   bits 24-25 addr_reg_sel_1, cond_reg_sel_1
+    //   bit  26   saturate
+    //   bit  27   index_input
+    //   bit  29   cond_update_enable_1
+    //   bit  30   vec_result
+    insn.vecDstTmp    = (d0 >> 15) & 0x3F;   // bits 15-20
     bool src0Abs      = (d0 >> 21) & 1;
     bool src1Abs      = (d0 >> 22) & 1;
     bool src2Abs      = (d0 >> 23) & 1;
-    insn.saturate     = (d0 >> 25) & 1;       // staturate (sic)
-    insn.vecWriteResult = (d0 >> 29) & 1;     // vec_result
+    insn.saturate     = (d0 >> 26) & 1;       // bit 26
+    insn.vecWriteResult = (d0 >> 30) & 1;     // bit 30 vec_result
 
     // D1 fields
     uint32_t d1 = d[1];
@@ -558,7 +570,7 @@ inline void vp_read_src(const VPDecodedSrc& s,
         base = inputs[inputIdx & 0xF].v;
         break;
     case VP_REG_CONSTANT:
-        base = constants[constIdx & 0xFF].v;
+        base = constants[constIdx & 0x1FF].v;
         break;
     default:
         base = zeros;
@@ -670,11 +682,22 @@ inline void vp_execute(const uint32_t* vpData, uint32_t vpLen, uint32_t vpStart,
                 break;
             }
 
-            float* dst = insn.vecWriteResult ? outputs[insn.vecDstOut & 0xF].v
-                                             : temps[insn.vecDstTmp & 0x3F].v;
-            vp_write_dst(r,
-                         insn.vecMaskX, insn.vecMaskY, insn.vecMaskZ, insn.vecMaskW,
-                         insn.saturate, dst);
+            // Write destinations per NV47 semantics:
+            //   VEC op writes to OUTPUT reg (o[d3.dst]) iff d0.vec_result == 1 AND d3.dst != 0x1F
+            //   VEC op writes to TEMP reg (r[d0.dst_tmp]) iff d0.dst_tmp != 0x3F
+            //   Both writes can happen in the same instruction.
+            if (insn.vecWriteResult && insn.vecDstOut != 0x1F) {
+                float* dstOut = outputs[insn.vecDstOut & 0xF].v;
+                vp_write_dst(r,
+                             insn.vecMaskX, insn.vecMaskY, insn.vecMaskZ, insn.vecMaskW,
+                             insn.saturate, dstOut);
+            }
+            if (insn.vecDstTmp != 0x3F) {
+                float* dstTmp = temps[insn.vecDstTmp & 0x3F].v;
+                vp_write_dst(r,
+                             insn.vecMaskX, insn.vecMaskY, insn.vecMaskZ, insn.vecMaskW,
+                             insn.saturate, dstTmp);
+            }
         }
 
         // Scalar op (uses src2, result broadcast to vector dst channels)
@@ -694,10 +717,20 @@ inline void vp_execute(const uint32_t* vpData, uint32_t vpLen, uint32_t vpStart,
                 r[0] = r[1] = r[2] = r[3] = s;
                 break;
             }
-            float* dst = temps[insn.scaDstTmp & 0x3F].v;
-            vp_write_dst(r,
-                         insn.scaMaskX, insn.scaMaskY, insn.scaMaskZ, insn.scaMaskW,
-                         insn.saturate, dst);
+            // Scalar writes: OUTPUT iff !d0.vec_result AND d3.dst != 0x1F,
+            // TEMP iff d3.sca_dst_tmp != 0x3F.
+            if (!insn.vecWriteResult && insn.vecDstOut != 0x1F) {
+                float* dstOut = outputs[insn.vecDstOut & 0xF].v;
+                vp_write_dst(r,
+                             insn.scaMaskX, insn.scaMaskY, insn.scaMaskZ, insn.scaMaskW,
+                             insn.saturate, dstOut);
+            }
+            if (insn.scaDstTmp != 0x3F) {
+                float* dstTmp = temps[insn.scaDstTmp & 0x3F].v;
+                vp_write_dst(r,
+                             insn.scaMaskX, insn.scaMaskY, insn.scaMaskZ, insn.scaMaskW,
+                             insn.saturate, dstTmp);
+            }
         }
 
         if (insn.endFlag) break;

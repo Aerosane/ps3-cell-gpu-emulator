@@ -44,8 +44,13 @@ static inline bool decode_attr(const uint8_t* vram, uint32_t vramSize,
     switch (type) {
     case VERTEX_F: {
         for (int i = 0; i < channels; ++i) {
+            // PS3 stores vertex data big-endian in guest RAM; we byteswap
+            // to decode each 32-bit float correctly on the x86 host.
+            uint32_t be;
+            std::memcpy(&be, p + i * 4, 4);
+            uint32_t le = __builtin_bswap32(be);
             float f;
-            std::memcpy(&f, p + i * 4, 4);
+            std::memcpy(&f, &le, 4);
             out[i] = f;
         }
         return true;
@@ -331,6 +336,37 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
 void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t count) {
     if (!rast_ || count == 0) return;
 
+    // One-shot diagnostic for the first draw: dump the vertex stream
+    // we're about to feed the rasterizer.
+    static int once = 0;
+    if (!once && vram_ && s.vertexArrays[0].enabled) {
+        once = 1;
+        const auto& va0 = s.vertexArrays[0];
+        std::printf("[Bridge] first draw: first=%u count=%u  prim=0x%x\n",
+                    first, count, s.currentPrim);
+        std::printf("[Bridge]   VA0 off=0x%x fmt=0x%x stride=%u size=%u type=%u enabled=%d\n",
+                    va0.offset, va0.format,
+                    (va0.format >> 8) & 0xFF,
+                    (va0.format >> 4) & 0xF,
+                    (va0.format) & 0xF, (int)va0.enabled);
+        std::printf("[Bridge]   VA3 off=0x%x fmt=0x%x enabled=%d\n",
+                    s.vertexArrays[3].offset, s.vertexArrays[3].format,
+                    (int)s.vertexArrays[3].enabled);
+        // Dump first 3 vertices raw bytes at va0.offset.
+        uint32_t stride = (va0.format >> 8) & 0xFF;
+        if (stride && (uint64_t)va0.offset + stride * 3 <= vramSize_) {
+            std::printf("[Bridge]   raw VA0 bytes (3 verts):");
+            const uint8_t* p = vram_ + va0.offset;
+            for (uint32_t v = 0; v < 3; ++v) {
+                std::printf("\n    v%u:", v);
+                for (uint32_t b = 0; b < stride; ++b) std::printf(" %02x", p[v*stride + b]);
+            }
+            std::printf("\n");
+        } else {
+            std::printf("[Bridge]   VA0.offset out of vram range (vramSize=%u)\n", vramSize_);
+        }
+    }
+
     // Translate FIFO-side pipeline state into rasterizer setters before
     // every draw. Games frequently toggle depth/blend/cull mid-frame.
     applyPipelineState(s);
@@ -375,13 +411,28 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                        inputs, consts, outputs);
 
             RasterVertex& v = transformed[i];
-            v.x = outputs[0].v[0]; v.y = outputs[0].v[1]; v.z = outputs[0].v[2];
+            // VP outputs HPOS in clip/NDC space; perform perspective
+            // divide (w) and map NDC [-1,1] → pixel space using the
+            // current surface dimensions. Y is flipped for screen-down.
+            float ox = outputs[0].v[0];
+            float oy = outputs[0].v[1];
+            float oz = outputs[0].v[2];
+            float ow = outputs[0].v[3];
+            if (ow == 0.0f) ow = 1.0f;
+            float nx = ox / ow;
+            float ny = oy / ow;
+            float nz = oz / ow;
+            float W = (float)(s.surfaceWidth  ? s.surfaceWidth  : 1280);
+            float H = (float)(s.surfaceHeight ? s.surfaceHeight : 720);
+            v.x = (nx * 0.5f + 0.5f) * W;
+            v.y = (1.0f - (ny * 0.5f + 0.5f)) * H;
+            v.z = nz * 0.5f + 0.5f;
             v.r = outputs[1].v[0]; v.g = outputs[1].v[1];
             v.b = outputs[1].v[2]; v.a = outputs[1].v[3];
             v.u = outputs[4].v[0]; v.v = outputs[4].v[1];
         }
         base = transformed.data();
-    }
+    } 
 
     // ── Per-vertex texture sampling (Gouraud modulation) ────────
     // If texture unit 0 is enabled and vram is mapped, sample it at

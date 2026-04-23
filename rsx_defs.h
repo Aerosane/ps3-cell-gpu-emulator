@@ -84,8 +84,16 @@ static constexpr uint32_t NV4097_SET_SHADE_MODE               = 0x00000368;
 static constexpr uint32_t NV4097_SET_SHADER_PROGRAM          = 0x000008E4;
 
 // Transform program (vertex shader)
-static constexpr uint32_t NV4097_SET_TRANSFORM_CONSTANT      = 0x00000A20;
-static constexpr uint32_t NV4097_SET_TRANSFORM_PROGRAM       = 0x00000B80;
+// Real NV47 layout:
+//   0x1E94 TRANSFORM_EXECUTION_MODE
+//   0x1E9C TRANSFORM_PROGRAM_LOAD   (write-pointer index for 0x0B80 window)
+//   0x1EA0 TRANSFORM_PROGRAM_START  (execution entry point)
+//   0x1EFC TRANSFORM_CONSTANT_LOAD  (write-pointer index for 0x1F00 window)
+//   0x1F00 TRANSFORM_CONSTANT       (256 vec4 constant window)
+static constexpr uint32_t NV4097_SET_TRANSFORM_PROGRAM        = 0x00000B80;
+static constexpr uint32_t NV4097_SET_TRANSFORM_PROGRAM_LOAD   = 0x00001E9C;
+static constexpr uint32_t NV4097_SET_TRANSFORM_CONSTANT_LOAD  = 0x00001EFC;
+static constexpr uint32_t NV4097_SET_TRANSFORM_CONSTANT       = 0x00001F00;
 
 // Vertex arrays (16 slots, stride 4 per slot)
 static constexpr uint32_t NV4097_SET_VERTEX_DATA_ARRAY_OFFSET = 0x00001680;
@@ -138,8 +146,8 @@ static constexpr uint32_t NV4097_SET_TEXTURE_IMAGE_RECT       = 0x00001A18;
 static constexpr uint32_t NV4097_SET_COLOR_CLEAR_VALUE       = 0x00001D90;
 static constexpr uint32_t NV4097_CLEAR_SURFACE               = 0x00001D94;
 
-// Transform program start address
-static constexpr uint32_t NV4097_SET_TRANSFORM_PROGRAM_START = 0x00001E94;
+// Transform program start address (real addr 0x1EA0)
+static constexpr uint32_t NV4097_SET_TRANSFORM_PROGRAM_START = 0x00001EA0;
 
 // Flip (surface A offset for display flip)
 static constexpr uint32_t NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP = 0x00000E20;
@@ -288,15 +296,16 @@ struct RSXState {
     // Vertex program (transform program)
     uint32_t vpStart;           // start instruction index
     uint32_t vpData[512 * 4];  // up to 512 instructions × 4 words each
-    uint32_t vpLoadOffset;      // current upload offset
+    uint32_t vpLoadOffset;      // current program upload offset (word index)
     uint32_t vpValid;           // set when a vertex program has been uploaded
 
     // Fragment program
     uint32_t fpOffset;   // VRAM offset of fragment program
     uint32_t fpControl;
 
-    // Transform constants (256 × vec4)
-    float    vpConstants[256][4];
+    // Transform constants (up to 468 × vec4 on NV47; round up to 512)
+    float    vpConstants[512][4];
+    uint32_t vpConstantLoad;    // current constant upload base index (vec4 index)
 
     // Textures (16 units)
     struct TextureUnit {

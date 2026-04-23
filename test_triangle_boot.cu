@@ -560,6 +560,14 @@ int main() {
             dumpKey(0x1680, "VERTEX_DATA_ARRAY_OFFSET[0]");
             dumpKey(0x1740, "VERTEX_DATA_ARRAY_FORMAT[0]");
             dumpKey(0x1808, "BEGIN_END");
+            std::printf("  viewport transform values (first vs last per frame):\n");
+            for (uint32_t m = 0x0a20; m <= 0x0a3c; m += 4) {
+                auto fi = firstVal.find(m), li = lastVal.find(m);
+                if (fi == firstVal.end()) continue;
+                std::printf("    0x%04x  first=0x%08x  last=0x%08x  hits=%u\n",
+                            m, fi->second, li->second,
+                            hitCount.count(m) ? hitCount[m] : 0u);
+            }
             // top 20 methods by nonzero-count
             std::vector<std::pair<uint32_t,uint32_t>> nzRank(valCount.begin(), valCount.end());
             std::sort(nzRank.begin(), nzRank.end(),
@@ -657,6 +665,16 @@ int main() {
                         clearValCount, nonClear, bgColor);
             std::printf("    painted hues: red=%u green=%u blue=%u\n",
                         red, green, blue);
+            // Show up to 8 distinct non-bg pixel values for diagnosis.
+            std::unordered_map<uint32_t, uint32_t> uniq;
+            for (uint32_t k = 0; k < W * H; ++k)
+                if (fb[k] != bgColor) uniq[fb[k]]++;
+            std::vector<std::pair<uint32_t,uint32_t>> ur(uniq.begin(), uniq.end());
+            std::sort(ur.begin(), ur.end(),
+                      [](auto&a, auto&b){ return a.second > b.second; });
+            std::printf("    distinct painted colors: %zu; top:\n", ur.size());
+            for (size_t i = 0; i < std::min<size_t>(8, ur.size()); ++i)
+                std::printf("      0x%08x  x%u\n", ur[i].first, ur[i].second);
             rsx::rsx_shutdown(&rs);
         } else {
             std::printf("  GCM FIFO: current == begin (no commands submitted yet)\n");
