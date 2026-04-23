@@ -22,6 +22,9 @@
 #include "ppu_hle_names.h"
 #include "ppu_hle_dispatch.h"
 #include "ppc_defs.h"
+#include "rsx_defs.h"
+#include "rsx_raster.h"
+#include "rsx_raster_bridge.h"
 
 extern "C" {
     int   megakernel_init();
@@ -37,6 +40,13 @@ extern "C" {
     int   megakernel_read_poll_state(uint64_t*, uint32_t*, uint64_t*, uint32_t*);
     void  megakernel_dump_poll_state();
     void  megakernel_shutdown();
+}
+
+namespace rsx {
+    int  rsx_init(RSXState* state);
+    int  rsx_process_fifo(RSXState* state, const uint32_t* fifo, uint32_t fifoSize,
+                          uint8_t* vram, uint32_t maxCmds);
+    void rsx_shutdown(RSXState* state);
 }
 
 static uint32_t be32(const uint8_t* p) {
@@ -472,6 +482,55 @@ int main() {
                             p.first, p.second, nvMethodName(p.first));
                 if (++kk >= 12) break;
             }
+
+            // ── Replay the FIFO through rsx_process_fifo ──
+            // Guest FIFO is PPC64-BE. Byte-swap into host-LE u32[]
+            // and feed to the command processor via the rasterbridge.
+            std::vector<uint32_t> fifoLE(words);
+            for (uint32_t j = 0; j < words; ++j) {
+                fifoLE[j] = (uint32_t)fifoBE[j*4]<<24
+                          | (uint32_t)fifoBE[j*4+1]<<16
+                          | (uint32_t)fifoBE[j*4+2]<<8
+                          | fifoBE[j*4+3];
+            }
+            constexpr uint32_t W = 1280, H = 720;
+            constexpr uint32_t VRAM_BYTES = 64u * 1024u * 1024u;
+            std::vector<uint8_t> vram(VRAM_BYTES, 0);
+            rsx::CudaRasterizer raster;
+            raster.init(W, H);
+            rsx::RasterBridge bridge;
+            bridge.attach(&raster);
+            bridge.setVRAM(vram.data(), VRAM_BYTES);
+            rsx::RSXState rs;
+            rsx::rsx_init(&rs);
+            rs.vulkanEmitter = &bridge;
+            int nCmds = rsx::rsx_process_fifo(&rs, fifoLE.data(), words,
+                                              vram.data(), words);
+            std::printf("  RSX replay: %d commands processed\n", nCmds);
+            std::printf("  bridge counters: surf=%u clears=%u draws=%u flips=%u\n",
+                        bridge.counters.surfaceSetups, bridge.counters.clears,
+                        bridge.counters.draws, bridge.counters.flips);
+            // Read back the framebuffer and check for non-background pixels
+            std::vector<uint32_t> fb(W * H, 0);
+            raster.readbackPlane(0, fb.data());
+            uint32_t nonClear = 0, red = 0, green = 0, blue = 0;
+            uint32_t clearValCount = 0;
+            uint32_t bgColor = fb[0];  // assume top-left is clear color
+            for (uint32_t k = 0; k < W * H; ++k) {
+                if (fb[k] == bgColor) { clearValCount++; continue; }
+                nonClear++;
+                uint8_t R = (fb[k] >> 16) & 0xFF;
+                uint8_t G = (fb[k] >>  8) & 0xFF;
+                uint8_t B =  fb[k]        & 0xFF;
+                if (R > G && R > B) red++;
+                else if (G > R && G > B) green++;
+                else if (B > R && B > G) blue++;
+            }
+            std::printf("  framebuffer: %u clear / %u painted  (bg=0x%08x)\n",
+                        clearValCount, nonClear, bgColor);
+            std::printf("    painted hues: red=%u green=%u blue=%u\n",
+                        red, green, blue);
+            rsx::rsx_shutdown(&rs);
         } else {
             std::printf("  GCM FIFO: current == begin (no commands submitted yet)\n");
         }
