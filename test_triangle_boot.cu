@@ -496,6 +496,13 @@ int main() {
             constexpr uint32_t W = 1280, H = 720;
             constexpr uint32_t VRAM_BYTES = 64u * 1024u * 1024u;
             std::vector<uint8_t> vram(VRAM_BYTES, 0);
+            // Mirror guest memory into VRAM so vertex/index buffers
+            // referenced via cellGcmAddressToOffset (which returns EA
+            // as-is) resolve to real data. Cap at VRAM_BYTES.
+            {
+                uint32_t mirror = std::min<uint32_t>(VRAM_BYTES, 32u*1024u*1024u);
+                megakernel_read_mem(0, vram.data(), mirror);
+            }
             rsx::CudaRasterizer raster;
             raster.init(W, H);
             rsx::RasterBridge bridge;
@@ -510,6 +517,20 @@ int main() {
             std::printf("  bridge counters: surf=%u clears=%u draws=%u flips=%u\n",
                         bridge.counters.surfaceSetups, bridge.counters.clears,
                         bridge.counters.draws, bridge.counters.flips);
+            // Post-replay state inspection
+            std::printf("  RSX state: viewport=%dx%d scissor=%dx%d surfaceWH=%ux%u\n",
+                        rs.viewportW, rs.viewportH,
+                        rs.scissorW, rs.scissorH,
+                        rs.surfaceWidth, rs.surfaceHeight);
+            std::printf("             surfA_off=0x%x pitch=%u depth_off=0x%x\n",
+                        rs.surfaceOffsetA, rs.surfacePitchA, rs.depthOffset);
+            std::printf("             clearValue=0x%08x colorTarget=0x%x\n",
+                        rs.colorClearValue, rs.surfaceColorTarget);
+            int enabledVAs = 0;
+            for (int va = 0; va < 16; ++va)
+                if (rs.vertexArrays[va].enabled) enabledVAs++;
+            std::printf("             enabled vertex arrays: %d  vpStart=%u\n",
+                        enabledVAs, rs.vpStart);
             // Read back the framebuffer and check for non-background pixels
             std::vector<uint32_t> fb(W * H, 0);
             raster.readbackPlane(0, fb.data());
