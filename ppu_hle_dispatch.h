@@ -235,10 +235,15 @@ struct PpuHleDispatcher {
             // If caller did not supply an io buffer (ioAddr==0) they rely
             // on the runtime to allocate one. Provide a scratch region.
             if (ioAddr == 0) {
-                ioAddr = 0x00F80000;         // 512 KB scratch FIFO
-                if (ioSize == 0) ioSize = 0x80000;
-                std::printf("  [HLE] _cellGcmInitBody: synth ioAddr=0x%x ioSize=0x%x\n",
-                            ioAddr, ioSize);
+                ioAddr = 0x00F80000;         // scratch IO region
+                if (ioSize == 0) ioSize = 0x100000;   // 1 MB scratch
+                // Force a FIFO as big as the whole IO region so that the
+                // single-run capture never wraps — we don't implement JUMP-
+                // based ring walking, so wrap would stomp the initial
+                // SURFACE/VIEWPORT setup.
+                cmdSize = ioSize;
+                std::printf("  [HLE] _cellGcmInitBody: synth ioAddr=0x%x ioSize=0x%x cmdSize=0x%x\n",
+                            ioAddr, ioSize, cmdSize);
             }
             gcmCmdSize = cmdSize ? cmdSize : 0x8000;   // 32KB default
             gcmIoSize  = ioSize;

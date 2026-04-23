@@ -170,21 +170,25 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     // ── Surface setup ──────────────────────────────────────────
     switch (method) {
     case NV4097_SET_SURFACE_FORMAT:
-        state->surfaceFormat = data & 0x1F;
+        if (data) state->surfaceFormat = data & 0x1F;
         RSX_EMIT(onSurfaceSetup, state);
         return;
     case NV4097_SET_SURFACE_CLIP_HORIZONTAL:
-        state->surfaceWidth  = data & 0xFFFF;
-        state->viewportX     = 0;
-        state->viewportW     = state->surfaceWidth;
+        if (data & 0xFFFF) {
+            state->surfaceWidth  = data & 0xFFFF;
+            state->viewportX     = 0;
+            state->viewportW     = state->surfaceWidth;
+        }
         return;
     case NV4097_SET_SURFACE_CLIP_VERTICAL:
-        state->surfaceHeight = data & 0xFFFF;
-        state->viewportY     = 0;
-        state->viewportH     = state->surfaceHeight;
+        if (data & 0xFFFF) {
+            state->surfaceHeight = data & 0xFFFF;
+            state->viewportY     = 0;
+            state->viewportH     = state->surfaceHeight;
+        }
         return;
     case NV4097_SET_SURFACE_PITCH_A:
-        state->surfacePitchA = data;
+        if (data) state->surfacePitchA = data;
         return;
     case NV4097_SET_SURFACE_PITCH_B:
         state->surfacePitchB = data;
@@ -221,12 +225,19 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
 
     // ── Viewport / Scissor ─────────────────────────────────────
     case NV4097_SET_VIEWPORT_HORIZONTAL:
-        state->viewportX = (uint16_t)(data & 0xFFFF);
-        state->viewportW = (uint16_t)(data >> 16);
+        // Some RSX programs (e.g. the PSL1GHT basic-triangle demo) write
+        // 0 here and rely on VIEWPORT_SCALE/OFFSET for the actual NDC→
+        // raster transform; treat 0-width as "keep surface default".
+        if (data != 0) {
+            state->viewportX = (uint16_t)(data & 0xFFFF);
+            state->viewportW = (uint16_t)(data >> 16);
+        }
         return;
     case NV4097_SET_VIEWPORT_VERTICAL:
-        state->viewportY = (uint16_t)(data & 0xFFFF);
-        state->viewportH = (uint16_t)(data >> 16);
+        if (data != 0) {
+            state->viewportY = (uint16_t)(data & 0xFFFF);
+            state->viewportH = (uint16_t)(data >> 16);
+        }
         RSX_EMIT(onViewport, state);
         return;
     case NV4097_SET_SCISSOR_HORIZONTAL:

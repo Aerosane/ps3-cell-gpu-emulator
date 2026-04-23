@@ -511,6 +511,112 @@ int main() {
             rsx::RSXState rs;
             rsx::rsx_init(&rs);
             rs.vulkanEmitter = &bridge;
+            // Replay with logging of first-value-per-method for key setup methods.
+            std::unordered_map<uint32_t, uint32_t> firstVal, lastVal;
+            std::unordered_map<uint32_t, uint32_t> valCount;
+            std::unordered_map<uint32_t, uint32_t> hitCount;
+            auto logIfKey = [&](uint32_t m, uint32_t d) {
+                if (!firstVal.count(m)) firstVal[m] = d;
+                lastVal[m] = d;
+                hitCount[m]++;
+                if (d) valCount[m]++;
+            };
+            {
+                uint32_t p = 0;
+                while (p < words) {
+                    uint32_t hdr = fifoLE[p++];
+                    if ((hdr & 0x3) != 0 || hdr == 0 || hdr == 0x00020000) continue;
+                    uint32_t cnt = (hdr >> 18) & 0x7FF;
+                    uint32_t sub = (hdr >> 13) & 0x1F;
+                    uint32_t mth = ((hdr >> 2) & 0x7FF) << 2;
+                    bool nonIncr = ((hdr >> 29) & 7) == 2;
+                    (void)sub;
+                    if (cnt == 0 || cnt > 2048 || mth == 0 || mth >= 0x2000) continue;
+                    for (uint32_t i = 0; i < cnt && p < words; ++i) {
+                        uint32_t d = fifoLE[p++];
+                        logIfKey(mth, d);
+                        if (!nonIncr) mth += 4;
+                    }
+                }
+            }
+            auto dumpKey = [&](uint32_t m, const char* name) {
+                auto itF = firstVal.find(m), itL = lastVal.find(m);
+                uint32_t nz = valCount.count(m) ? valCount[m] : 0;
+                if (itF == firstVal.end())
+                    std::printf("    %-32s (0x%04x) = NOT SEEN\n", name, m);
+                else
+                    std::printf("    %-32s (0x%04x) first=0x%08x last=0x%08x nonzero=%u\n",
+                                name, m, itF->second, itL->second, nz);
+            };
+            std::printf("  method values (first/last/nonzero-count):\n");
+            dumpKey(0x0200, "SURFACE_FORMAT");
+            dumpKey(0x0204, "SURFACE_CLIP_H");
+            dumpKey(0x0208, "SURFACE_CLIP_V");
+            dumpKey(0x020c, "SURFACE_PITCH_A");
+            dumpKey(0x0210, "SURFACE_COLOR_AOFFSET");
+            dumpKey(0x0228, "SURFACE_COLOR_TARGET");
+            dumpKey(0x0a00, "VIEWPORT_H");
+            dumpKey(0x0a04, "VIEWPORT_V");
+            dumpKey(0x1680, "VERTEX_DATA_ARRAY_OFFSET[0]");
+            dumpKey(0x1740, "VERTEX_DATA_ARRAY_FORMAT[0]");
+            dumpKey(0x1808, "BEGIN_END");
+            // top 20 methods by nonzero-count
+            std::vector<std::pair<uint32_t,uint32_t>> nzRank(valCount.begin(), valCount.end());
+            std::sort(nzRank.begin(), nzRank.end(),
+                      [](auto&a, auto&b){ return a.second > b.second; });
+            std::printf("  top methods carrying nonzero data (mth, nz, firstHex, lastHex):\n");
+            for (size_t i = 0; i < std::min<size_t>(20, nzRank.size()); ++i) {
+                uint32_t m = nzRank[i].first;
+                std::printf("    0x%04x  nz=%-5u  first=0x%08x  last=0x%08x\n",
+                            m, nzRank[i].second, firstVal[m], lastVal[m]);
+            }
+            // all methods in 0x200-0x240 (surface methods)
+            std::printf("  surface-range methods (0x200-0x240):\n");
+            for (uint32_t m = 0x200; m <= 0x240; m += 4) {
+                if (hitCount.count(m)) {
+                    std::printf("    0x%04x  hits=%-5u  first=0x%08x  last=0x%08x\n",
+                                m, hitCount[m], firstVal[m], lastVal[m]);
+                }
+            }
+
+            std::printf("  first 16 FIFO LE words:\n   ");
+            for (uint32_t i = 0; i < std::min<uint32_t>(16, words); ++i)
+                std::printf(" %08x", fifoLE[i]);
+            std::printf("\n");
+            // (diagnostic) quick sweep to count stubborn surface writes.
+            int surfHits = 0;
+            for (uint32_t p = 0; p < words; ) {
+                uint32_t hdr = fifoLE[p++];
+                if ((hdr & 0x3) != 0 || hdr == 0 || hdr == 0x00020000) continue;
+                uint32_t cnt = (hdr >> 18) & 0x7FF;
+                uint32_t mth = ((hdr >> 2) & 0x7FF) << 2;
+                bool nonIncr = ((hdr >> 29) & 7) == 2;
+                if (cnt == 0 || cnt > 2048) continue;
+                for (uint32_t i = 0; i < cnt && p < words; ++i) {
+                    uint32_t m = nonIncr ? mth : mth + i*4;
+                    (void)fifoLE[p++];
+                    if (m >= 0x200 && m <= 0x240) surfHits++;
+                }
+            }
+            std::printf("  surface 0x200-0x240 writes: %d\n", surfHits);
+            // Specifically list any 0x200/0x204 writes (diagnostic, kept minimal).
+            int ct200=0, ct204=0;
+            for (uint32_t p = 0; p < words; ) {
+                uint32_t hdr = fifoLE[p++];
+                if ((hdr & 0x3) != 0 || hdr == 0 || hdr == 0x00020000) continue;
+                uint32_t cnt = (hdr >> 18) & 0x7FF;
+                uint32_t mth = ((hdr >> 2) & 0x7FF) << 2;
+                bool nonIncr = ((hdr >> 29) & 7) == 2;
+                if (cnt == 0 || cnt > 2048) continue;
+                for (uint32_t i = 0; i < cnt && p < words; ++i) {
+                    uint32_t m = nonIncr ? mth : mth + i*4;
+                    uint32_t d = fifoLE[p++]; (void)d;
+                    if (m == 0x200) ct200++;
+                    if (m == 0x204) ct204++;
+                }
+            }
+            std::printf("  SURFACE_FORMAT(0x200)=%d writes, SURFACE_CLIP_H(0x204)=%d writes "
+                        "(data=0 → keep defaults)\n", ct200, ct204);
             int nCmds = rsx::rsx_process_fifo(&rs, fifoLE.data(), words,
                                               vram.data(), words);
             std::printf("  RSX replay: %d commands processed\n", nCmds);
