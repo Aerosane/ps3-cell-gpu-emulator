@@ -69,6 +69,12 @@ struct PpuHleDispatcher {
     uint32_t gcmFifoBegin = 0;
     uint32_t gcmFifoEnd   = 0;
 
+    // Number of times the guest asked to present (cellGcmSetFlipCommand).
+    // Consumers (tests / raster bridge) should read+clear this after
+    // each FIFO drain to drive onFlip emission.
+    uint32_t gcmFlipRequests = 0;
+    uint32_t gcmLastFlipBuffer = 0;   // buffer id as passed by caller
+
     // Extra PC-indexed handlers for non-import functions we want to
     // short-circuit (e.g. the ELF's internal malloc/free).
     enum class Builtin { Malloc, Free, None };
@@ -208,9 +214,13 @@ struct PpuHleDispatcher {
             retval = 0;
         } else if (e.name == "_cellGcmSetFlipCommand" ||
                    e.name == "cellGcmSetFlipCommand") {
-            // Real HW writes a NV flip command into the FIFO. Skip; the
-            // game's FIFO is being processed by our RSX emulator
-            // separately (or will be once we wire it up).
+            // Real HW writes a NV flip command into the FIFO. We don't
+            // synthesise that packet (the FIFO replay happens separately),
+            // but we do record the request so the host driver can emit an
+            // onFlip barrier to the raster bridge after replay. r4 is the
+            // buffer id; leave it for the consumer.
+            gcmLastFlipBuffer = (uint32_t)st.gpr[4];
+            gcmFlipRequests++;
             retval = 0;
         } else if (e.name == "_cellGcmInitBody" ||
                    e.name == "cellGcmInit") {
