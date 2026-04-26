@@ -51,6 +51,7 @@ TESTS=(
     test_mfc_dma
     test_rsx_shaders
     triangle_boot_test
+    cube_boot_test
     turbo_test
 )
 

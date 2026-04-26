@@ -454,8 +454,9 @@ int main() {
                     case 0x0100: return "REF";
                     case 0x017C: return "SURFACE_COLOR_A_OFFSET";
                     case 0x0194: return "SURFACE_PITCH_A";
-                    case 0x0204: return "SURFACE_FORMAT";
-                    case 0x0208: return "SURFACE_PITCH_Z";
+                    case 0x0200: return "SURFACE_CLIP_H";
+                    case 0x0204: return "SURFACE_CLIP_V";
+                    case 0x0208: return "SURFACE_FORMAT";
                     case 0x0220: return "SURFACE_Z_OFFSET";
                     case 0x022C: return "SURFACE_WINDOW_ORIGIN_Y";
                     case 0x0300: return "CLEAR_RECT_HORIZONTAL";
@@ -549,12 +550,12 @@ int main() {
                                 name, m, itF->second, itL->second, nz);
             };
             std::printf("  method values (first/last/nonzero-count):\n");
-            dumpKey(0x0200, "SURFACE_FORMAT");
-            dumpKey(0x0204, "SURFACE_CLIP_H");
-            dumpKey(0x0208, "SURFACE_CLIP_V");
+            dumpKey(0x0200, "SURFACE_CLIP_H");
+            dumpKey(0x0204, "SURFACE_CLIP_V");
+            dumpKey(0x0208, "SURFACE_FORMAT");
             dumpKey(0x020c, "SURFACE_PITCH_A");
             dumpKey(0x0210, "SURFACE_COLOR_AOFFSET");
-            dumpKey(0x0228, "SURFACE_COLOR_TARGET");
+            dumpKey(0x0220, "SURFACE_COLOR_TARGET");
             dumpKey(0x0a00, "VIEWPORT_H");
             dumpKey(0x0a04, "VIEWPORT_V");
             dumpKey(0x1680, "VERTEX_DATA_ARRAY_OFFSET[0]");

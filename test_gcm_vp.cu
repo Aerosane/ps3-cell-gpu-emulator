@@ -61,8 +61,9 @@ int main() {
     std::vector<uint32_t> code; code.reserve(2048);
 
     // Three VP instructions (4 words each) at load offset 8 (8 words in).
-    // Values are arbitrary sentinels; the test checks exact landing.
+    // PROGRAM_LOAD sets the upload target; PROGRAM_START sets execution entry.
     const uint32_t vpStart = 8u;
+    emit_method(code, NV4097_SET_TRANSFORM_PROGRAM_LOAD, vpStart);
     emit_method(code, NV4097_SET_TRANSFORM_PROGRAM_START, vpStart);
 
     const uint32_t vpWords[12] = {
@@ -75,16 +76,17 @@ int main() {
     }
 
     // Upload transform constants: slot 0 = (1.0, 2.0, 3.0, 4.0),
-    // slot 255 = (5.0, 6.0, 7.0, 8.0).
+    // slot 127 = (5.0, 6.0, 7.0, 8.0).
+    // Must set CONSTANT_LOAD base before writing through the window.
     auto emit_const_vec4 = [&](uint32_t slot, float x, float y, float z, float w) {
-        uint32_t base = NV4097_SET_TRANSFORM_CONSTANT + slot * 16;
+        emit_method(code, NV4097_SET_TRANSFORM_CONSTANT_LOAD, slot);
         uint32_t fx, fy, fz, fw;
         std::memcpy(&fx, &x, 4); std::memcpy(&fy, &y, 4);
         std::memcpy(&fz, &z, 4); std::memcpy(&fw, &w, 4);
-        emit_method(code, base + 0,  fx);
-        emit_method(code, base + 4,  fy);
-        emit_method(code, base + 8,  fz);
-        emit_method(code, base + 12, fw);
+        emit_method(code, NV4097_SET_TRANSFORM_CONSTANT + 0,  fx);
+        emit_method(code, NV4097_SET_TRANSFORM_CONSTANT + 4,  fy);
+        emit_method(code, NV4097_SET_TRANSFORM_CONSTANT + 8,  fz);
+        emit_method(code, NV4097_SET_TRANSFORM_CONSTANT + 12, fw);
     };
     emit_const_vec4(0,   1.0f, 2.0f, 3.0f, 4.0f);
     emit_const_vec4(127, 5.0f, 6.0f, 7.0f, 8.0f);
@@ -121,7 +123,7 @@ int main() {
 
     CHECK(rs.vpValid == 1, "vpValid flag set after program upload");
     CHECK(rs.vpLoadOffset == vpStart * 4,
-          "vpLoadOffset captured from PROGRAM_START (stored as word index)");
+          "vpLoadOffset captured from PROGRAM_LOAD (stored as word index)");
 
     bool vpOk = true;
     for (int i = 0; i < 12; ++i) {

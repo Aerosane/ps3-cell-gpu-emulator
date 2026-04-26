@@ -50,8 +50,9 @@ int rsx_init(RSXState* state) {
     state->surfaceHeight  = 720;
     state->surfacePitchA  = 1280 * 4;
     state->surfacePitchB  = 1280 * 4;
-    state->surfaceOffsetA = 0x02000000;   // 32 MB into VRAM
+    state->surfaceOffsetA = 0;            // default safe; games set real offset via FIFO
     state->surfaceColorTarget = 1;  // color A only
+    state->vramSize = (uint32_t)VRAM_SIZE;  // default 256MB
 
     // Default viewport / scissor
     state->viewportX = 0;  state->viewportY = 0;
@@ -112,12 +113,13 @@ void rsx_shutdown(RSXState* state) {
 void rsx_clear_surface(RSXState* state, uint8_t* vram, uint32_t clearMask) {
     if (!state || !vram) return;
 
-    if (clearMask & CLEAR_COLOR) {
+    if (clearMask & CLEAR_RGBA) {
         uint32_t offset = state->surfaceOffsetA;
         uint32_t pitch  = state->surfacePitchA;
         uint32_t w      = state->surfaceWidth;
         uint32_t h      = state->surfaceHeight;
         uint32_t color  = state->colorClearValue;
+        uint32_t maxBytes = state->vramSize ? state->vramSize : VRAM_SIZE;
 
         // Bytes per pixel (assume 4 for A8R8G8B8 / X8R8G8B8)
         uint32_t bpp = 4;
@@ -125,7 +127,7 @@ void rsx_clear_surface(RSXState* state, uint8_t* vram, uint32_t clearMask) {
 
         for (uint32_t y = 0; y < h; y++) {
             uint32_t rowOff = offset + y * pitch;
-            if (rowOff + w * bpp > VRAM_SIZE) break;
+            if (rowOff + w * bpp > maxBytes) break;
 
             if (bpp == 4) {
                 uint32_t* row = (uint32_t*)(vram + rowOff);
@@ -157,7 +159,9 @@ static uint32_t estimateTriangles(PrimitiveType prim, uint32_t vertexCount) {
         case PRIM_TRIANGLE_FAN:   return (vertexCount >= 3) ? vertexCount - 2 : 0;
         case PRIM_QUADS:          return (vertexCount / 4) * 2;
         case PRIM_QUAD_STRIP:     return (vertexCount >= 4) ? ((vertexCount - 2) / 2) * 2 : 0;
+        case PRIM_POLYGON:        return (vertexCount >= 3) ? vertexCount - 2 : 0;
         case PRIM_LINES:          return 0;
+        case PRIM_LINE_LOOP:      return 0;
         case PRIM_LINE_STRIP:     return 0;
         case PRIM_POINTS:         return 0;
         default:                  return 0;
@@ -176,20 +180,27 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         if (data) state->surfaceFormat = data & 0x1F;
         RSX_EMIT(onSurfaceSetup, state);
         return;
-    case NV4097_SET_SURFACE_CLIP_HORIZONTAL:
-        if (data & 0xFFFF) {
-            state->surfaceWidth  = data & 0xFFFF;
-            state->viewportX     = 0;
-            state->viewportW     = state->surfaceWidth;
+    case NV4097_SET_SURFACE_CLIP_HORIZONTAL: {
+        // Packed: (width << 16) | origin. Unpacked (test compat): plain width.
+        uint16_t width  = (data >> 16) ? ((data >> 16) & 0xFFFF) : (data & 0xFFFF);
+        uint16_t origin = (data >> 16) ? (data & 0xFFFF) : 0;
+        if (width) {
+            state->surfaceWidth  = width;
+            state->viewportX     = origin;
+            state->viewportW     = width;
         }
         return;
-    case NV4097_SET_SURFACE_CLIP_VERTICAL:
-        if (data & 0xFFFF) {
-            state->surfaceHeight = data & 0xFFFF;
-            state->viewportY     = 0;
-            state->viewportH     = state->surfaceHeight;
+    }
+    case NV4097_SET_SURFACE_CLIP_VERTICAL: {
+        uint16_t height = (data >> 16) ? ((data >> 16) & 0xFFFF) : (data & 0xFFFF);
+        uint16_t origin = (data >> 16) ? (data & 0xFFFF) : 0;
+        if (height) {
+            state->surfaceHeight = height;
+            state->viewportY     = origin;
+            state->viewportH     = height;
         }
         return;
+    }
     case NV4097_SET_SURFACE_PITCH_A:
         if (data) state->surfacePitchA = data;
         return;
@@ -203,16 +214,16 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         state->surfacePitchD = data;
         return;
     case NV4097_SET_SURFACE_COLOR_AOFFSET:
-        if (data) state->surfaceOffsetA = data;
+        state->surfaceOffsetA = data;
         return;
     case NV4097_SET_SURFACE_COLOR_BOFFSET:
-        if (data) state->surfaceOffsetB = data;
+        state->surfaceOffsetB = data;
         return;
     case NV4097_SET_SURFACE_COLOR_COFFSET:
-        if (data) state->surfaceOffsetC = data;
+        state->surfaceOffsetC = data;
         return;
     case NV4097_SET_SURFACE_COLOR_DOFFSET:
-        if (data) state->surfaceOffsetD = data;
+        state->surfaceOffsetD = data;
         return;
     case NV4097_SET_SURFACE_COLOR_TARGET:
         state->surfaceColorTarget = data;

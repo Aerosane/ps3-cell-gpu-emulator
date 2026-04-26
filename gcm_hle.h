@@ -218,14 +218,16 @@ inline void cellGcmSetTransformProgram(GcmCtx* c,
                                        const uint32_t* instructions,
                                        uint32_t instructionCount)
 {
-    emit1(c, rsx::NV4097_SET_TRANSFORM_PROGRAM_START, loadSlot);
-    // Burst-write 4 dwords per instruction at sequential method offsets.
+    emit1(c, rsx::NV4097_SET_TRANSFORM_PROGRAM_LOAD, loadSlot);
+    // Burst-write 4 dwords per instruction through the window.
+    // PROGRAM_LOAD sets the base; window offsets are relative to it.
     for (uint32_t i = 0; i < instructionCount; i++) {
-        const uint32_t base = rsx::NV4097_SET_TRANSFORM_PROGRAM + (loadSlot + i) * 16u;
         for (uint32_t w = 0; w < 4; w++) {
-            emit1(c, base + w * 4u, instructions[i * 4 + w]);
+            emit1(c, rsx::NV4097_SET_TRANSFORM_PROGRAM + i * 16u + w * 4u,
+                  instructions[i * 4 + w]);
         }
     }
+    emit1(c, rsx::NV4097_SET_TRANSFORM_PROGRAM_START, loadSlot);
 }
 
 inline void cellGcmSetTransformConstant(GcmCtx* c,
@@ -233,11 +235,11 @@ inline void cellGcmSetTransformConstant(GcmCtx* c,
                                         float x, float y, float z, float w)
 {
     union { float f; uint32_t u; } cv;
-    const uint32_t base = rsx::NV4097_SET_TRANSFORM_CONSTANT + constantSlot * 16u;
-    cv.f = x; emit1(c, base + 0x0, cv.u);
-    cv.f = y; emit1(c, base + 0x4, cv.u);
-    cv.f = z; emit1(c, base + 0x8, cv.u);
-    cv.f = w; emit1(c, base + 0xC, cv.u);
+    emit1(c, rsx::NV4097_SET_TRANSFORM_CONSTANT_LOAD, constantSlot);
+    cv.f = x; emit1(c, rsx::NV4097_SET_TRANSFORM_CONSTANT + 0x0, cv.u);
+    cv.f = y; emit1(c, rsx::NV4097_SET_TRANSFORM_CONSTANT + 0x4, cv.u);
+    cv.f = z; emit1(c, rsx::NV4097_SET_TRANSFORM_CONSTANT + 0x8, cv.u);
+    cv.f = w; emit1(c, rsx::NV4097_SET_TRANSFORM_CONSTANT + 0xC, cv.u);
 }
 
 inline void cellGcmFinish(GcmCtx* c, uint32_t ref) {

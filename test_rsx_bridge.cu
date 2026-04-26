@@ -8,6 +8,7 @@
 #include "rsx_raster_bridge.h"
 #include "rsx_fp_shader.h"
 #include "rsx_texture.h"
+#include "rsx_vp_shader.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -29,6 +30,41 @@ static int fails = 0;
 
 static uint32_t fifo_incr(uint32_t method, uint32_t count) {
     return ((count & 0x7FF) << 18) | ((method >> 2) << 2);
+}
+
+// ── VP instruction encoder (uses canonical VP_REG_* / VP_VEC_* enums) ──
+static uint32_t encSrc(uint32_t regType, uint32_t regIdx,
+                       uint32_t sx, uint32_t sy, uint32_t sz, uint32_t sw) {
+    uint32_t s = 0;
+    s |= (regType & 0x3);
+    s |= (regIdx & 0x3F) << 2;
+    s |= (sw & 0x3) << 8;  s |= (sz & 0x3) << 10;
+    s |= (sy & 0x3) << 12; s |= (sx & 0x3) << 14;
+    return s;
+}
+static void buildVP(uint32_t d[4], uint32_t vecOp, uint32_t scaOp,
+                    uint32_t inputIdx, uint32_t constIdx,
+                    uint32_t src0, uint32_t src1, uint32_t src2,
+                    uint32_t vecDstTmp, uint32_t vecDstOut,
+                    bool vecResult, bool end = false) {
+    d[0] = 0;
+    d[0] |= (vecDstTmp & 0x3F) << 15;
+    if (vecResult) d[0] |= (1u << 30);
+    d[1] = 0;
+    d[1] |= (src0 >> 9) & 0xFF;
+    d[1] |= (inputIdx & 0xF) << 8;
+    d[1] |= (constIdx & 0x3FF) << 12;
+    d[1] |= (vecOp & 0x1F) << 22;
+    d[1] |= (scaOp & 0x1F) << 27;
+    d[2] = 0;
+    d[2] |= (src2 >> 11) & 0x3F;
+    d[2] |= (src1 & 0x1FFFFu) << 6;
+    d[2] |= (src0 & 0x1FFu) << 23;
+    d[3] = 0;
+    if (end) d[3] |= 1;
+    d[3] |= (vecDstOut & 0x1F) << 2;
+    d[3] |= (1u << 13) | (1u << 14) | (1u << 15) | (1u << 16); // mask XYZW
+    d[3] |= (src2 & 0x7FFu) << 21;
 }
 
 int main() {
@@ -74,6 +110,8 @@ int main() {
     fifo[n++] = fifo_incr(NV4097_SET_VIEWPORT_VERTICAL,   1);     fifo[n++] = (H << 16);
     fifo[n++] = fifo_incr(NV4097_SET_SCISSOR_HORIZONTAL,  1);     fifo[n++] = (W << 16);
     fifo[n++] = fifo_incr(NV4097_SET_SCISSOR_VERTICAL,    1);     fifo[n++] = (H << 16);
+    fifo[n++] = fifo_incr(NV4097_SET_SURFACE_PITCH_A, 1);           fifo[n++] = W * 4;
+    fifo[n++] = fifo_incr(NV4097_SET_SURFACE_COLOR_AOFFSET, 1);   fifo[n++] = 0;
     fifo[n++] = fifo_incr(NV4097_SET_COLOR_CLEAR_VALUE,   1);     fifo[n++] = 0xFF202040u;
     fifo[n++] = fifo_incr(NV4097_CLEAR_SURFACE, 1);               fifo[n++] = CLEAR_COLOR | CLEAR_DEPTH;
 
@@ -93,6 +131,7 @@ int main() {
     fifo[n++] = fifo_incr(NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP, 1); fifo[n++] = 0;
 
     uint8_t* vram = (uint8_t*)std::calloc(1, 8 * 1024 * 1024);
+    st.vramSize = 8 * 1024 * 1024;
     int cmds = rsx_process_fifo(&st, fifo, (uint32_t)n, vram, 2048);
     std::printf("  FIFO processed %d commands\n", cmds);
 
@@ -142,7 +181,7 @@ int main() {
         280.f,  40.f, 0.f,
         160.f, 200.f, 0.f,
     };
-    std::memcpy(vram + VB_POS1, positions, sizeof(positions));
+    rsx::store_be_floats(vram + VB_POS1, positions, sizeof(positions)/4);
 
     // Write 3 colors (UB4, D3DCOLOR = BGRA in memory), stride 4 at VB_COL1.
     // Pure yellow for all three: R=255 G=255 B=0 A=255 → memory BGRA = 00FFFFFF.
@@ -247,7 +286,7 @@ int main() {
         280.f, 120.f, 0.f,
         160.f, 220.f, 0.f,
     };
-    std::memcpy(vram + VB_POS2, positions2, sizeof(positions2));
+    rsx::store_be_floats(vram + VB_POS2, positions2, sizeof(positions2)/4);
 
     uint32_t fifo4[64];
     m = 0;
@@ -306,7 +345,15 @@ int main() {
     // Rebuild original yellow vertex data (cols2 overwrote slot-3 memory
     // for the blend scenario, but slot-0 offset is still VB_POS2 from the
     // blend FIFO — reset both arrays).
-    // NOTE: VB_POS1/VB_COL1 already hold the yellow triangle from scenario 2.
+    // VP path maps output from NDC[-1,1] to screen, so use NDC positions.
+    static constexpr uint32_t VB_POS_NDC = 0x204000;
+    float ndcPos[9] = {
+       -0.75f, -0.75f, 0.f,
+        0.75f, -0.75f, 0.f,
+        0.0f,   0.75f, 0.f,
+    };
+    rsx::store_be_floats(vram + VB_POS_NDC, ndcPos, sizeof(ndcPos)/4);
+
     uint32_t fifo5[128];
     m = 0;
     fifo5[m++] = fifo_incr(NV4097_SET_COLOR_CLEAR_VALUE, 1); fifo5[m++] = 0xFF000000u;
@@ -315,31 +362,37 @@ int main() {
     fifo5[m++] = fifo_incr(NV4097_SET_BLEND_ENABLE, 1);      fifo5[m++] = 0;
     fifo5[m++] = fifo_incr(NV4097_SET_CULL_FACE_ENABLE, 1);  fifo5[m++] = 0;
 
-    // Point slot 0 back to VB_POS1 (scenario 4 had moved it to VB_POS2).
+    // Point slot 0 to NDC positions, slot 3 to original yellow colors.
     fifo5[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 0*4, 1);
-    fifo5[m++] = VB_POS1;
+    fifo5[m++] = VB_POS_NDC;
     fifo5[m++] = fifo_incr(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET + 3*4, 1);
     fifo5[m++] = VB_COL1;
 
-    // Upload VP: start at instruction 0.
+    // Upload VP via PROGRAM_LOAD then set START.
+    fifo5[m++] = fifo_incr(NV4097_SET_TRANSFORM_PROGRAM_LOAD, 1);
+    fifo5[m++] = 0;
     fifo5[m++] = fifo_incr(NV4097_SET_TRANSFORM_PROGRAM_START, 1);
     fifo5[m++] = 0;
     // 2 instructions = 8 dwords.
     fifo5[m++] = fifo_incr(NV4097_SET_TRANSFORM_PROGRAM, 8);
-    // Instr 1: MUL o[0], in[0].xyzw, c[0].xyzw
-    fifo5[m++] = 0x20000000u;
-    fifo5[m++] = 0x0080000Du;
-    fifo5[m++] = 0x8106C0C0u;
-    fifo5[m++] = 0x0001E000u;
-    // Instr 2: MOV o[1], in[3].xyzw  (end)
-    fifo5[m++] = 0x20000000u;
-    fifo5[m++] = 0x0040030Du;
-    fifo5[m++] = 0x87000000u;
-    fifo5[m++] = 0x0001E005u;
+    {
+        uint32_t s_in0 = encSrc(VP_REG_INPUT, 0, 0,1,2,3);
+        uint32_t s_c0  = encSrc(VP_REG_CONSTANT, 0, 0,1,2,3);
+        uint32_t s_z   = encSrc(VP_REG_TEMP, 0, 0,1,2,3);
+        uint32_t s_in3 = encSrc(VP_REG_INPUT, 3, 0,1,2,3);
+        uint32_t ins[8];
+        // MUL o[0], in[0].xyzw, c[0].xyzw
+        buildVP(ins, VP_VEC_MUL, VP_SCA_NOP, 0, 0,
+                s_in0, s_c0, s_z, 0x3F, 0, true, false);
+        // MOV o[1], in[3].xyzw  (end)
+        buildVP(ins+4, VP_VEC_MOV, VP_SCA_NOP, 3, 0,
+                s_in3, s_z, s_z, 0x3F, 1, true, true);
+        for (int k = 0; k < 8; ++k) fifo5[m++] = ins[k];
+    }
 
     // Upload c[0] = (0.5, 0.5, 1.0, 1.0).
-    // (No explicit LOAD handler in Phase 4a — SET_TRANSFORM_CONSTANT
-    // writes relative to its own method offset, so starting at c[0].)
+    fifo5[m++] = fifo_incr(NV4097_SET_TRANSFORM_CONSTANT_LOAD, 1);
+    fifo5[m++] = 0;
     fifo5[m++] = fifo_incr(NV4097_SET_TRANSFORM_CONSTANT, 4);
     {
         float cv[4] = { 0.5f, 0.5f, 1.0f, 1.0f };
@@ -356,13 +409,14 @@ int main() {
     rsx_process_fifo(&st, fifo5, (uint32_t)m, vram, 4096);
 
     raster.readback(fb.data());
-    // After scaling by (0.5, 0.5), triangle spans roughly x=[20,140] y=[20,100].
-    // Sample inside scaled triangle at (80, 40).
-    uint32_t vpInsidePx  = fb[40 * W + 80];
-    // Sample outside scaled triangle but inside the original (160, 100).
-    uint32_t vpOutsidePx = fb[100 * W + 160];
-    std::printf("  vp inside  (80,40)  : 0x%08x (want yellow)\n", vpInsidePx);
-    std::printf("  vp outside (160,100): 0x%08x (want clear/black)\n", vpOutsidePx);
+    // After NDC MUL by (0.5, 0.5), the triangle shrinks from NDC
+    // ±0.75 to ±0.375, mapping to roughly x=[100,220] y=[75,165].
+    // Sample inside scaled triangle at (160, 120).
+    uint32_t vpInsidePx  = fb[120 * W + 160];
+    // Sample outside scaled triangle at (40, 40).
+    uint32_t vpOutsidePx = fb[40 * W + 40];
+    std::printf("  vp inside  (160,120): 0x%08x (want yellow)\n", vpInsidePx);
+    std::printf("  vp outside (40,40)  : 0x%08x (want clear/black)\n", vpOutsidePx);
     CHECK(((vpInsidePx  >> 16) & 0xFF) > 200 &&
           ((vpInsidePx  >>  8) & 0xFF) > 200 &&
           ( vpInsidePx         & 0xFF) < 32,
@@ -371,6 +425,9 @@ int main() {
           ((vpOutsidePx >>  8) & 0xFF) < 32,
           "VP-scaled triangle no longer covers original outer region");
     raster.savePPM("/tmp/rsx_bridge_vp.ppm");
+
+    // Reset VP state so subsequent scenarios use direct (no-VP) path.
+    st.vpValid = 0;
 
 
     // ── Fragment-program interpreter unit test ──────────────────────
@@ -569,7 +626,7 @@ int main() {
             { 260.f,  60.f, 0, 0.75f, 0.75f },   // texel (1,1) = white
             { 160.f, 200.f, 0, 0.5f,  0.25f },   // texel (1,0) = black
         };
-        std::memcpy(vram + VB, verts, sizeof(verts));
+        rsx::store_be_floats(vram + VB, (const float*)verts, sizeof(verts)/4);
 
         uint32_t fifo6[64]; size_t k = 0;
         fifo6[k++] = fifo_incr(NV4097_SET_SURFACE_CLIP_HORIZONTAL, 1); fifo6[k++] = W;
@@ -814,7 +871,7 @@ int main() {
             288.f,  24.f, 0.5f,    // 2 TR  blue
              32.f,  24.f, 0.5f,    // 3 TL  yellow
         };
-        std::memcpy(vram + VB_POS3, positions, sizeof(positions));
+        rsx::store_be_floats(vram + VB_POS3, positions, sizeof(positions)/4);
 
         // BGRA in memory: byte0=B byte1=G byte2=R byte3=A → LE u32 packing.
         uint32_t cols[4] = {

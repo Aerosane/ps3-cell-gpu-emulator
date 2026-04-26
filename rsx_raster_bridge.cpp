@@ -62,7 +62,7 @@ static inline bool decode_attr(const uint8_t* vram, uint32_t vramSize,
             out[2] = p[0] / 255.0f;  // B
             out[1] = p[1] / 255.0f;  // G
             out[0] = p[2] / 255.0f;  // R
-            out[3] = p[3] / 255.0f;  // A
+            out[3] = p[3] ? (p[3] / 255.0f) : 1.0f;  // A (default 1.0 if unset)
         } else {
             for (int i = 0; i < channels; ++i) out[i] = p[i] / 255.0f;
         }
@@ -86,11 +86,19 @@ static void decode_vertex_stream(const RSXState& s,
         float color[4] = { 1, 1, 1, 1 };
         float uv[4]    = { 0, 0, 0, 0 };
 
+        // VA0 is always position
         decode_attr(vram, vramSize, s.vertexArrays[0], idx, 4, pos);
-        if (s.vertexArrays[3].enabled)
-            decode_attr(vram, vramSize, s.vertexArrays[3], idx, 4, color);
-        if (s.vertexArrays[8].enabled)
-            decode_attr(vram, vramSize, s.vertexArrays[8], idx, 4, uv);
+
+        // Scan remaining VAs for color (type=UB) and UV (type=F, size=2)
+        for (int va = 1; va < 16; ++va) {
+            if (!s.vertexArrays[va].enabled) continue;
+            uint32_t type = s.vertexArrays[va].format & 0xF;
+            uint32_t sz   = (s.vertexArrays[va].format >> 4) & 0xF;
+            if (type == VERTEX_UB)
+                decode_attr(vram, vramSize, s.vertexArrays[va], idx, 4, color);
+            else if (type == VERTEX_F && sz == 2)
+                decode_attr(vram, vramSize, s.vertexArrays[va], idx, 4, uv);
+        }
 
         RasterVertex& v = out[i];
         v.x = pos[0]; v.y = pos[1]; v.z = pos[2];
@@ -124,17 +132,14 @@ void RasterBridge::onScissor(const RSXState& s) {
 
 void RasterBridge::onClearSurface(const RSXState& s, uint32_t mask) {
     if (!rast_) return;
-    // rsx_command_processor uses logical flags from rsx_defs.h:
-    // CLEAR_COLOR = 0x01, CLEAR_DEPTH = 0x02, CLEAR_STENCIL = 0x04.
-    if (mask & 0x01) {
+
+    // NV4097 CLEAR_SURFACE: bit0=Z, bit1=S, bit4=R, bit5=G, bit6=B, bit7=A
+    if (mask & 0xF0) {
         rast_->clear(s.colorClearValue);
-        // Mirror the clear across all bound MRT planes so deferred
-        // renderers that don't explicitly clear every G-buffer plane
-        // still see a deterministic start state.
         for (uint32_t p = 1; p < rast_->mrtCount(); ++p)
             rast_->clearPlane(p, s.colorClearValue);
     }
-    if (mask & 0x02) rast_->clearDepth(1.0f);
+    if (mask & 0x01) rast_->clearDepth(1.0f);
     counters.clears++;
 }
 
@@ -238,6 +243,7 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
         BlendEquation eqRGB = nv_to_blendEquation(s.blendEquation & 0xFFFF);
         BlendEquation eqA   = nv_to_blendEquation((s.blendEquation >> 16) & 0xFFFF);
         rast_->setBlendEquation(eqRGB, eqA);
+
         uint32_t c = s.blendColor;
         rast_->setBlendColor(((c >> 16) & 0xFF) / 255.f,
                              ((c >>  8) & 0xFF) / 255.f,
@@ -268,7 +274,7 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
     // with bilinear filtering and modulates the interpolated vertex
     // color, replacing the coarse Gouraud-modulation path that
     // previously sampled at vertices only.
-    if (vram_ && s.textures[0].enabled &&
+    if (false && vram_ && s.textures[0].enabled &&
         s.textures[0].width > 0 && s.textures[0].height > 0) {
         const auto& t = s.textures[0];
         bool stale =
@@ -336,37 +342,6 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
 void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t count) {
     if (!rast_ || count == 0) return;
 
-    // One-shot diagnostic for the first draw: dump the vertex stream
-    // we're about to feed the rasterizer.
-    static int once = 0;
-    if (!once && vram_ && s.vertexArrays[0].enabled) {
-        once = 1;
-        const auto& va0 = s.vertexArrays[0];
-        std::printf("[Bridge] first draw: first=%u count=%u  prim=0x%x\n",
-                    first, count, s.currentPrim);
-        std::printf("[Bridge]   VA0 off=0x%x fmt=0x%x stride=%u size=%u type=%u enabled=%d\n",
-                    va0.offset, va0.format,
-                    (va0.format >> 8) & 0xFF,
-                    (va0.format >> 4) & 0xF,
-                    (va0.format) & 0xF, (int)va0.enabled);
-        std::printf("[Bridge]   VA3 off=0x%x fmt=0x%x enabled=%d\n",
-                    s.vertexArrays[3].offset, s.vertexArrays[3].format,
-                    (int)s.vertexArrays[3].enabled);
-        // Dump first 3 vertices raw bytes at va0.offset.
-        uint32_t stride = (va0.format >> 8) & 0xFF;
-        if (stride && (uint64_t)va0.offset + stride * 3 <= vramSize_) {
-            std::printf("[Bridge]   raw VA0 bytes (3 verts):");
-            const uint8_t* p = vram_ + va0.offset;
-            for (uint32_t v = 0; v < 3; ++v) {
-                std::printf("\n    v%u:", v);
-                for (uint32_t b = 0; b < stride; ++b) std::printf(" %02x", p[v*stride + b]);
-            }
-            std::printf("\n");
-        } else {
-            std::printf("[Bridge]   VA0.offset out of vram range (vramSize=%u)\n", vramSize_);
-        }
-    }
-
     // Translate FIFO-side pipeline state into rasterizer setters before
     // every draw. Games frequently toggle depth/blend/cull mid-frame.
     applyPipelineState(s);
@@ -385,27 +360,38 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
     }
 
     // If a vertex program has been uploaded, run it per-vertex on the
-    // decoded/pool stream. Output register 0 is HPOS (expected in
-    // screen-space xyz for this simplified pipeline — a full MVP-based
-    // clip-space VP is still TODO), o[1] is diffuse color, o[4] is uv.
+    // decoded/pool stream. VP input registers map 1:1 to vertex
+    // attribute indices: VA[k] → input[k]. Output register 0 is HPOS
+    // (clip space), o[1] is COL0, o[7] is TEX0, etc.
     std::vector<RasterVertex> transformed;
     if (s.vpValid) {
         if (base == nullptr) return;
         transformed.resize(count);
         for (uint32_t i = 0; i < count; ++i) {
             VPFloat4 inputs[16] = {};
-            inputs[0].v[0] = base[i].x; inputs[0].v[1] = base[i].y;
-            inputs[0].v[2] = base[i].z; inputs[0].v[3] = 1.0f;
-            inputs[3].v[0] = base[i].r; inputs[3].v[1] = base[i].g;
-            inputs[3].v[2] = base[i].b; inputs[3].v[3] = base[i].a;
-            inputs[8].v[0] = base[i].u; inputs[8].v[1] = base[i].v;
+            // Populate VP inputs from each enabled VA → input[va_idx]
+            for (int va = 0; va < 16; ++va) {
+                if (!s.vertexArrays[va].enabled) continue;
+                float attr[4] = {0, 0, 0, 1};
+                decode_attr(vram_, vramSize_, s.vertexArrays[va],
+                            first + i, 4, attr);
+                inputs[va].v[0] = attr[0]; inputs[va].v[1] = attr[1];
+                inputs[va].v[2] = attr[2]; inputs[va].v[3] = attr[3];
+                // Position VA: ensure w=1 for homogeneous coords when
+                // the attribute has fewer than 4 components.
+                if (va == 0) {
+                    uint32_t sz = (s.vertexArrays[0].format >> 4) & 0xF;
+                    if (sz < 4) inputs[0].v[3] = 1.0f;
+                }
+            }
+            // Fallback: if no VAs enabled, use pool vertex data
+            if (!vram_) {
+                inputs[0].v[0] = base[i].x; inputs[0].v[1] = base[i].y;
+                inputs[0].v[2] = base[i].z; inputs[0].v[3] = 1.0f;
+            }
 
             const VPFloat4* consts = reinterpret_cast<const VPFloat4*>(s.vpConstants);
             VPFloat4 outputs[16] = {};
-            // Default pass-through: pos=in0, color=in3, uv=in8
-            outputs[0] = inputs[0];
-            outputs[1] = inputs[3];
-            outputs[4] = inputs[8];
 
             vp_execute(s.vpData, 512u * 4u, s.vpStart,
                        inputs, consts, outputs);
@@ -427,12 +413,13 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
             v.x = (nx * 0.5f + 0.5f) * W;
             v.y = (1.0f - (ny * 0.5f + 0.5f)) * H;
             v.z = nz * 0.5f + 0.5f;
+            // Color from o[1] (COL0), UV from o[7] (TEX0)
             v.r = outputs[1].v[0]; v.g = outputs[1].v[1];
             v.b = outputs[1].v[2]; v.a = outputs[1].v[3];
-            v.u = outputs[4].v[0]; v.v = outputs[4].v[1];
+            v.u = outputs[7].v[0]; v.v = outputs[7].v[1];
         }
         base = transformed.data();
-    } 
+    }
 
     // ── Per-vertex texture sampling (Gouraud modulation) ────────
     // If texture unit 0 is enabled and vram is mapped, sample it at
@@ -443,18 +430,24 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
     // to run the fragment program on every pixel on the host.
     std::vector<RasterVertex> textured;
     if (vram_ && s.textures[0].enabled && base != nullptr) {
-        ps3rsx::HostTextureSamplerCtx tctx{ vram_, vramSize_, &s };
-        textured.resize(count);
-        for (uint32_t i = 0; i < count; ++i) {
-            RasterVertex v = base[i];
-            float uvw[3] = { v.u, v.v, 0.f };
-            float rgba[4] = { 1.f, 1.f, 1.f, 1.f };
-            ps3rsx::rsx_host_sampler(&tctx, 0, uvw, rgba);
-            v.r *= rgba[0]; v.g *= rgba[1];
-            v.b *= rgba[2]; v.a *= rgba[3];
-            textured[i] = v;
+        // Only modulate when we actually recognise the texture format,
+        // otherwise the sampler returns black (0,0,0,1) and kills colors.
+        uint8_t texFmt = (uint8_t)(s.textures[0].format & 0xFF);
+        bool fmtKnown = (texFmt == 0x85 || texFmt == 0x81);
+        if (fmtKnown) {
+            ps3rsx::HostTextureSamplerCtx tctx{ vram_, vramSize_, &s };
+            textured.resize(count);
+            for (uint32_t i = 0; i < count; ++i) {
+                RasterVertex v = base[i];
+                float uvw[3] = { v.u, v.v, 0.f };
+                float rgba[4] = { 1.f, 1.f, 1.f, 1.f };
+                ps3rsx::rsx_host_sampler(&tctx, 0, uvw, rgba);
+                v.r *= rgba[0]; v.g *= rgba[1];
+                v.b *= rgba[2]; v.a *= rgba[3];
+                textured[i] = v;
+            }
+            base = textured.data();
         }
-        base = textured.data();
     }
 
     switch (s.currentPrim) {
@@ -464,6 +457,19 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
     case PRIM_LINES:
         rast_->drawLines(base, count - (count % 2));
         break;
+    case PRIM_LINE_LOOP: {
+        if (count < 2) break;
+        std::vector<RasterVertex> exp;
+        exp.reserve(count * 2);
+        for (uint32_t i = 0; i + 1 < count; ++i) {
+            exp.push_back(base[i]);
+            exp.push_back(base[i + 1]);
+        }
+        exp.push_back(base[count - 1]);
+        exp.push_back(base[0]);
+        rast_->drawLines(exp.data(), (uint32_t)exp.size());
+        break;
+    }
     case PRIM_LINE_STRIP: {
         if (count < 2) break;
         // Expand to a line list: (v0,v1),(v1,v2),...
@@ -523,6 +529,36 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         rast_->drawTriangles(exp.data(), (uint32_t)exp.size());
         break;
     }
+    case PRIM_QUAD_STRIP: {
+        if (count < 4) break;
+        std::vector<RasterVertex> exp;
+        uint32_t nQuads = (count - 2) / 2;
+        exp.reserve(nQuads * 6);
+        for (uint32_t q = 0; q < nQuads; ++q) {
+            // Each quad: (v[2q], v[2q+1], v[2q+3], v[2q+2])
+            const auto& a = base[q * 2 + 0];
+            const auto& b = base[q * 2 + 1];
+            const auto& c = base[q * 2 + 3];
+            const auto& d = base[q * 2 + 2];
+            exp.push_back(a); exp.push_back(b); exp.push_back(c);
+            exp.push_back(a); exp.push_back(c); exp.push_back(d);
+        }
+        rast_->drawTriangles(exp.data(), (uint32_t)exp.size());
+        break;
+    }
+    case PRIM_POLYGON:
+        // Convex polygon → triangle fan from first vertex
+        if (count >= 3) {
+            std::vector<RasterVertex> exp;
+            exp.reserve((count - 2) * 3);
+            for (uint32_t i = 1; i + 1 < count; ++i) {
+                exp.push_back(base[0]);
+                exp.push_back(base[i]);
+                exp.push_back(base[i + 1]);
+            }
+            rast_->drawTriangles(exp.data(), (uint32_t)exp.size());
+        }
+        break;
     case PRIM_TRIANGLES:
     default:
         rast_->drawTriangles(base, count - (count % 3));

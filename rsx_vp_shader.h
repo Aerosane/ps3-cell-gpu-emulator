@@ -609,6 +609,7 @@ inline void vp_execute(const uint32_t* vpData, uint32_t vpLen, uint32_t vpStart,
                        VPFloat4 outputs[16]) {
     VPFloat4 temps[48] = {};
     uint32_t numInsns = vpLen / 4;
+
     for (uint32_t i = vpStart; i < numInsns; ++i) {
         VPDecodedInsn insn = vp_decode(&vpData[i * 4]);
 
