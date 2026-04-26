@@ -42,15 +42,21 @@ static inline void rsx_fetch_texel(const HostTextureSamplerCtx* ctx,
     int32_t xw = ((x % W) + W) % W;
     int32_t yw = ((y % H) + H) % H;
 
-    // Format byte is the low 8 bits of TEXTURE_FORMAT.
-    uint8_t fmt = (uint8_t)(t.format & 0xFF);
+    // The TEXTURE_FORMAT register packs multiple fields:
+    //   bits  1:0  = DMA location (0=VRAM, 1=main mem)
+    //   bits  7:4  = dimension (1=1D, 2=2D, 3=3D)
+    //   bits 15:8  = color format byte (with LN/UN modifier flags)
+    // The base color format is the format byte with LN(0x20) and UN(0x40)
+    // bits masked off: (format_byte & 0x9F).
+    uint8_t fmtByte = (uint8_t)((t.format >> 8) & 0xFF);
+    uint8_t baseFmt = fmtByte & 0x9F;  // strip LN/UN flags
     uint64_t off = (uint64_t)t.offset;
 
     // Bounds check against host VRAM mirror.
     if (off >= ctx->vramSize) return;
     const uint8_t* base = ctx->vram + off;
 
-    switch (fmt) {
+    switch (baseFmt) {
     case 0x85: { // A8R8G8B8
         uint64_t pix = (uint64_t)(yw * W + xw) * 4;
         if (off + pix + 4 > ctx->vramSize) return;

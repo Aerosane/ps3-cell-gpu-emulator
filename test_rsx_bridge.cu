@@ -552,13 +552,13 @@ int main() {
         const uint32_t U = 5;
         const uint32_t TBASE = NV4097_SET_TEXTURE_OFFSET + U * 0x20;
         tfifo[tn++] = fifo_incr(TBASE + 0x00, 1); tfifo[tn++] = TEX_OFF;
-        tfifo[tn++] = fifo_incr(TBASE + 0x04, 1); tfifo[tn++] = 0x85; // A8R8G8B8
+        tfifo[tn++] = fifo_incr(TBASE + 0x04, 1); tfifo[tn++] = 0x8500; // A8R8G8B8 at bits[15:8]
         tfifo[tn++] = fifo_incr(TBASE + 0x18, 1); tfifo[tn++] = (2u << 16) | 2u;
         rsx_process_fifo(&st, tfifo, (uint32_t)tn, vram, 64);
 
         CHECK(st.textures[U].enabled &&
               st.textures[U].width == 2 && st.textures[U].height == 2 &&
-              (st.textures[U].format & 0xFF) == 0x85,
+              ((st.textures[U].format >> 8) & 0xFF) == 0x85,
               "Texture unit 5 captured offset/format/2x2 from FIFO");
 
         // Build TEX r0, f[TEX0]; end on unit 5.
@@ -641,7 +641,7 @@ int main() {
 
         // Texture unit 0 setup.
         fifo6[k++] = fifo_incr(NV4097_SET_TEXTURE_OFFSET + 0*0x20, 1); fifo6[k++] = TEX_OFF;
-        fifo6[k++] = fifo_incr(NV4097_SET_TEXTURE_FORMAT + 0*0x20, 1); fifo6[k++] = 0x85;
+        fifo6[k++] = fifo_incr(NV4097_SET_TEXTURE_FORMAT + 0*0x20, 1); fifo6[k++] = 0x8500;
         fifo6[k++] = fifo_incr(NV4097_SET_TEXTURE_IMAGE_RECT + 0*0x20, 1); fifo6[k++] = (2u << 16) | 2u;
 
         // Vertex array slots: pos (stride=20, 3F), uv (stride=20, offset+12, 2F).

@@ -3,6 +3,7 @@
 #include "rsx_raster_bridge.h"
 #include "rsx_defs.h"
 #include "rsx_vp_shader.h"
+#include "rsx_fp_shader.h"
 #include "rsx_texture.h"
 
 #include <cstdio>
@@ -282,7 +283,7 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
             t.offset != cachedTexOff_ || t.width != cachedTexW_ ||
             t.height != cachedTexH_   || t.format != cachedTexFmt_;
         if (stale) {
-            uint8_t fmt = (uint8_t)(t.format & 0xFF);
+            uint8_t fmt = ((t.format >> 8) & 0xFF) & 0x9F;  // base format, strip LN/UN
             uint32_t W = t.width, H = t.height;
             uint64_t need = (uint64_t)W * H *
                             (fmt == 0x81 ? 1u : 4u);
@@ -421,18 +422,67 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         base = transformed.data();
     }
 
-    // ── Per-vertex texture sampling (Gouraud modulation) ────────
-    // If texture unit 0 is enabled and vram is mapped, sample it at
-    // each vertex's (u,v) and modulate the per-vertex color. This is
-    // not per-pixel FP execution — the rasterizer still does Gouraud
-    // interpolation of the resulting colors — but it closes the loop
-    // from FIFO TEXTURE_OFFSET upload → raster output without having
-    // to run the fragment program on every pixel on the host.
+    // ── Per-vertex fragment program execution ──────────────────
+    // If a fragment program is uploaded (fpOffset in VRAM), run
+    // fp_execute per vertex with the VP outputs mapped to FP inputs:
+    //   FP input[0] = WPOS (window position)
+    //   FP input[1] = COL0 (VP output[1])
+    //   FP input[2] = COL1 (VP output[2])
+    //   FP input[3] = FOGC (VP output[5])
+    //   FP input[4..11] = TEX0..TEX7 (VP output[7..14])
+    // The FP output[0] (r0) becomes the final vertex color.
+    // This is per-vertex (not per-pixel), so lighting computed
+    // in the FP is Gouraud-interpolated — correct enough for
+    // most PS3 shaders and a huge step over the raw VP color.
+    std::vector<RasterVertex> fpShaded;
+    if (vram_ && s.fpOffset != 0 && base != nullptr) {
+        const uint32_t* fpData = reinterpret_cast<const uint32_t*>(
+            vram_ + (s.fpOffset & 0x0FFFFFFFu));
+        // Bounds check: FP offset must be within VRAM
+        uint32_t fpOff = s.fpOffset & 0x0FFFFFFFu;
+        if (fpOff < vramSize_ && (vramSize_ - fpOff) >= 16) {
+            uint32_t fpMaxWords = (uint32_t)((vramSize_ - fpOff) / 4);
+            if (fpMaxWords > 16384) fpMaxWords = 16384;
+
+            ps3rsx::HostTextureSamplerCtx tctx{ vram_, vramSize_, &s };
+            fpShaded.resize(count);
+            for (uint32_t i = 0; i < count; ++i) {
+                const RasterVertex& v = base[i];
+                // Build FP input registers from vertex data
+                FPFloat4 fpIn[16] = {};
+                // WPOS — window-space position
+                fpIn[0] = FPFloat4{{ v.x, v.y, v.z, 1.0f }};
+                // COL0 — vertex color (from VP output[1] or decoded VA)
+                fpIn[1] = FPFloat4{{ v.r, v.g, v.b, v.a }};
+                // COL1 — secondary color (black default)
+                fpIn[2] = FPFloat4{{ 0, 0, 0, 0 }};
+                // FOGC
+                fpIn[3] = FPFloat4{{ 0, 0, 0, 0 }};
+                // TEX0 — texture coordinate (from VP output[7] or decoded VA)
+                fpIn[4] = FPFloat4{{ v.u, v.v, 0, 1 }};
+                // TEX1..TEX7 remain zero
+
+                FPFloat4 fpOut[4] = {};
+                fp_execute(fpData, fpMaxWords, fpIn, fpOut,
+                           ps3rsx::rsx_host_sampler, &tctx);
+
+                // FP output[0] → final vertex color
+                RasterVertex& o = fpShaded[i];
+                o = v; // copy position + UV
+                o.r = fpOut[0].v[0];
+                o.g = fpOut[0].v[1];
+                o.b = fpOut[0].v[2];
+                o.a = fpOut[0].v[3];
+            }
+            base = fpShaded.data();
+        }
+    }
+    // ── Fallback: per-vertex texture modulation (no FP active) ──
+    // When no fragment program is set, modulate vertex colors by
+    // texture unit 0 at each vertex's UV — simple Gouraud texturing.
     std::vector<RasterVertex> textured;
-    if (vram_ && s.textures[0].enabled && base != nullptr) {
-        // Only modulate when we actually recognise the texture format,
-        // otherwise the sampler returns black (0,0,0,1) and kills colors.
-        uint8_t texFmt = (uint8_t)(s.textures[0].format & 0xFF);
+    if (fpShaded.empty() && vram_ && s.textures[0].enabled && base != nullptr) {
+        uint8_t texFmt = ((s.textures[0].format >> 8) & 0xFF) & 0x9F;
         bool fmtKnown = (texFmt == 0x85 || texFmt == 0x81);
         if (fmtKnown) {
             ps3rsx::HostTextureSamplerCtx tctx{ vram_, vramSize_, &s };

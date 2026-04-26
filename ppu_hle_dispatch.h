@@ -52,7 +52,7 @@ struct PpuHleDispatcher {
     // internal allocator; address grows upward).
     uint32_t libcHeapBase = 0x00900000;
     uint32_t libcHeapNext = 0x00900000;
-    uint32_t libcHeapEnd  = 0x00D00000;
+    uint32_t libcHeapEnd  = 0x08000000;  // 119MB arena (0x900000..0x8000000)
 
     // GCM shared-memory-ish regions. Real PS3 maps these to RSX IO
     // memory; we just use guest-visible scratch addresses.
@@ -77,11 +77,14 @@ struct PpuHleDispatcher {
 
     // Extra PC-indexed handlers for non-import functions we want to
     // short-circuit (e.g. the ELF's internal malloc/free).
-    enum class Builtin { Malloc, Free, None };
+    enum class Builtin { Malloc, Free, Memalign, Realloc, MmapAlloc, None };
     std::unordered_map<uint32_t, Builtin> builtinByPc;
 
-    void addBuiltinMalloc(uint32_t pc) { builtinByPc[pc] = Builtin::Malloc; }
-    void addBuiltinFree(uint32_t pc)   { builtinByPc[pc] = Builtin::Free;   }
+    void addBuiltinMalloc(uint32_t pc)     { builtinByPc[pc] = Builtin::Malloc;     }
+    void addBuiltinFree(uint32_t pc)       { builtinByPc[pc] = Builtin::Free;       }
+    void addBuiltinMemalign(uint32_t pc)   { builtinByPc[pc] = Builtin::Memalign;   }
+    void addBuiltinRealloc(uint32_t pc)    { builtinByPc[pc] = Builtin::Realloc;    }
+    void addBuiltinMmapAlloc(uint32_t pc)  { builtinByPc[pc] = Builtin::MmapAlloc;  }
 
     void add(uint32_t pc, uint32_t fnid,
              const char* mod, const char* name) {
@@ -102,15 +105,30 @@ struct PpuHleDispatcher {
             auto bit = builtinByPc.find(pc);
             if (bit != builtinByPc.end()) {
                 callCount++;
-                if (bit->second == Builtin::Malloc) {
-                    // r3 = size (PS3 libc wrapper passes ptr-to-heap as
-                    // r3 and size as r4; but the outer wrapper at 0x1fed4
-                    // is called with r3=size, r4=alignment maybe).  We
-                    // treat r3 OR r4 as the size — pick the largest
-                    // non-zero value up to 16 MB.
-                    uint64_t s3 = st.gpr[3], s4 = st.gpr[4];
-                    uint64_t size = (s3 && s3 < 0x1000000) ? s3 :
-                                    (s4 && s4 < 0x1000000) ? s4 : 0x100;
+                if (bit->second == Builtin::Memalign) {
+                    // r3 = alignment, r4 = size
+                    uint64_t align = st.gpr[3];
+                    uint64_t size  = st.gpr[4];
+                    if (align < 16) align = 16;
+                    if (size == 0) size = 0x100;
+                    if (size > 0x4000000) size = 0x4000000; // cap 64MB
+                    libcHeapNext = (libcHeapNext + (uint32_t)align - 1) & ~((uint32_t)align - 1);
+                    uint32_t ptr = libcHeapNext;
+                    if (libcHeapNext + size <= libcHeapEnd) {
+                        libcHeapNext += (uint32_t)size;
+                    } else {
+                        ptr = 0; // oom
+                    }
+                    if (ptr && ptr + size <= memSize) {
+                        std::memset(mem + ptr, 0, (size_t)size);
+                        megakernel_write_mem(ptr, mem + ptr, (size_t)size);
+                    }
+                    st.gpr[3] = ptr;
+                } else if (bit->second == Builtin::Malloc) {
+                    // r3 = size
+                    uint64_t size = st.gpr[3];
+                    if (size == 0) size = 0x100;
+                    if (size > 0x4000000) size = 0x4000000; // cap 64MB
                     uint32_t align = 16;
                     libcHeapNext = (libcHeapNext + align - 1) & ~(align - 1);
                     uint32_t ptr = libcHeapNext;
@@ -119,7 +137,43 @@ struct PpuHleDispatcher {
                     } else {
                         ptr = 0; // oom
                     }
-                    // zero the returned region in both host & guest mem
+                    if (ptr && ptr + size <= memSize) {
+                        std::memset(mem + ptr, 0, (size_t)size);
+                        megakernel_write_mem(ptr, mem + ptr, (size_t)size);
+                    }
+                    st.gpr[3] = ptr;
+                } else if (bit->second == Builtin::Realloc) {
+                    // r3 = old_ptr (ignored), r4 = new_size
+                    uint64_t size = st.gpr[4];
+                    if (size == 0) size = 0x100;
+                    if (size > 0x4000000) size = 0x4000000;
+                    uint32_t align = 16;
+                    libcHeapNext = (libcHeapNext + align - 1) & ~(align - 1);
+                    uint32_t ptr = libcHeapNext;
+                    if (libcHeapNext + size <= libcHeapEnd) {
+                        libcHeapNext += (uint32_t)size;
+                    } else {
+                        ptr = 0;
+                    }
+                    if (ptr && ptr + size <= memSize) {
+                        std::memset(mem + ptr, 0, (size_t)size);
+                        megakernel_write_mem(ptr, mem + ptr, (size_t)size);
+                    }
+                    st.gpr[3] = ptr;
+                } else if (bit->second == Builtin::MmapAlloc) {
+                    // r3 = size, r4 = alignment (mmap-style allocation)
+                    uint64_t size  = st.gpr[3];
+                    uint64_t align = st.gpr[4];
+                    if (align < 16) align = 16;
+                    if (size == 0) size = 0x100;
+                    if (size > 0x4000000) size = 0x4000000;
+                    libcHeapNext = (libcHeapNext + (uint32_t)align - 1) & ~((uint32_t)align - 1);
+                    uint32_t ptr = libcHeapNext;
+                    if (libcHeapNext + size <= libcHeapEnd) {
+                        libcHeapNext += (uint32_t)size;
+                    } else {
+                        ptr = 0;
+                    }
                     if (ptr && ptr + size <= memSize) {
                         std::memset(mem + ptr, 0, (size_t)size);
                         megakernel_write_mem(ptr, mem + ptr, (size_t)size);
@@ -151,8 +205,8 @@ struct PpuHleDispatcher {
             // actual exit.
             retval = 0;
         } else if (e.name == "sys_time_get_system_time") {
-            retval = 0;
-            virtTime += 1000;
+            virtTime += 16667;  // ~60fps frame time in µs
+            retval = virtTime;
         } else if (e.name == "_sys_memset") {
             uint32_t dst = (uint32_t)st.gpr[3];
             uint32_t val = (uint32_t)st.gpr[4];
@@ -255,6 +309,9 @@ struct PpuHleDispatcher {
                 std::printf("  [HLE] _cellGcmInitBody: synth ioAddr=0x%x ioSize=0x%x cmdSize=0x%x\n",
                             ioAddr, ioSize, cmdSize);
             }
+            // Use program's cmdSize for FIFO. A 64KB FIFO captures one full
+            // frame (~97 draw calls for the cube). The program's inline GCM
+            // code checks current < end, so end must match expectations.
             gcmCmdSize = cmdSize ? cmdSize : 0x8000;   // 32KB default
             gcmIoSize  = ioSize;
             gcmIoBase  = ioAddr;
@@ -287,16 +344,156 @@ struct PpuHleDispatcher {
             retval = 0;
         } else if (e.name == "cellGcmSetDisplayBuffer" ||
                    e.name == "cellGcmSetFlipMode" ||
-                   e.name == "cellGcmGetConfiguration") {
+                   e.name == "cellGcmSetDebugOutputLevel" ||
+                   e.name == "cellGcmGetTiledPitchSize" ||
+                   e.name == "cellGcmBindTile" ||
+                   e.name == "cellGcmUnbindTile" ||
+                   e.name == "cellGcmSetTileInfo" ||
+                   e.name == "cellGcmBindZcull" ||
+                   e.name == "cellGcmUnbindZcull") {
+            retval = 0;
+        } else if (e.name == "cellGcmGetConfiguration") {
+            // r3 = *CellGcmConfig { u32 localAddr, ioAddr, localSize, ioSize, memFreq, coreFreq }
+            uint32_t outp = (uint32_t)st.gpr[3];
+            if (outp && outp + 24 <= memSize) {
+                auto put_be32 = [&](uint32_t addr, uint32_t v) {
+                    if (addr + 4 > memSize) return;
+                    mem[addr+0] = (uint8_t)(v >> 24);
+                    mem[addr+1] = (uint8_t)(v >> 16);
+                    mem[addr+2] = (uint8_t)(v >> 8);
+                    mem[addr+3] = (uint8_t)v;
+                    megakernel_write_mem((uint64_t)addr, mem + addr, 4);
+                };
+                put_be32(outp + 0,  0x00C00000);   // localAddress (VRAM base)
+                put_be32(outp + 4,  gcmIoBase ? gcmIoBase : 0x00F80000); // ioAddress
+                put_be32(outp + 8,  256u*1024u*1024u); // localSize (256MB)
+                put_be32(outp + 12, gcmIoSize ? gcmIoSize : 0x1000000); // ioSize
+                put_be32(outp + 16, 650000000u);   // memoryFrequency (650MHz)
+                put_be32(outp + 20, 500000000u);   // coreFrequency (500MHz)
+            }
+            retval = 0;
+        } else if (e.name == "cellGcmGetLabelAddress") {
+            // r3 = label index. Returns pointer to a u32 "label" that
+            // the RSX writes to signal flip completion, etc.
+            uint32_t idx = (uint32_t)st.gpr[3];
+            uint32_t addr = gcmLabelBase + idx * 16;
+            if (addr + 4 <= memSize) {
+                std::memset(mem + addr, 0, 4);
+                megakernel_write_mem((uint64_t)addr, mem + addr, 4);
+            }
+            retval = addr;
+        } else if (e.name == "cellGcmGetTimeStamp") {
+            retval = 0;
+        } else if (e.name == "cellGcmMapMainMemory") {
+            // r3 = EA, r4 = size, r5 = *offset_out.
+            // Map main memory into RSX-visible IO space. We use identity
+            // mapping (offset == EA), same as cellGcmAddressToOffset.
+            uint32_t ea   = (uint32_t)st.gpr[3];
+            uint32_t outp = (uint32_t)st.gpr[5];
+            if (outp + 4 <= memSize) {
+                uint8_t be[4] = {
+                    (uint8_t)(ea >> 24), (uint8_t)(ea >> 16),
+                    (uint8_t)(ea >> 8),  (uint8_t)ea
+                };
+                std::memcpy(mem + outp, be, 4);
+                megakernel_write_mem((uint64_t)outp, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellPadInit" ||
+                   e.name == "cellPadEnd") {
+            retval = 0;
+        } else if (e.name == "cellPadGetInfo2") {
+            // r3 = *CellPadInfo2. Zero it (no pads connected).
+            uint32_t outp = (uint32_t)st.gpr[3];
+            if (outp + 64 <= memSize) {
+                std::memset(mem + outp, 0, 64);
+                megakernel_write_mem((uint64_t)outp, mem + outp, 64);
+            }
+            retval = 0;
+        } else if (e.name == "cellPadGetData") {
+            // r3 = port, r4 = *CellPadData. Zero it (no buttons).
+            uint32_t outp = (uint32_t)st.gpr[4];
+            if (outp + 64 <= memSize) {
+                std::memset(mem + outp, 0, 64);
+                megakernel_write_mem((uint64_t)outp, mem + outp, 64);
+            }
+            retval = 0;
+        } else if (e.name == "_sys_strlen") {
+            // r3 = pointer to string, returns length.
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            uint32_t len = 0;
+            if (ptr < memSize) {
+                while (ptr + len < memSize && mem[ptr + len] != 0 && len < 0x10000)
+                    len++;
+            }
+            retval = len;
+        } else if (e.name == "_sys_printf") {
+            // r3 = format string pointer. Just consume it, no real output.
+            retval = 0;
+        } else if (e.name == "_sys_heap_create_heap" ||
+                   e.name == "_sys_heap_delete_heap") {
+            // Return a fake heap handle (non-zero for create).
+            retval = (e.name == "_sys_heap_create_heap") ? 0x00880000 : 0;
+        } else if (e.name == "_sys_heap_malloc") {
+            // r3 = heap handle, r4 = size.
+            uint64_t size = st.gpr[4];
+            if (size == 0 || size > 0x1000000) size = 0x100;
+            uint32_t align = 16;
+            libcHeapNext = (libcHeapNext + align - 1) & ~(align - 1);
+            uint32_t ptr = libcHeapNext;
+            if (libcHeapNext + size <= libcHeapEnd) {
+                libcHeapNext += (uint32_t)size;
+            } else {
+                ptr = 0;
+            }
+            if (ptr && ptr + size <= memSize) {
+                std::memset(mem + ptr, 0, (size_t)size);
+                megakernel_write_mem(ptr, mem + ptr, (size_t)size);
+            }
+            retval = ptr;
+        } else if (e.name == "_sys_heap_free") {
+            retval = 0;
+        } else if (e.name == "sys_game_process_exitspawn2") {
+            halted_out = true;
             retval = 0;
         } else if (e.name == "cellVideoOutConfigure" ||
                    e.name == "cellVideoOutGetResolution" ||
                    e.name == "cellVideoOutGetState") {
-            // Clear the output-state struct if given; return success.
-            uint32_t outp = (uint32_t)st.gpr[5];
-            if (outp && outp + 64 <= memSize) {
-                std::memset(mem + outp, 0, 64);
-                megakernel_write_mem((uint64_t)outp, mem + outp, 64);
+            if (e.name == "cellVideoOutGetState") {
+                // r3=videoOut, r4=deviceIndex, r5=*CellVideoOutState
+                uint32_t outp = (uint32_t)st.gpr[5];
+                if (outp && outp + 16 <= memSize) {
+                    std::memset(mem + outp, 0, 16);
+                    // CellVideoOutState { u8 state, u8 colorSpace, u8[6], CellVideoOutDisplayMode }
+                    // state=1 (ENABLED), colorSpace=1 (RGB)
+                    mem[outp + 0] = 1;  // CELL_VIDEO_OUT_OUTPUT_STATE_ENABLED
+                    mem[outp + 1] = 1;  // CELL_VIDEO_OUT_COLOR_SPACE_RGB
+                    // CellVideoOutDisplayMode @ offset 8:
+                    // { u8 resId, u8 scanMode, u8 conversion, u8 aspect, u8[2], be16 refreshRates }
+                    mem[outp + 8]  = 2;  // CELL_VIDEO_OUT_RESOLUTION_720
+                    mem[outp + 9]  = 1;  // CELL_VIDEO_OUT_SCAN_MODE_PROGRESSIVE
+                    mem[outp + 10] = 0;  // CELL_VIDEO_OUT_DISPLAY_CONVERSION_NONE
+                    mem[outp + 11] = 0;  // aspect=0 (AUTO)
+                    mem[outp + 14] = 0;  // refreshRates BE16 = 0x0001 (59.94Hz)
+                    mem[outp + 15] = 1;
+                    megakernel_write_mem((uint64_t)outp, mem + outp, 16);
+                }
+            } else if (e.name == "cellVideoOutGetResolution") {
+                // r3=resolutionId, r4=*CellVideoOutResolution { be16 width, be16 height }
+                uint32_t outp = (uint32_t)st.gpr[4];
+                if (outp && outp + 4 <= memSize) {
+                    // Return 1280x720 (HD)
+                    mem[outp + 0] = 0x05; mem[outp + 1] = 0x00; // BE16 1280
+                    mem[outp + 2] = 0x02; mem[outp + 3] = 0xD0; // BE16 720
+                    megakernel_write_mem((uint64_t)outp, mem + outp, 4);
+                }
+            } else {
+                // cellVideoOutConfigure — just return success
+                uint32_t outp = (uint32_t)st.gpr[5];
+                if (outp && outp + 64 <= memSize) {
+                    std::memset(mem + outp, 0, 64);
+                    megakernel_write_mem((uint64_t)outp, mem + outp, 64);
+                }
             }
             retval = 0;
         } else if (e.name == "cellSysutilRegisterCallback" ||
