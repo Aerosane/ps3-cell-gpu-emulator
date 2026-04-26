@@ -115,7 +115,7 @@ int main() {
         160.f, 200.f, 0.5f,
     };
     uint32_t col[3] = { 0xFF00FF00u, 0xFF00FF00u, 0xFF00FF00u };
-    std::memcpy(vram.data() + VB_POS, pos, sizeof(pos));
+    rsx::store_be_floats(vram.data() + VB_POS, pos, sizeof(pos)/4);
     std::memcpy(vram.data() + VB_COL, col, sizeof(col));
 
     // Build VP microcode: one instruction.

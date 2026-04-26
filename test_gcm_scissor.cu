@@ -63,7 +63,7 @@ int main() {
          W + 100.f, H + 100.f, 0.5f,
          W * 0.5f, -200.f, 0.5f,
     };
-    std::memcpy(vram.data() + VB_POS, positions, sizeof(positions));
+    rsx::store_be_floats(vram.data() + VB_POS, positions, sizeof(positions)/4);
     uint32_t cols[3] = { 0xFF00FF00u, 0xFF00FF00u, 0xFF00FF00u };
     std::memcpy(vram.data() + VB_COL, cols, sizeof(cols));
 

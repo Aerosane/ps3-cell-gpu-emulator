@@ -65,7 +65,7 @@ int main() {
           40.f,  60.f, 0.5f,   140.f, 180.f, 0.5f,    40.f, 180.f, 0.5f,
          180.f,  60.f, 0.5f,   180.f, 180.f, 0.5f,   280.f, 180.f, 0.5f,
     };
-    std::memcpy(vram.data() + VB_POS, positions, sizeof(positions));
+    rsx::store_be_floats(vram.data() + VB_POS, positions, sizeof(positions)/4);
 
     uint32_t cols[6] = {
         0xFF00FF00u, 0xFF00FF00u, 0xFF00FF00u,    // green = original winding

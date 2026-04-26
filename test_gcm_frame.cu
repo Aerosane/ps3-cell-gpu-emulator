@@ -91,7 +91,7 @@ int main() {
          W - 40.f, H - 20.f, 0.5f,
          W / 2.f, 20.f, 0.5f,
     };
-    std::memcpy(vram.data() + VB_POS, positions, sizeof(positions));
+    rsx::store_be_floats(vram.data() + VB_POS, positions, sizeof(positions)/4);
 
     // VERTEX_UB: bytes stored BGRA, little-endian uint32.
     uint32_t cols[3] = {

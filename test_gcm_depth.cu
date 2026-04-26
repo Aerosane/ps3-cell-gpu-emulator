@@ -86,7 +86,7 @@ int main() {
          310.f, 220.f, 0.3f,
          290.f, 180.f, 0.3f,
     };
-    std::memcpy(vram.data() + VB_POS, positions, sizeof(positions));
+    rsx::store_be_floats(vram.data() + VB_POS, positions, sizeof(positions)/4);
 
     uint32_t cols[9] = {
         0xFF00FF00u, 0xFF00FF00u, 0xFF00FF00u,    // near green

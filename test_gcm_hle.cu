@@ -61,7 +61,7 @@ int main() {
         288.f,  24.f, 0.5f,
          32.f,  24.f, 0.5f,
     };
-    std::memcpy(vram + VB_POS, positions, sizeof(positions));
+    rsx::store_be_floats(vram + VB_POS, positions, sizeof(positions)/4);
 
     // BGRA in memory for VERTEX_UB.
     uint32_t cols[4] = {

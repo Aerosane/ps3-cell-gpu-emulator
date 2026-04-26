@@ -66,7 +66,7 @@ int main() {
          W * 0.5f,  H*0.5f, 0.5f,
     };
     uint32_t colA[3] = { 0xFFFF0000u, 0xFFFF0000u, 0xFFFF0000u }; // red
-    std::memcpy(vram.data() + VB_POS_A, posA,  sizeof(posA));
+    rsx::store_be_floats(vram.data() + VB_POS_A, posA, sizeof(posA)/4);
     std::memcpy(vram.data() + VB_COL_A, colA,  sizeof(colA));
 
     // Full-screen green triangle.
@@ -78,7 +78,7 @@ int main() {
          W*0.5f,   -200.f,  0.5f,
     };
     uint32_t colB[3] = { 0xFF00FF00u, 0xFF00FF00u, 0xFF00FF00u }; // green
-    std::memcpy(vram.data() + VB_POS_B, posB, sizeof(posB));
+    rsx::store_be_floats(vram.data() + VB_POS_B, posB, sizeof(posB)/4);
     std::memcpy(vram.data() + VB_COL_B, colB, sizeof(colB));
 
     std::vector<uint32_t> code; code.reserve(1024);

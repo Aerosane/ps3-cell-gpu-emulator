@@ -99,7 +99,7 @@ int main() {
          150.f,  50.f, 0.5f,
          260.f,  50.f, 0.5f,
     };
-    std::memcpy(vram.data() + VB_POS, positions, sizeof(positions));
+    rsx::store_be_floats(vram.data() + VB_POS, positions, sizeof(positions)/4);
 
     // BGRA stored → little-endian uint32 per vertex.
     uint32_t cols[19] = {

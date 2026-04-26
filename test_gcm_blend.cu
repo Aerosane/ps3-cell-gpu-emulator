@@ -68,7 +68,7 @@ int main() {
          260.f, 200.f, 0.5f,
          160.f,  40.f, 0.5f,
     };
-    std::memcpy(vram.data() + VB_POS, positions, sizeof(positions));
+    rsx::store_be_floats(vram.data() + VB_POS, positions, sizeof(positions)/4);
 
     // BGRA in memory: B=0 G=0xFF R=0 A=0xFF → 0xFF00FF00 green.
     //                 B=0 G=0    R=0xFF A=0x80 → 0x80FF0000 half-alpha red.

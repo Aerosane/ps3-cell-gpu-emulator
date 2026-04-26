@@ -73,7 +73,7 @@ int main() {
         0xFFFFFF00u, // yellow
     };
     uint16_t idx[6] = { 0, 1, 2,  2, 1, 3 };
-    std::memcpy(vram.data() + VB_POS, quadPos, sizeof(quadPos));
+    rsx::store_be_floats(vram.data() + VB_POS, quadPos, sizeof(quadPos)/4);
     std::memcpy(vram.data() + VB_COL, quadCol, sizeof(quadCol));
     std::memcpy(vram.data() + IB_OFF, idx,     sizeof(idx));
 
