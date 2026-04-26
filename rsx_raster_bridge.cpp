@@ -267,60 +267,7 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
     // Cull
     rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
 
-    // ── Per-pixel texture binding (rasterizer-side) ─────────────
-    // If texture unit 0 is enabled and vram is mapped, decode it
-    // from the RSX-native A8R8G8B8 layout into the rasterizer's
-    // RGBA8 (0xAARRGGBB little-endian) row-major format and upload
-    // via setTexture2D. The rasterizer kernel then samples per-pixel
-    // with bilinear filtering and modulates the interpolated vertex
-    // color, replacing the coarse Gouraud-modulation path that
-    // previously sampled at vertices only.
-    if (false && vram_ && s.textures[0].enabled &&
-        s.textures[0].width > 0 && s.textures[0].height > 0) {
-        const auto& t = s.textures[0];
-        bool stale =
-            !cachedTexValid_ ||
-            t.offset != cachedTexOff_ || t.width != cachedTexW_ ||
-            t.height != cachedTexH_   || t.format != cachedTexFmt_;
-        if (stale) {
-            uint8_t fmt = ((t.format >> 8) & 0xFF) & 0x9F;  // base format, strip LN/UN
-            uint32_t W = t.width, H = t.height;
-            uint64_t need = (uint64_t)W * H *
-                            (fmt == 0x81 ? 1u : 4u);
-            if ((uint64_t)t.offset + need <= vramSize_) {
-                const uint8_t* src = vram_ + t.offset;
-                std::vector<uint32_t> rgba8(W * H);
-                if (fmt == 0x85) {           // A8R8G8B8 (RSX big-endian ARGB)
-                    for (uint32_t i = 0; i < W * H; ++i) {
-                        uint8_t a = src[i*4+0], r = src[i*4+1];
-                        uint8_t g = src[i*4+2], b = src[i*4+3];
-                        rgba8[i] = ((uint32_t)a << 24) | ((uint32_t)r << 16) |
-                                   ((uint32_t)g <<  8) |  (uint32_t)b;
-                    }
-                } else if (fmt == 0x81) {    // B8 luminance
-                    for (uint32_t i = 0; i < W * H; ++i) {
-                        uint8_t v = src[i];
-                        rgba8[i] = 0xFF000000u |
-                                   ((uint32_t)v << 16) |
-                                   ((uint32_t)v <<  8) |  (uint32_t)v;
-                    }
-                } else {
-                    // Unknown format → magenta debug pattern.
-                    for (uint32_t i = 0; i < W * H; ++i) rgba8[i] = 0xFFFF00FFu;
-                }
-                rast_->setTexture2D(rgba8.data(), W, H);
-                cachedTexOff_ = t.offset;
-                cachedTexW_   = W;
-                cachedTexH_   = H;
-                cachedTexFmt_ = t.format;
-                cachedTexValid_ = true;
-            }
-        }
-    } else if (cachedTexValid_) {
-        // Texture unit went off → unbind from rasterizer too.
-        rast_->setTexture2D(nullptr, 0, 0);
-        cachedTexValid_ = false;
-    }
+    // (Texture binding moved to onDrawArrays to use draw-time state.)
 
     // MRT: decode SURFACE_COLOR_TARGET → 1..4 active color planes.
     // The RSX encoding is sparse (0, 1, 2, 3, 0x13, 0x17, 0x1F) and
@@ -422,23 +369,68 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         base = transformed.data();
     }
 
-    // ── Per-vertex fragment program execution ──────────────────
-    // If a fragment program is uploaded (fpOffset in VRAM), run
-    // fp_execute per vertex with the VP outputs mapped to FP inputs:
-    //   FP input[0] = WPOS (window position)
-    //   FP input[1] = COL0 (VP output[1])
-    //   FP input[2] = COL1 (VP output[2])
-    //   FP input[3] = FOGC (VP output[5])
-    //   FP input[4..11] = TEX0..TEX7 (VP output[7..14])
-    // The FP output[0] (r0) becomes the final vertex color.
-    // This is per-vertex (not per-pixel), so lighting computed
-    // in the FP is Gouraud-interpolated — correct enough for
-    // most PS3 shaders and a huge step over the raw VP color.
+    // ── Per-pixel texture binding ───────────────────────────────
+    // Upload texture unit 0 to the GPU rasterizer at draw time so we
+    // use the RSXState that's actually current. The rasterizer kernel
+    // does per-pixel UV interpolation + texture modulation, which is
+    // far superior to per-vertex FP sampling.
+    bool texBoundForDraw = false;
+    if (vram_ && s.textures[0].enabled &&
+        s.textures[0].width > 0 && s.textures[0].height > 0) {
+        const auto& t = s.textures[0];
+        bool stale =
+            !cachedTexValid_ ||
+            t.offset != cachedTexOff_ || t.width != cachedTexW_ ||
+            t.height != cachedTexH_   || t.format != cachedTexFmt_;
+        if (stale) {
+            uint8_t fmt = ((t.format >> 8) & 0xFF) & 0x9F;
+            uint32_t W = t.width, H = t.height;
+            uint64_t need = (uint64_t)W * H * (fmt == 0x81 ? 1u : 4u);
+            if ((uint64_t)t.offset + need <= vramSize_) {
+                const uint8_t* src = vram_ + t.offset;
+                std::vector<uint32_t> rgba8(W * H);
+                if (fmt == 0x85) {
+                    // A8R8G8B8 — guest stores as big-endian A8R8G8B8;
+                    // our rasterizer expects 0xAARRGGBB host-endian.
+                    const uint32_t* s32 = reinterpret_cast<const uint32_t*>(src);
+                    for (uint32_t i = 0; i < W * H; ++i) {
+                        uint32_t px = __builtin_bswap32(s32[i]);
+                        // Ensure alpha is opaque if guest left it 0
+                        if ((px >> 24) == 0) px |= 0xFF000000u;
+                        rgba8[i] = px;
+                    }
+                } else if (fmt == 0x81) {
+                    for (uint32_t i = 0; i < W * H; ++i) {
+                        uint8_t v = src[i];
+                        rgba8[i] = 0xFF000000u |
+                                   ((uint32_t)v << 16) |
+                                   ((uint32_t)v <<  8) | (uint32_t)v;
+                    }
+                } else {
+                    for (uint32_t i = 0; i < W * H; ++i) rgba8[i] = 0xFFFF00FFu;
+                }
+                rast_->setTexture2D(rgba8.data(), W, H);
+                cachedTexOff_ = t.offset;
+                cachedTexW_ = W;
+                cachedTexH_ = H;
+                cachedTexFmt_ = t.format;
+                cachedTexValid_ = true;
+            }
+        }
+        texBoundForDraw = cachedTexValid_;
+    }
+
+    // ── Per-vertex FP shading ─────────────────────────────────
+    // Run the FP for each vertex and replace colors with FP output.
+    // Skip when the rasterizer already has a per-pixel texture bound
+    // (the rasterizer's per-pixel UV interpolation + texture modulation
+    // produces far better results than per-vertex FP with its degenerate
+    // corner-UV sampling).
+    // TODO: True per-pixel FP execution for non-modulate shaders.
     std::vector<RasterVertex> fpShaded;
-    if (vram_ && s.fpOffset != 0 && base != nullptr) {
+    if (!texBoundForDraw && vram_ && s.fpOffset != 0 && base != nullptr) {
         const uint32_t* fpData = reinterpret_cast<const uint32_t*>(
             vram_ + (s.fpOffset & 0x0FFFFFFFu));
-        // Bounds check: FP offset must be within VRAM
         uint32_t fpOff = s.fpOffset & 0x0FFFFFFFu;
         if (fpOff < vramSize_ && (vramSize_ - fpOff) >= 16) {
             uint32_t fpMaxWords = (uint32_t)((vramSize_ - fpOff) / 4);
@@ -448,27 +440,19 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
             fpShaded.resize(count);
             for (uint32_t i = 0; i < count; ++i) {
                 const RasterVertex& v = base[i];
-                // Build FP input registers from vertex data
                 FPFloat4 fpIn[16] = {};
-                // WPOS — window-space position
                 fpIn[0] = FPFloat4{{ v.x, v.y, v.z, 1.0f }};
-                // COL0 — vertex color (from VP output[1] or decoded VA)
                 fpIn[1] = FPFloat4{{ v.r, v.g, v.b, v.a }};
-                // COL1 — secondary color (black default)
                 fpIn[2] = FPFloat4{{ 0, 0, 0, 0 }};
-                // FOGC
                 fpIn[3] = FPFloat4{{ 0, 0, 0, 0 }};
-                // TEX0 — texture coordinate (from VP output[7] or decoded VA)
                 fpIn[4] = FPFloat4{{ v.u, v.v, 0, 1 }};
-                // TEX1..TEX7 remain zero
 
                 FPFloat4 fpOut[4] = {};
                 fp_execute(fpData, fpMaxWords, fpIn, fpOut,
                            ps3rsx::rsx_host_sampler, &tctx);
 
-                // FP output[0] → final vertex color
                 RasterVertex& o = fpShaded[i];
-                o = v; // copy position + UV
+                o = v;
                 o.r = fpOut[0].v[0];
                 o.g = fpOut[0].v[1];
                 o.b = fpOut[0].v[2];
@@ -478,10 +462,10 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         }
     }
     // ── Fallback: per-vertex texture modulation (no FP active) ──
-    // When no fragment program is set, modulate vertex colors by
-    // texture unit 0 at each vertex's UV — simple Gouraud texturing.
+    // When no fragment program is set and no GPU-side texture is bound,
+    // modulate vertex colors by texture unit 0 at each vertex's UV.
     std::vector<RasterVertex> textured;
-    if (fpShaded.empty() && vram_ && s.textures[0].enabled && base != nullptr) {
+    if (!texBoundForDraw && fpShaded.empty() && vram_ && s.textures[0].enabled && base != nullptr) {
         uint8_t texFmt = ((s.textures[0].format >> 8) & 0xFF) & 0x9F;
         bool fmtKnown = (texFmt == 0x85 || texFmt == 0x81);
         if (fmtKnown) {
@@ -547,6 +531,15 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                 exp.push_back(base[i + 1]);
                 exp.push_back(base[i + 2]);
             }
+        }
+        // DEBUG: check vertex colors before draw
+        static int expDbg = 0;
+        if (expDbg < 2 && !exp.empty()) {
+            printf("[VERTS-IN] count=%zu v0: pos=(%.1f,%.1f) col=(%.3f,%.3f,%.3f,%.3f) uv=(%.3f,%.3f)\n",
+                   exp.size(), exp[0].x, exp[0].y,
+                   exp[0].r, exp[0].g, exp[0].b, exp[0].a,
+                   exp[0].u, exp[0].v);
+            expDbg++;
         }
         rast_->drawTriangles(exp.data(), (uint32_t)exp.size());
         break;

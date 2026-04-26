@@ -280,7 +280,9 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             float vv = w0 * v0.v + w1 * v1.v + w2 * v2.v;
             float tr, tg, tb, ta;
             sampleTex(tex, texW, texH, u, vv, texBilinear, tr, tg, tb, ta);
-            r *= tr; g *= tg; b *= tb; a *= ta;
+            // Use texture color directly — real FP controls combination;
+            // modulating by per-face vertex color tints/kills channels.
+            r = tr; g = tg; b = tb; a = ta;
         }
 
         if (alphaTest) {
