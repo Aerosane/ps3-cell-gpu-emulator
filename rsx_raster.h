@@ -198,6 +198,9 @@ public:
     int  setTexture2D(const uint32_t* data, uint32_t w, uint32_t h,
                       uint32_t unit = 0);
     void setTextureFilter(bool bilinear) { texBilinear_ = bilinear; }
+    void setTextureWrap(uint32_t unit, uint8_t wrapS, uint8_t wrapT) {
+        if (unit < MAX_TEX_UNITS) { wrapS_[unit] = wrapS; wrapT_[unit] = wrapT; }
+    }
 
     // Culling: matches RSX NV4097_SET_CULL_FACE_ENABLE + SET_CULL_FACE +
     // SET_FRONT_FACE. Default: no culling.
@@ -321,6 +324,8 @@ private:
     static constexpr uint32_t MAX_TEX_UNITS = 4;
     uint32_t* d_tex_[MAX_TEX_UNITS]{};
     uint32_t  texW_[MAX_TEX_UNITS]{}, texH_[MAX_TEX_UNITS]{};
+    uint8_t   wrapS_[MAX_TEX_UNITS]{1,1,1,1};  // default REPEAT
+    uint8_t   wrapT_[MAX_TEX_UNITS]{1,1,1,1};
     bool      texBilinear_{true};
     CullMode  cullMode_{CullMode::None};
     FrontFace frontFace_{FrontFace::CCW};

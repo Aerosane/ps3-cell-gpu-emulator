@@ -50,12 +50,15 @@ __global__ void k_clearDepth(float* __restrict__ dst,
 //   [4-5] reserved
 
 // Forward-declare texture helpers (defined later in this file)
+__device__ int texWrap(int coord, int dim, uint8_t mode);
 __device__ uint32_t texFetch(const uint32_t* tex,
-    uint32_t tw, uint32_t th, int tx, int ty);
+    uint32_t tw, uint32_t th, int tx, int ty,
+    uint8_t wrapS, uint8_t wrapT);
 __device__ void sampleTex(const uint32_t* tex,
     uint32_t tw, uint32_t th,
     float u, float v, int bilinear,
-    float& outR, float& outG, float& outB, float& outA);
+    float& outR, float& outG, float& outB, float& outA,
+    uint8_t wrapS, uint8_t wrapT);
 
 #define FP_PACK_W0(op, mx, my, mz, mw, tu, ia, sat, end) \
     (((op)&0x7F) | (((mx)&1)<<7) | (((my)&1)<<8) | (((mz)&1)<<9) | \
@@ -126,6 +129,7 @@ struct FPVec4 { float x, y, z, w; };
 struct TexBank {
     const uint32_t* tex[4];
     uint32_t w[4], h[4];
+    uint8_t wrapS[4], wrapT[4];  // RSX wrap: 1=REPEAT, 2=MIRROR, 3=CLAMP_EDGE
 };
 
 // Read a source operand with swizzle and negate
@@ -269,7 +273,8 @@ __device__ bool fpExecute(
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                           texBank.h[texUnit], s0.x, s0.y, texBilinear,
-                          tr, tg, tb, ta);
+                          tr, tg, tb, ta,
+                          texBank.wrapS[texUnit], texBank.wrapT[texUnit]);
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
@@ -391,7 +396,8 @@ __device__ bool fpExecute(
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                           texBank.h[texUnit], pu, pv, texBilinear,
-                          tr, tg, tb, ta);
+                          tr, tg, tb, ta,
+                          texBank.wrapS[texUnit], texBank.wrapT[texUnit]);
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
@@ -406,7 +412,8 @@ __device__ bool fpExecute(
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                           texBank.h[texUnit], s0.x, s0.y, texBilinear,
-                          tr, tg, tb, ta);
+                          tr, tg, tb, ta,
+                          texBank.wrapS[texUnit], texBank.wrapT[texUnit]);
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
@@ -527,25 +534,47 @@ __device__ __forceinline__ uint8_t stencilApply(uint32_t op, uint8_t cur, uint8_
     }
 }
 
+__device__ __forceinline__ int texWrap(int coord, int dim, uint8_t mode) {
+    // 1=REPEAT, 2=MIRROR_REPEAT, 3=CLAMP_TO_EDGE, 4=BORDER, 5=CLAMP
+    switch (mode) {
+    case 2: { // MIRROR_REPEAT
+        int period = coord / dim;
+        coord = coord % dim;
+        if (coord < 0) { coord += dim; period--; }
+        if (period & 1) coord = dim - 1 - coord;
+        return coord;
+    }
+    case 3: // CLAMP_TO_EDGE
+    case 5: // CLAMP (same for us — no border color)
+    case 4: // BORDER (treat as clamp)
+        return (coord < 0) ? 0 : (coord >= dim) ? dim - 1 : coord;
+    default: // 1 = REPEAT (and fallback)
+        coord = coord % dim;
+        if (coord < 0) coord += dim;
+        return coord;
+    }
+}
+
 __device__ __forceinline__ uint32_t texFetch(const uint32_t* tex,
                                              uint32_t tw, uint32_t th,
-                                             int tx, int ty) {
-    // wrap mode: repeat
-    tx = tx % (int)tw; if (tx < 0) tx += tw;
-    ty = ty % (int)th; if (ty < 0) ty += th;
+                                             int tx, int ty,
+                                             uint8_t wrapS = 1, uint8_t wrapT = 1) {
+    tx = texWrap(tx, (int)tw, wrapS);
+    ty = texWrap(ty, (int)th, wrapT);
     return tex[ty * tw + tx];
 }
 
 __device__ __forceinline__ void sampleTex(const uint32_t* tex,
                                           uint32_t tw, uint32_t th,
                                           float u, float v, int bilinear,
-                                          float& r, float& g, float& b, float& a) {
+                                          float& r, float& g, float& b, float& a,
+                                          uint8_t wrapS = 1, uint8_t wrapT = 1) {
     float fx = u * (float)tw - 0.5f;
     float fy = v * (float)th - 0.5f;
     int ix = (int)floorf(fx);
     int iy = (int)floorf(fy);
     if (!bilinear) {
-        uint32_t c = texFetch(tex, tw, th, ix, iy);
+        uint32_t c = texFetch(tex, tw, th, ix, iy, wrapS, wrapT);
         r = ((c >> 16) & 0xFF) / 255.0f;
         g = ((c >>  8) & 0xFF) / 255.0f;
         b = ((c >>  0) & 0xFF) / 255.0f;
@@ -553,10 +582,10 @@ __device__ __forceinline__ void sampleTex(const uint32_t* tex,
         return;
     }
     float sx = fx - ix, sy = fy - iy;
-    uint32_t c00 = texFetch(tex, tw, th, ix,   iy  );
-    uint32_t c10 = texFetch(tex, tw, th, ix+1, iy  );
-    uint32_t c01 = texFetch(tex, tw, th, ix,   iy+1);
-    uint32_t c11 = texFetch(tex, tw, th, ix+1, iy+1);
+    uint32_t c00 = texFetch(tex, tw, th, ix,   iy,   wrapS, wrapT);
+    uint32_t c10 = texFetch(tex, tw, th, ix+1, iy,   wrapS, wrapT);
+    uint32_t c01 = texFetch(tex, tw, th, ix,   iy+1, wrapS, wrapT);
+    uint32_t c11 = texFetch(tex, tw, th, ix+1, iy+1, wrapS, wrapT);
     auto lerp = [] __device__ (float a, float b, float t) { return a + (b - a) * t; };
     auto ch = [&](int shift) {
         float v00 = ((c00>>shift)&0xFF)/255.0f;
@@ -714,7 +743,8 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         } else if (texBank.tex[0]) {
             float tr, tg, tb, ta;
             sampleTex(texBank.tex[0], texBank.w[0], texBank.h[0],
-                      u, vv, texBilinear, tr, tg, tb, ta);
+                      u, vv, texBilinear, tr, tg, tb, ta,
+                      texBank.wrapS[0], texBank.wrapT[0]);
             // Fallback: texture replaces vertex color when no FP
             r = tr; g = tg; b = tb; a = ta;
         }
@@ -1187,6 +1217,7 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     TexBank tb;
     for (int i = 0; i < 4; ++i) {
         tb.tex[i] = d_tex_[i]; tb.w[i] = texW_[i]; tb.h[i] = texH_[i];
+        tb.wrapS[i] = wrapS_[i]; tb.wrapT[i] = wrapT_[i];
     }
     k_rasterTriangles<<<gs, bs>>>(fb_.d_color, fb_.d_depth, fb_.d_stencil,
                                   fb_.width, fb_.height,

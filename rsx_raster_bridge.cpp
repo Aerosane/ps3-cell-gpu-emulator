@@ -718,6 +718,13 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
             for (uint32_t i = 0; i < W * H; ++i) rgba8[i] = 0xFFFF00FFu;
         }
         rast_->setTexture2D(rgba8.data(), W, H, tu);
+        // Extract wrap modes from TEXTURE_ADDRESS register
+        uint32_t addr = t.address;
+        uint8_t wS = (addr) & 0xF;        // wrapS bits [3:0]
+        uint8_t wT = (addr >> 8) & 0xF;   // wrapT bits [11:8]
+        if (wS == 0) wS = 1;  // default REPEAT
+        if (wT == 0) wT = 1;
+        rast_->setTextureWrap(tu, wS, wT);
         if (tu == 0) {
             cachedTexOff_ = t.offset;
             cachedTexW_ = W;
