@@ -820,7 +820,21 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         float w1 = e1 * invArea;
         float w2 = 1.0f - w0 - w1;
 
+        // Z interpolation (linear in screen space after perspective divide)
         float z = w0 * v0.z + w1 * v1.z + w2 * v2.z;
+
+        // Perspective-correct interpolation weights.
+        // 1/W is linear in screen space; we interpolate 1/W then divide
+        // attribute/W by the result to recover perspective-correct values.
+        float iw0 = (v0.w != 0.0f) ? 1.0f / v0.w : 1.0f;
+        float iw1 = (v1.w != 0.0f) ? 1.0f / v1.w : 1.0f;
+        float iw2 = (v2.w != 0.0f) ? 1.0f / v2.w : 1.0f;
+        float iwP = w0 * iw0 + w1 * iw1 + w2 * iw2;
+        float pcW = (iwP != 0.0f) ? 1.0f / iwP : 1.0f;
+        // Perspective-correct barycentric weights
+        float p0 = w0 * iw0 * pcW;
+        float p1 = w1 * iw1 * pcW;
+        float p2 = 1.0f - p0 - p1;
 
         // Polygon offset (depth bias) for decals and shadow maps
         if (polyOffsetFactor != 0.0f || polyOffsetUnits != 0.0f) {
@@ -861,20 +875,20 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         if (!sPass) continue;
         if (!zPass) continue;
 
-        // Vertex attribute interpolation: smooth (barycentric) or flat (provoking = v2)
+        // Vertex attribute interpolation: smooth (perspective-correct) or flat (provoking = v2)
         float r, g, b, a;
         if (flatShade) {
             r = v2.r; g = v2.g; b = v2.b; a = v2.a;
         } else {
-            r = w0 * v0.r + w1 * v1.r + w2 * v2.r;
-            g = w0 * v0.g + w1 * v1.g + w2 * v2.g;
-            b = w0 * v0.b + w1 * v1.b + w2 * v2.b;
-            a = w0 * v0.a + w1 * v1.a + w2 * v2.a;
+            r = p0 * v0.r + p1 * v1.r + p2 * v2.r;
+            g = p0 * v0.g + p1 * v1.g + p2 * v2.g;
+            b = p0 * v0.b + p1 * v1.b + p2 * v2.b;
+            a = p0 * v0.a + p1 * v1.a + p2 * v2.a;
         }
 
-        // Texcoords always interpolated (even in flat shading mode)
-        float u = w0 * v0.u + w1 * v1.u + w2 * v2.u;
-        float vv = w0 * v0.v + w1 * v1.v + w2 * v2.v;
+        // Texcoords always interpolated with perspective correction
+        float u = p0 * v0.u + p1 * v1.u + p2 * v2.u;
+        float vv = p0 * v0.v + p1 * v1.v + p2 * v2.v;
 
         if (fpInsns && fpInsnCount > 0) {
             // Build FP input array from interpolated vertex data
@@ -886,19 +900,19 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                 fpIn[2] = {v2.col1[0], v2.col1[1], v2.col1[2], v2.col1[3]};
                 fpIn[3] = {v2.fog, 0, 0, 1};
             } else {
-                fpIn[2] = {w0*v0.col1[0]+w1*v1.col1[0]+w2*v2.col1[0],
-                           w0*v0.col1[1]+w1*v1.col1[1]+w2*v2.col1[1],
-                           w0*v0.col1[2]+w1*v1.col1[2]+w2*v2.col1[2],
-                           w0*v0.col1[3]+w1*v1.col1[3]+w2*v2.col1[3]};
-                fpIn[3] = {w0*v0.fog+w1*v1.fog+w2*v2.fog, 0, 0, 1};
+                fpIn[2] = {p0*v0.col1[0]+p1*v1.col1[0]+p2*v2.col1[0],
+                           p0*v0.col1[1]+p1*v1.col1[1]+p2*v2.col1[1],
+                           p0*v0.col1[2]+p1*v1.col1[2]+p2*v2.col1[2],
+                           p0*v0.col1[3]+p1*v1.col1[3]+p2*v2.col1[3]};
+                fpIn[3] = {p0*v0.fog+p1*v1.fog+p2*v2.fog, 0, 0, 1};
             }
             fpIn[4] = {u, vv, 0.0f, 1.0f};  // TEX0
-            fpIn[5] = {w0*v0.tex1[0]+w1*v1.tex1[0]+w2*v2.tex1[0],
-                       w0*v0.tex1[1]+w1*v1.tex1[1]+w2*v2.tex1[1], 0, 1};  // TEX1
-            fpIn[6] = {w0*v0.tex2[0]+w1*v1.tex2[0]+w2*v2.tex2[0],
-                       w0*v0.tex2[1]+w1*v1.tex2[1]+w2*v2.tex2[1], 0, 1};  // TEX2
-            fpIn[7] = {w0*v0.tex3[0]+w1*v1.tex3[0]+w2*v2.tex3[0],
-                       w0*v0.tex3[1]+w1*v1.tex3[1]+w2*v2.tex3[1], 0, 1};  // TEX3
+            fpIn[5] = {p0*v0.tex1[0]+p1*v1.tex1[0]+p2*v2.tex1[0],
+                       p0*v0.tex1[1]+p1*v1.tex1[1]+p2*v2.tex1[1], 0, 1};  // TEX1
+            fpIn[6] = {p0*v0.tex2[0]+p1*v1.tex2[0]+p2*v2.tex2[0],
+                       p0*v0.tex2[1]+p1*v1.tex2[1]+p2*v2.tex2[1], 0, 1};  // TEX2
+            fpIn[7] = {p0*v0.tex3[0]+p1*v1.tex3[0]+p2*v2.tex3[0],
+                       p0*v0.tex3[1]+p1*v1.tex3[1]+p2*v2.tex3[1], 0, 1};  // TEX3
             FPVec4 mrtVals[3] = {};
             bool alive = fpExecute(fpInsns, fpInsnCount, fpConsts, fpConstCount,
                       fpIn, 8, texBank,
@@ -1401,6 +1415,7 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
             transformed[i].x = vpX + (nx * 0.5f + 0.5f) * vpW;
             transformed[i].y = vpY + (1.0f - (ny * 0.5f + 0.5f)) * vpH;
             transformed[i].z = nz * 0.5f + 0.5f;  // NDC z [-1,1] -> [0,1]
+            transformed[i].w = cw;  // preserve clip W for perspective correction
         }
         d_src = transformed.data();
     }
@@ -1527,6 +1542,7 @@ static inline RasterVertex xformOne(const RasterVertex& v,
     o.x = vpX + (nx * 0.5f + 0.5f) * vpW;
     o.y = vpY + (1.0f - (ny * 0.5f + 0.5f)) * vpH;
     o.z = nz * 0.5f + 0.5f;
+    o.w = cw;
     return o;
 }
 

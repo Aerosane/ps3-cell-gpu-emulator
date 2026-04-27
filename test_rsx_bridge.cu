@@ -86,17 +86,17 @@ int main() {
 
     // Three overlapping triangles in the shared vertex pool.
     std::vector<RasterVertex> pool = {
-        { 40.f,  40.f, 0, 1,0,0,1 },
-        {280.f,  40.f, 0, 1,0,0,1 },
-        {160.f, 200.f, 0, 1,0,0,1 },
+        { 40.f,  40.f, 0, 1.0f, 1,0,0,1 },
+        {280.f,  40.f, 0, 1.0f, 1,0,0,1 },
+        {160.f, 200.f, 0, 1.0f, 1,0,0,1 },
 
-        { 60.f,  80.f, 0, 0,1,0,1 },
-        {260.f,  80.f, 0, 0,1,0,1 },
-        {160.f, 180.f, 0, 0,1,0,1 },
+        { 60.f,  80.f, 0, 1.0f, 0,1,0,1 },
+        {260.f,  80.f, 0, 1.0f, 0,1,0,1 },
+        {160.f, 180.f, 0, 1.0f, 0,1,0,1 },
 
-        { 80.f, 100.f, 0, 0,0,1,1 },
-        {240.f, 100.f, 0, 0,0,1,1 },
-        {160.f, 160.f, 0, 0,0,1,1 },
+        { 80.f, 100.f, 0, 1.0f, 0,0,1,1 },
+        {240.f, 100.f, 0, 1.0f, 0,0,1,1 },
+        {160.f, 160.f, 0, 1.0f, 0,0,1,1 },
     };
     bridge.setVertexPool(pool.data(), (uint32_t)pool.size());
 
@@ -785,7 +785,7 @@ int main() {
         RasterVertex quad[4] = {};
         auto setV = [](RasterVertex& v, float x, float y,
                        float r, float g, float b){
-            v.x = x; v.y = y; v.z = 0.5f;
+            v.x = x; v.y = y; v.z = 0.5f; v.w = 1.0f;
             v.r = r; v.g = g; v.b = b; v.a = 1.0f;
             v.u = 0.0f; v.v = 0.0f;
         };

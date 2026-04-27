@@ -43,19 +43,19 @@ int main() {
     r.clear(0xFF001040u);
 
     RasterVertex red[3] = {
-        { 10.f,  10.f, 0, 1,0,0,1 },
-        { 10.f, 230.f, 0, 1,0,0,1 },
-        {150.f, 120.f, 0, 1,0,0,1 },
+        {10.f, 10.f, 0, 1.0f, 1, 0, 0, 1},
+        {10.f, 230.f, 0, 1.0f, 1, 0, 0, 1},
+        {150.f, 120.f, 0, 1.0f, 1, 0, 0, 1},
     };
     RasterVertex grn[3] = {
-        {310.f,  10.f, 0, 0,1,0,1 },
-        {170.f, 120.f, 0, 0,1,0,1 },
-        {310.f, 230.f, 0, 0,1,0,1 },
+        {310.f, 10.f, 0, 1.0f, 0, 1, 0, 1},
+        {170.f, 120.f, 0, 1.0f, 0, 1, 0, 1},
+        {310.f, 230.f, 0, 1.0f, 0, 1, 0, 1},
     };
     RasterVertex white[3] = {
-        { 40.f,  60.f, 0, 1,1,1,0.5f },
-        {280.f,  60.f, 0, 1,1,1,0.5f },
-        {160.f, 200.f, 0, 1,1,1,0.5f },
+        {40.f, 60.f, 0, 1.0f, 1, 1, 1, 0.5f},
+        {280.f, 60.f, 0, 1.0f, 1, 1, 1, 0.5f},
+        {160.f, 200.f, 0, 1.0f, 1, 1, 1, 0.5f},
     };
 
     r.setBlend(false);
@@ -110,14 +110,14 @@ int main() {
     r.setDepthFunc(DepthFunc::Less);
 
     RasterVertex near_grn[3] = {
-        { 80.f,  60.f, 0.2f, 0,1,0,1 },
-        {240.f,  60.f, 0.2f, 0,1,0,1 },
-        {160.f, 200.f, 0.2f, 0,1,0,1 },
+        {80.f, 60.f, 0.2f, 1.0f, 0, 1, 0, 1},
+        {240.f, 60.f, 0.2f, 1.0f, 0, 1, 0, 1},
+        {160.f, 200.f, 0.2f, 1.0f, 0, 1, 0, 1},
     };
     RasterVertex far_red[3] = {
-        { 40.f, 100.f, 0.8f, 1,0,0,1 },
-        {280.f, 100.f, 0.8f, 1,0,0,1 },
-        {160.f, 230.f, 0.8f, 1,0,0,1 },
+        {40.f, 100.f, 0.8f, 1.0f, 1, 0, 0, 1},
+        {280.f, 100.f, 0.8f, 1.0f, 1, 0, 0, 1},
+        {160.f, 230.f, 0.8f, 1.0f, 1, 0, 0, 1},
     };
 
     r.drawTriangles(near_grn, 3);
@@ -209,12 +209,12 @@ int main() {
                     float cx, float cy, float cz,
                     float dx, float dy, float dz,
                     float R, float G, float B) {
-        out.push_back({ax,ay,az, R,G,B,1});
-        out.push_back({bx,by,bz, R,G,B,1});
-        out.push_back({cx,cy,cz, R,G,B,1});
-        out.push_back({ax,ay,az, R,G,B,1});
-        out.push_back({cx,cy,cz, R,G,B,1});
-        out.push_back({dx,dy,dz, R,G,B,1});
+        out.push_back({ax, ay, az, 1.0f, R, G, B, 1});
+        out.push_back({bx, by, bz, 1.0f, R, G, B, 1});
+        out.push_back({cx, cy, cz, 1.0f, R, G, B, 1});
+        out.push_back({ax, ay, az, 1.0f, R, G, B, 1});
+        out.push_back({cx, cy, cz, 1.0f, R, G, B, 1});
+        out.push_back({dx, dy, dz, 1.0f, R, G, B, 1});
     };
     std::vector<RasterVertex> cube;
     // +X (red), -X (cyan), +Y (green), -Y (magenta), +Z (blue), -Z (yellow)
@@ -262,12 +262,12 @@ int main() {
 
     // Full-surface quad with UV 0..1. Two triangles.
     RasterVertex quad[6] = {
-        { 40.f,  40.f, 0, 1,1,1,1, 0.f, 0.f },
-        {280.f,  40.f, 0, 1,1,1,1, 1.f, 0.f },
-        {280.f, 200.f, 0, 1,1,1,1, 1.f, 1.f },
-        { 40.f,  40.f, 0, 1,1,1,1, 0.f, 0.f },
-        {280.f, 200.f, 0, 1,1,1,1, 1.f, 1.f },
-        { 40.f, 200.f, 0, 1,1,1,1, 0.f, 1.f },
+        {40.f, 40.f, 0, 1.0f, 1, 1, 1, 1, 0.f, 0.f},
+        {280.f, 40.f, 0, 1.0f, 1, 1, 1, 1, 1.f, 0.f},
+        {280.f, 200.f, 0, 1.0f, 1, 1, 1, 1, 1.f, 1.f},
+        {40.f, 40.f, 0, 1.0f, 1, 1, 1, 1, 0.f, 0.f},
+        {280.f, 200.f, 0, 1.0f, 1, 1, 1, 1, 1.f, 1.f},
+        {40.f, 200.f, 0, 1.0f, 1, 1, 1, 1, 0.f, 1.f},
     };
     r.drawTriangles(quad, 6);
     r.readback(fb.data());
@@ -305,9 +305,9 @@ int main() {
     r.clear(0xFF000000u);
     r.setScissor(0, 0, 320, 120);
     RasterVertex big[3] = {
-        {  0.f,   0.f, 0, 1,1,0,1 },
-        {320.f,   0.f, 0, 1,1,0,1 },
-        {160.f, 240.f, 0, 1,1,0,1 },
+        {0.f, 0.f, 0, 1.0f, 1, 1, 0, 1},
+        {320.f, 0.f, 0, 1.0f, 1, 1, 0, 1},
+        {160.f, 240.f, 0, 1.0f, 1, 1, 0, 1},
     };
     r.drawTriangles(big, 3);
     r.readback(fb.data());
@@ -328,14 +328,14 @@ int main() {
     r.setFrontFace(FrontFace::CCW);
 
     RasterVertex ccwTri[3] = {
-        { 50.f,  50.f, 0, 0,1,0,1 },
-        {150.f, 200.f, 0, 0,1,0,1 },
-        {250.f,  50.f, 0, 0,1,0,1 },
+        {50.f, 50.f, 0, 1.0f, 0, 1, 0, 1},
+        {150.f, 200.f, 0, 1.0f, 0, 1, 0, 1},
+        {250.f, 50.f, 0, 1.0f, 0, 1, 0, 1},
     };
     RasterVertex cwTri[3] = {
-        { 50.f,  50.f, 0, 1,0,0,1 },
-        {250.f,  50.f, 0, 1,0,0,1 },
-        {150.f, 200.f, 0, 1,0,0,1 },
+        {50.f, 50.f, 0, 1.0f, 1, 0, 0, 1},
+        {250.f, 50.f, 0, 1.0f, 1, 0, 0, 1},
+        {150.f, 200.f, 0, 1.0f, 1, 0, 0, 1},
     };
     r.drawTriangles(ccwTri, 3);
     uint32_t cullSkippedBefore = r.stats.triangleSkipped;
@@ -356,10 +356,10 @@ int main() {
     // ───────────────────────────────────────────────────────────────
     r.clear(0xFF000000u);
     RasterVertex quadVerts[4] = {
-        { 80.f,  60.f, 0, 1,0,0,1 },
-        {240.f,  60.f, 0, 0,1,0,1 },
-        {240.f, 180.f, 0, 0,0,1,1 },
-        { 80.f, 180.f, 0, 1,1,0,1 },
+        {80.f, 60.f, 0, 1.0f, 1, 0, 0, 1},
+        {240.f, 60.f, 0, 1.0f, 0, 1, 0, 1},
+        {240.f, 180.f, 0, 1.0f, 0, 0, 1, 1},
+        {80.f, 180.f, 0, 1.0f, 1, 1, 0, 1},
     };
     uint16_t idx16[6] = { 0,1,2,  0,2,3 };
     uint32_t it = r.drawIndexed(quadVerts, 4, idx16, 6, false);
@@ -376,14 +376,14 @@ int main() {
     // ───────────────────────────────────────────────────────────────
     r.clear(0xFF000000u);
     RasterVertex solid[3] = {
-        { 80.f,  50.f, 0, 0,1,1,1 },
-        {240.f,  50.f, 0, 0,1,1,1 },
-        {160.f, 190.f, 0, 0,1,1,1 },
+        {80.f, 50.f, 0, 1.0f, 0, 1, 1, 1},
+        {240.f, 50.f, 0, 1.0f, 0, 1, 1, 1},
+        {160.f, 190.f, 0, 1.0f, 0, 1, 1, 1},
     };
     RasterVertex ghost[3] = {
-        { 80.f,  50.f, 0, 1,0,0, 0.2f },
-        {240.f,  50.f, 0, 1,0,0, 0.2f },
-        {160.f, 190.f, 0, 1,0,0, 0.2f },
+        {80.f, 50.f, 0, 1.0f, 1, 0, 0, 0.2f},
+        {240.f, 50.f, 0, 1.0f, 1, 0, 0, 0.2f},
+        {160.f, 190.f, 0, 1.0f, 1, 0, 0, 0.2f},
     };
     r.drawTriangles(solid, 3);
     r.setAlphaTest(true, 127);  // reject fragments where a*255 <= 127
@@ -414,9 +414,9 @@ int main() {
     r.setStencilOp(StencilOp::Keep, StencilOp::Keep, StencilOp::Replace);
     r.setStencilWriteMask(0xFF);
     RasterVertex mask[3] = {
-        {100.f,  60.f, 0, 1,1,1,1 },
-        {220.f,  60.f, 0, 1,1,1,1 },
-        {160.f, 180.f, 0, 1,1,1,1 },
+        {100.f, 60.f, 0, 1.0f, 1, 1, 1, 1},
+        {220.f, 60.f, 0, 1.0f, 1, 1, 1, 1},
+        {160.f, 180.f, 0, 1.0f, 1, 1, 1, 1},
     };
     r.drawTriangles(mask, 3);
 
@@ -424,12 +424,12 @@ int main() {
     r.setStencilFunc(StencilFunc::Equal, 1, 0xFF);
     r.setStencilOp(StencilOp::Keep, StencilOp::Keep, StencilOp::Keep);
     RasterVertex full[6] = {
-        {  0.f,   0.f, 0, 0,0,1,1 },
-        {320.f,   0.f, 0, 0,0,1,1 },
-        {320.f, 240.f, 0, 0,0,1,1 },
-        {  0.f,   0.f, 0, 0,0,1,1 },
-        {320.f, 240.f, 0, 0,0,1,1 },
-        {  0.f, 240.f, 0, 0,0,1,1 },
+        {0.f, 0.f, 0, 1.0f, 0, 0, 1, 1},
+        {320.f, 0.f, 0, 1.0f, 0, 0, 1, 1},
+        {320.f, 240.f, 0, 1.0f, 0, 0, 1, 1},
+        {0.f, 0.f, 0, 1.0f, 0, 0, 1, 1},
+        {320.f, 240.f, 0, 1.0f, 0, 0, 1, 1},
+        {0.f, 240.f, 0, 1.0f, 0, 0, 1, 1},
     };
     r.drawTriangles(full, 6);
     r.setStencilTest(false);
@@ -462,19 +462,19 @@ int main() {
     r.setBlendFunc(BlendFactor::One, BlendFactor::One,
                    BlendFactor::One, BlendFactor::One);
     RasterVertex rA[3] = {
-        { 60.f,  40.f, 0, 0.5f, 0,    0,    1 },
-        {220.f,  40.f, 0, 0.5f, 0,    0,    1 },
-        {140.f, 180.f, 0, 0.5f, 0,    0,    1 },
+        {60.f, 40.f, 0, 1.0f, 0.5f, 0, 0, 1},
+        {220.f, 40.f, 0, 1.0f, 0.5f, 0, 0, 1},
+        {140.f, 180.f, 0, 1.0f, 0.5f, 0, 0, 1},
     };
     RasterVertex gA[3] = {
-        {100.f,  40.f, 0, 0,    0.5f, 0,    1 },
-        {260.f,  40.f, 0, 0,    0.5f, 0,    1 },
-        {180.f, 180.f, 0, 0,    0.5f, 0,    1 },
+        {100.f, 40.f, 0, 1.0f, 0, 0.5f, 0, 1},
+        {260.f, 40.f, 0, 1.0f, 0, 0.5f, 0, 1},
+        {180.f, 180.f, 0, 1.0f, 0, 0.5f, 0, 1},
     };
     RasterVertex bA[3] = {
-        { 80.f,  80.f, 0, 0,    0,    0.5f, 1 },
-        {240.f,  80.f, 0, 0,    0,    0.5f, 1 },
-        {160.f, 200.f, 0, 0,    0,    0.5f, 1 },
+        {80.f, 80.f, 0, 1.0f, 0, 0, 0.5f, 1},
+        {240.f, 80.f, 0, 1.0f, 0, 0, 0.5f, 1},
+        {160.f, 200.f, 0, 1.0f, 0, 0, 0.5f, 1},
     };
     r.drawTriangles(rA, 3);
     r.drawTriangles(gA, 3);
@@ -494,14 +494,14 @@ int main() {
     r.setBlendFunc(BlendFactor::One, BlendFactor::One,
                    BlendFactor::One, BlendFactor::One);
     RasterVertex bright[3] = {
-        { 40.f,  40.f, 0, 0.9f, 0, 0, 1 },
-        {280.f,  40.f, 0, 0.9f, 0, 0, 1 },
-        {160.f, 200.f, 0, 0.9f, 0, 0, 1 },
+        {40.f, 40.f, 0, 1.0f, 0.9f, 0, 0, 1},
+        {280.f, 40.f, 0, 1.0f, 0.9f, 0, 0, 1},
+        {160.f, 200.f, 0, 1.0f, 0.9f, 0, 0, 1},
     };
     RasterVertex dim[3] = {
-        { 60.f,  60.f, 0, 0.3f, 0, 0, 1 },
-        {260.f,  60.f, 0, 0.3f, 0, 0, 1 },
-        {160.f, 180.f, 0, 0.3f, 0, 0, 1 },
+        {60.f, 60.f, 0, 1.0f, 0.3f, 0, 0, 1},
+        {260.f, 60.f, 0, 1.0f, 0.3f, 0, 0, 1},
+        {160.f, 180.f, 0, 1.0f, 0.3f, 0, 0, 1},
     };
     r.drawTriangles(bright, 3);
     r.drawTriangles(dim,    3);
@@ -526,11 +526,11 @@ int main() {
 
     // Horizontal red line y=50, from x=40 to x=280.
     RasterVertex ln[4] = {
-        { 40.f, 50.f, 0, 1,0,0,1 },
-        {280.f, 50.f, 0, 1,0,0,1 },
+        {40.f, 50.f, 0, 1.0f, 1, 0, 0, 1},
+        {280.f, 50.f, 0, 1.0f, 1, 0, 0, 1},
         // Diagonal green line gradient.
-        { 40.f, 80.f, 0, 0,1,0,1 },
-        {280.f,200.f, 0, 1,1,1,1 },
+        {40.f, 80.f, 0, 1.0f, 0, 1, 0, 1},
+        {280.f, 200.f, 0, 1.0f, 1, 1, 1, 1},
     };
     uint32_t nseg = r.drawLines(ln, 4);
     CHECK(nseg == 2, "drawLines reported 2 segments");
@@ -560,10 +560,10 @@ int main() {
 
     // Scatter some points — each exactly 1 pixel.
     RasterVertex pts[4] = {
-        { 10.5f,  10.5f, 0, 1,1,0,1 },
-        { 50.5f,  10.5f, 0, 0,1,1,1 },
-        { 10.5f, 220.5f, 0, 1,0,1,1 },
-        {300.5f, 220.5f, 0, 1,1,1,1 },
+        {10.5f, 10.5f, 0, 1.0f, 1, 1, 0, 1},
+        {50.5f, 10.5f, 0, 1.0f, 0, 1, 1, 1},
+        {10.5f, 220.5f, 0, 1.0f, 1, 0, 1, 1},
+        {300.5f, 220.5f, 0, 1.0f, 1, 1, 1, 1},
     };
     uint32_t npts = r.drawPoints(pts, 4);
     CHECK(npts == 4, "drawPoints reported 4 points");
@@ -586,14 +586,14 @@ int main() {
     r.setDepthTest(false);
 
     RasterVertex inPlane[3] = {
-        { 60.f,  60.f, 0.5f, 0,1,0,1 },
-        {260.f,  60.f, 0.5f, 0,1,0,1 },
-        {160.f, 180.f, 0.5f, 0,1,0,1 },
+        {60.f, 60.f, 0.5f, 1.0f, 0, 1, 0, 1},
+        {260.f, 60.f, 0.5f, 1.0f, 0, 1, 0, 1},
+        {160.f, 180.f, 0.5f, 1.0f, 0, 1, 0, 1},
     };
     RasterVertex farPlane[3] = {
-        { 60.f,  60.f, 1.5f, 1,0,0,1 },
-        {260.f,  60.f, 1.5f, 1,0,0,1 },
-        {160.f, 180.f, 1.5f, 1,0,0,1 },
+        {60.f, 60.f, 1.5f, 1.0f, 1, 0, 0, 1},
+        {260.f, 60.f, 1.5f, 1.0f, 1, 0, 0, 1},
+        {160.f, 180.f, 1.5f, 1.0f, 1, 0, 0, 1},
     };
     r.setDepthClip(true);
     r.drawTriangles(farPlane, 3);

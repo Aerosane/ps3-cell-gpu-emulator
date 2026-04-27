@@ -299,6 +299,7 @@ static void decode_vertex_stream(const RSXState& s,
         RasterVertex& v = out[i];
         memset(&v, 0, sizeof(v));
         v.x = pos[0]; v.y = pos[1]; v.z = pos[2];
+        v.w = 1.0f;  // pre-transformed vertices: W=1 (no perspective)
         v.r = color[0]; v.g = color[1]; v.b = color[2]; v.a = color[3];
         v.u = uv[0];    v.v = uv[1];
     }
@@ -583,6 +584,7 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                 v.y = (1.0f - (ny * 0.5f + 0.5f)) * H;
                 v.z = nz * 0.5f + 0.5f;
             }
+            v.w = ow;  // preserve clip-space W for perspective-correct interpolation
             // Color from o[1] (COL0), UV from o[7] (TEX0)
             v.r = outputs[1].v[0]; v.g = outputs[1].v[1];
             v.b = outputs[1].v[2]; v.a = outputs[1].v[3];

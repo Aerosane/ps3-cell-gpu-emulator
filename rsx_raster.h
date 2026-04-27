@@ -25,7 +25,8 @@
 namespace rsx {
 
 struct RasterVertex {
-    float x, y, z;     // Model/clip-space depending on pipeline state.
+    float x, y, z;     // Screen-space position after perspective divide.
+    float w;           // Clip-space W for perspective-correct interpolation.
     float r, g, b, a;  // COL0: Linear RGBA diffuse color.
     float u, v;        // TEX0: Texture coords, [0,1] with current wrap mode.
     // Extended VP outputs for per-pixel FP input
