@@ -825,7 +825,8 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                               ((insn.texUnit & 0xF) << 11) |
                               ((insn.inputAttr & 0xF) << 15) |
                               ((insn.saturate ? 1u : 0u) << 19) |
-                              ((insn.endFlag ? 1u : 0u) << 20);
+                              ((insn.endFlag ? 1u : 0u) << 20) |
+                              ((insn.noDest ? 1u : 0u) << 21);
 
                 auto packSrc = [](const FPDecodedSrc& s) -> uint32_t {
                     return (s.regType & 3) |
@@ -834,7 +835,8 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                            ((s.swzY & 3) << 12) |
                            ((s.swzZ & 3) << 14) |
                            ((s.swzW & 3) << 16) |
-                           ((s.neg ? 1u : 0u) << 18);
+                           ((s.neg ? 1u : 0u) << 18) |
+                           ((s.abs ? 1u : 0u) << 19);
                 };
 
                 uint32_t w1 = (insn.dstReg & 0xFF) | (packSrc(insn.src[0]) << 8);

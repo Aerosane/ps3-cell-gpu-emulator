@@ -171,6 +171,7 @@ __device__ __forceinline__ FPVec4 fpReadSrc(
     uint32_t sz    = (packed >> 14) & 3;
     uint32_t sw    = (packed >> 16) & 3;
     bool     neg   = (packed >> 18) & 1;
+    bool     absv  = (packed >> 19) & 1;
 
     FPVec4 base = {0,0,0,0};
     if (stype == FP_SRC_TEMP) {
@@ -188,17 +189,24 @@ __device__ __forceinline__ FPVec4 fpReadSrc(
     float arr[4] = {base.x, base.y, base.z, base.w};
     FPVec4 result = {arr[sx], arr[sy], arr[sz], arr[sw]};
 
+    // Per-source abs modifier (applied before negate, per RSX spec)
+    if (absv) {
+        result.x = fabsf(result.x); result.y = fabsf(result.y);
+        result.z = fabsf(result.z); result.w = fabsf(result.w);
+    }
     if (neg) { result.x = -result.x; result.y = -result.y;
                result.z = -result.z; result.w = -result.w; }
     return result;
 }
 
-// Write result to destination with mask and optional saturate
+// Write result to destination with mask and optional saturate.
+// noDest: skip write entirely (used for condition-code-only or KIL instructions).
 __device__ __forceinline__ void fpWriteDst(
     FPVec4* temps, uint32_t dst, const FPVec4& val,
-    bool mx, bool my, bool mz, bool mw, bool sat, uint32_t nTemps)
+    bool mx, bool my, bool mz, bool mw, bool sat, uint32_t nTemps,
+    bool noDest = false)
 {
-    if (dst >= nTemps) return;
+    if (noDest || dst >= nTemps) return;
     FPVec4& d = temps[dst];
     auto clmp = [](float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); };
     if (mx) d.x = sat ? clmp(val.x) : val.x;
@@ -216,8 +224,8 @@ __device__ bool fpExecute(
     float& outR, float& outG, float& outB, float& outA,
     FPVec4* mrtOut)  // mrtOut[0..3] for MRT planes B/C/D (mrtOut may be null)
 {
-    FPVec4 temps[8] = {};  // r0..r7 (most FPs use few regs)
-    const uint32_t nTemps = 8;
+    FPVec4 temps[48] = {};  // r0..r47 (RSX has 64 FP temps; 48 covers almost all games)
+    const uint32_t nTemps = 48;
 
     for (uint32_t pc = 0; pc < insnCount; ++pc) {
         const uint32_t* iw = insns + pc * 6;
@@ -231,6 +239,7 @@ __device__ bool fpExecute(
         uint32_t inAttr   = (w0 >> 15) & 0xF;
         bool sat = (w0 >> 19) & 1;
         bool end = (w0 >> 20) & 1;
+        bool noDest = (w0 >> 21) & 1;
 
         uint32_t dst = iw[1] & 0xFF;
         uint32_t src0packed = (iw[1] >> 8);
@@ -250,47 +259,47 @@ __device__ bool fpExecute(
             break;
         case FP_OP_MOV:
             result = s0;
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_MUL:
             result = {s0.x*s1.x, s0.y*s1.y, s0.z*s1.z, s0.w*s1.w};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_ADD:
             result = {s0.x+s1.x, s0.y+s1.y, s0.z+s1.z, s0.w+s1.w};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_MAD:
             result = {s0.x*s1.x+s2.x, s0.y*s1.y+s2.y, s0.z*s1.z+s2.z, s0.w*s1.w+s2.w};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_DP3: {
             float d = s0.x*s1.x + s0.y*s1.y + s0.z*s1.z;
             result = {d, d, d, d};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_DP4: {
             float d = s0.x*s1.x + s0.y*s1.y + s0.z*s1.z + s0.w*s1.w;
             result = {d, d, d, d};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_MIN:
             result = {fminf(s0.x,s1.x), fminf(s0.y,s1.y), fminf(s0.z,s1.z), fminf(s0.w,s1.w)};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_MAX:
             result = {fmaxf(s0.x,s1.x), fmaxf(s0.y,s1.y), fmaxf(s0.z,s1.z), fmaxf(s0.w,s1.w)};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_RCP:
             result = {1.0f/s0.x, 1.0f/s0.x, 1.0f/s0.x, 1.0f/s0.x};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_RSQ:
             result = {rsqrtf(fabsf(s0.x)), rsqrtf(fabsf(s0.x)), rsqrtf(fabsf(s0.x)), rsqrtf(fabsf(s0.x))};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_TEX: {
             float tr, tg, tb, ta;
@@ -304,53 +313,53 @@ __device__ bool fpExecute(
                 tr = tg = tb = ta = 1.0f;
             }
             result = {tr, tg, tb, ta};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_LRP: // lerp: s0*(s1-s2)+s2 = mix(s2,s1,s0)
             result = {s0.x*(s1.x-s2.x)+s2.x, s0.y*(s1.y-s2.y)+s2.y,
                       s0.z*(s1.z-s2.z)+s2.z, s0.w*(s1.w-s2.w)+s2.w};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_FRC:
             result = {s0.x - floorf(s0.x), s0.y - floorf(s0.y),
                       s0.z - floorf(s0.z), s0.w - floorf(s0.w)};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_FLR:
             result = {floorf(s0.x), floorf(s0.y), floorf(s0.z), floorf(s0.w)};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_SLT:
             result = {s0.x<s1.x?1.f:0.f, s0.y<s1.y?1.f:0.f,
                       s0.z<s1.z?1.f:0.f, s0.w<s1.w?1.f:0.f};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_SGE:
             result = {s0.x>=s1.x?1.f:0.f, s0.y>=s1.y?1.f:0.f,
                       s0.z>=s1.z?1.f:0.f, s0.w>=s1.w?1.f:0.f};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_EX2:
             result = {exp2f(s0.x), exp2f(s0.x), exp2f(s0.x), exp2f(s0.x)};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_LG2:
             result = {log2f(fabsf(s0.x)), log2f(fabsf(s0.x)), log2f(fabsf(s0.x)), log2f(fabsf(s0.x))};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_COS:
             result = {cosf(s0.x), cosf(s0.x), cosf(s0.x), cosf(s0.x)};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_SIN:
             result = {sinf(s0.x), sinf(s0.x), sinf(s0.x), sinf(s0.x)};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_POW:
             result = {powf(fabsf(s0.x), s1.x), powf(fabsf(s0.x), s1.x),
                       powf(fabsf(s0.x), s1.x), powf(fabsf(s0.x), s1.x)};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_KIL:
             // Discard pixel if any component of src0 < 0
@@ -360,48 +369,48 @@ __device__ bool fpExecute(
         case FP_OP_DST: {
             // Distance: dst = (1, s0.y*s1.y, s0.z, s1.w)
             result = {1.0f, s0.y * s1.y, s0.z, s1.w};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_DP2: {
             float d = s0.x*s1.x + s0.y*s1.y;
             result = {d, d, d, d};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_DP2A: {
             float d = s0.x*s1.x + s0.y*s1.y + s2.x;
             result = {d, d, d, d};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_SEQ:
             result = {s0.x==s1.x?1.f:0.f, s0.y==s1.y?1.f:0.f,
                       s0.z==s1.z?1.f:0.f, s0.w==s1.w?1.f:0.f};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_SFL:
             result = {0.f, 0.f, 0.f, 0.f};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_SGT:
             result = {s0.x>s1.x?1.f:0.f, s0.y>s1.y?1.f:0.f,
                       s0.z>s1.z?1.f:0.f, s0.w>s1.w?1.f:0.f};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_SLE:
             result = {s0.x<=s1.x?1.f:0.f, s0.y<=s1.y?1.f:0.f,
                       s0.z<=s1.z?1.f:0.f, s0.w<=s1.w?1.f:0.f};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_SNE:
             result = {s0.x!=s1.x?1.f:0.f, s0.y!=s1.y?1.f:0.f,
                       s0.z!=s1.z?1.f:0.f, s0.w!=s1.w?1.f:0.f};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_STR:
             result = {1.f, 1.f, 1.f, 1.f};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_LIT: {
             // Lighting: dst = (1, max(s0.x,0), s0.y>0?pow(s0.y, clamp(s0.w,-128,128)):0, 1)
@@ -409,7 +418,7 @@ __device__ bool fpExecute(
             float specExp = fminf(fmaxf(s0.w, -128.f), 128.f);
             float specular = s0.y > 0.0f ? powf(fmaxf(s0.y, 0.0f), specExp) : 0.0f;
             result = {1.0f, diffuse, specular, 1.0f};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_TXP: {
@@ -427,7 +436,7 @@ __device__ bool fpExecute(
                 tr = tg = tb = ta = 1.0f;
             }
             result = {tr, tg, tb, ta};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_TXB: {
@@ -443,24 +452,24 @@ __device__ bool fpExecute(
                 tr = tg = tb = ta = 1.0f;
             }
             result = {tr, tg, tb, ta};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_DIV:
             result = {s0.x/s1.x, s0.y/s1.y, s0.z/s1.z, s0.w/s1.w};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_DDX:
         case FP_OP_DDY:
             // Screen-space derivatives: approximate as zero (no quad-level differencing)
             result = {0.f, 0.f, 0.f, 0.f};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_NRM: {
             float len = sqrtf(s0.x*s0.x + s0.y*s0.y + s0.z*s0.z);
             float inv = (len > 0.0f) ? (1.0f / len) : 0.0f;
             result = {s0.x*inv, s0.y*inv, s0.z*inv, s0.w*inv};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_DIVSQ: {
@@ -468,7 +477,7 @@ __device__ bool fpExecute(
             float sq = sqrtf(fabsf(s1.x));
             float inv = (sq > 0.0f) ? (1.0f / sq) : 0.0f;
             result = {s0.x*inv, s0.y*inv, s0.z*inv, s0.w*inv};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_LIF: {
@@ -477,7 +486,7 @@ __device__ bool fpExecute(
             float specular = (s0.y > 0.0f) ? powf(fmaxf(s0.z, 0.0f),
                 fminf(fmaxf(s0.w, -128.0f), 128.0f)) : 0.0f;
             result = {1.0f, diffuse, specular, 1.0f};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_REFL: {
@@ -485,7 +494,7 @@ __device__ bool fpExecute(
             float d = s0.x*s1.x + s0.y*s1.y + s0.z*s1.z;
             result = {2.0f*d*s0.x - s1.x, 2.0f*d*s0.y - s1.y,
                       2.0f*d*s0.z - s1.z, 2.0f*d*s0.w - s1.w};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_TXD: // Texture with derivatives — treat as TEX (no mipmap)
@@ -501,14 +510,14 @@ __device__ bool fpExecute(
                 tr = tg = tb = ta = 1.0f;
             }
             result = {tr, tg, tb, ta};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         case FP_OP_BEM: {
             // Bump-environment map: 2D coordinate perturbation
             // result.x = s0.x + s1.x, result.y = s0.y + s1.y
             result = {s0.x + s1.x, s0.y + s1.y, s0.z, s0.w};
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
         // Control flow — not yet fully implemented, treat as NOPs
@@ -531,7 +540,7 @@ __device__ bool fpExecute(
         case FP_OP_PKG:
         case FP_OP_UPG:
             result = s0;
-            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         default:
             break;
