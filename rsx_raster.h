@@ -26,8 +26,14 @@ namespace rsx {
 
 struct RasterVertex {
     float x, y, z;     // Model/clip-space depending on pipeline state.
-    float r, g, b, a;  // Linear RGBA (modulated with texture when bound).
-    float u, v;        // Texture coords, [0,1] with current wrap mode.
+    float r, g, b, a;  // COL0: Linear RGBA diffuse color.
+    float u, v;        // TEX0: Texture coords, [0,1] with current wrap mode.
+    // Extended VP outputs for per-pixel FP input
+    float col1[4];     // COL1: specular color (FP input 2)
+    float fog;         // FOGC: fog coordinate (FP input 3)
+    float tex1[2];     // TEX1 (FP input 5)
+    float tex2[2];     // TEX2 (FP input 6)
+    float tex3[2];     // TEX3 (FP input 7)
 };
 
 // Column-major 4x4 matrix, mirroring GL/RSX convention:

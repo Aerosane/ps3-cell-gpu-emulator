@@ -110,8 +110,8 @@ struct FPVec4 { float x, y, z, w; };
 __device__ __forceinline__ FPVec4 fpReadSrc(
     uint32_t packed,  // packed source word
     const FPVec4* temps, uint32_t nTemps,
-    const FPVec4& col0, const FPVec4& tex0,
-    const FPVec4& fragCoord, const float* consts, uint32_t nConsts,
+    const FPVec4* fpInputs, uint32_t nInputs,
+    const float* consts, uint32_t nConsts,
     uint32_t inputAttr)
 {
     uint32_t stype = packed & 3;
@@ -126,13 +126,7 @@ __device__ __forceinline__ FPVec4 fpReadSrc(
     if (stype == FP_SRC_TEMP) {
         if (sidx < nTemps) base = temps[sidx];
     } else if (stype == FP_SRC_INPUT) {
-        // inputAttr from instruction word selects which FP input
-        switch (inputAttr) {
-        case 0:  base = fragCoord; break;  // WPOS
-        case 1:  base = col0; break;       // COL0
-        case 4:  base = tex0; break;       // TEX0
-        default: break;
-        }
+        if (inputAttr < nInputs) base = fpInputs[inputAttr];
     } else if (stype == FP_SRC_CONST) {
         if (sidx * 4 + 3 < nConsts * 4) {
             base.x = consts[sidx*4+0]; base.y = consts[sidx*4+1];
@@ -167,9 +161,7 @@ __device__ __forceinline__ void fpWriteDst(
 __device__ void fpExecute(
     const uint32_t* __restrict__ insns, uint32_t insnCount,
     const float* __restrict__ consts, uint32_t constCount,
-    const FPVec4& col0,       // vertex color (interpolated)
-    const FPVec4& tex0Coord,  // texture coordinate (interpolated)
-    const FPVec4& fragCoord,  // pixel position
+    const FPVec4* fpInputs, uint32_t nInputs,
     const uint32_t* tex, uint32_t texW, uint32_t texH, int texBilinear,
     float& outR, float& outG, float& outB, float& outA)
 {
@@ -194,9 +186,9 @@ __device__ void fpExecute(
         uint32_t src1packed = iw[2];
         uint32_t src2packed = iw[3];
 
-        FPVec4 s0 = fpReadSrc(src0packed, temps, nTemps, col0, tex0Coord, fragCoord, consts, constCount, inAttr);
-        FPVec4 s1 = fpReadSrc(src1packed, temps, nTemps, col0, tex0Coord, fragCoord, consts, constCount, inAttr);
-        FPVec4 s2 = fpReadSrc(src2packed, temps, nTemps, col0, tex0Coord, fragCoord, consts, constCount, inAttr);
+        FPVec4 s0 = fpReadSrc(src0packed, temps, nTemps, fpInputs, nInputs, consts, constCount, inAttr);
+        FPVec4 s1 = fpReadSrc(src1packed, temps, nTemps, fpInputs, nInputs, consts, constCount, inAttr);
+        FPVec4 s2 = fpReadSrc(src2packed, temps, nTemps, fpInputs, nInputs, consts, constCount, inAttr);
 
         FPVec4 result = {0,0,0,0};
 
@@ -559,12 +551,25 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         float vv = w0 * v0.v + w1 * v1.v + w2 * v2.v;
 
         if (fpInsns && fpInsnCount > 0) {
-            // Per-pixel FP execution
-            FPVec4 col0 = {r, g, b, a};
-            FPVec4 tex0 = {u, vv, 0.0f, 1.0f};
-            FPVec4 fragC = {(float)x + 0.5f, (float)y + 0.5f, z, 1.0f};
+            // Build FP input array from interpolated vertex data
+            // 0=WPOS, 1=COL0, 2=COL1, 3=FOGC, 4=TEX0, 5=TEX1, 6=TEX2, 7=TEX3
+            FPVec4 fpIn[8];
+            fpIn[0] = {(float)x + 0.5f, (float)y + 0.5f, z, 1.0f};  // WPOS
+            fpIn[1] = {r, g, b, a};  // COL0
+            fpIn[2] = {w0*v0.col1[0]+w1*v1.col1[0]+w2*v2.col1[0],
+                       w0*v0.col1[1]+w1*v1.col1[1]+w2*v2.col1[1],
+                       w0*v0.col1[2]+w1*v1.col1[2]+w2*v2.col1[2],
+                       w0*v0.col1[3]+w1*v1.col1[3]+w2*v2.col1[3]};  // COL1
+            fpIn[3] = {w0*v0.fog+w1*v1.fog+w2*v2.fog, 0, 0, 1};  // FOGC
+            fpIn[4] = {u, vv, 0.0f, 1.0f};  // TEX0
+            fpIn[5] = {w0*v0.tex1[0]+w1*v1.tex1[0]+w2*v2.tex1[0],
+                       w0*v0.tex1[1]+w1*v1.tex1[1]+w2*v2.tex1[1], 0, 1};  // TEX1
+            fpIn[6] = {w0*v0.tex2[0]+w1*v1.tex2[0]+w2*v2.tex2[0],
+                       w0*v0.tex2[1]+w1*v1.tex2[1]+w2*v2.tex2[1], 0, 1};  // TEX2
+            fpIn[7] = {w0*v0.tex3[0]+w1*v1.tex3[0]+w2*v2.tex3[0],
+                       w0*v0.tex3[1]+w1*v1.tex3[1]+w2*v2.tex3[1], 0, 1};  // TEX3
             fpExecute(fpInsns, fpInsnCount, fpConsts, fpConstCount,
-                      col0, tex0, fragC, tex, texW, texH, texBilinear,
+                      fpIn, 8, tex, texW, texH, texBilinear,
                       r, g, b, a);
         } else if (tex) {
             float tr, tg, tb, ta;

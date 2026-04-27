@@ -102,6 +102,7 @@ static void decode_vertex_stream(const RSXState& s,
         }
 
         RasterVertex& v = out[i];
+        memset(&v, 0, sizeof(v));
         v.x = pos[0]; v.y = pos[1]; v.z = pos[2];
         v.r = color[0]; v.g = color[1]; v.b = color[2]; v.a = color[3];
         v.u = uv[0];    v.v = uv[1];
@@ -345,6 +346,7 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                        inputs, consts, outputs);
 
             RasterVertex& v = transformed[i];
+            memset(&v, 0, sizeof(v));
             // VP outputs HPOS in clip/NDC space; perform perspective
             // divide (w) and map NDC [-1,1] → pixel space using the
             // current surface dimensions. Y is flipped for screen-down.
@@ -365,6 +367,13 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
             v.r = outputs[1].v[0]; v.g = outputs[1].v[1];
             v.b = outputs[1].v[2]; v.a = outputs[1].v[3];
             v.u = outputs[7].v[0]; v.v = outputs[7].v[1];
+            // Extended VP outputs → FP inputs
+            v.col1[0] = outputs[2].v[0]; v.col1[1] = outputs[2].v[1];
+            v.col1[2] = outputs[2].v[2]; v.col1[3] = outputs[2].v[3];
+            v.fog = outputs[5].v[0];
+            v.tex1[0] = outputs[8].v[0]; v.tex1[1] = outputs[8].v[1];
+            v.tex2[0] = outputs[9].v[0]; v.tex2[1] = outputs[9].v[1];
+            v.tex3[0] = outputs[10].v[0]; v.tex3[1] = outputs[10].v[1];
         }
         base = transformed.data();
     }
