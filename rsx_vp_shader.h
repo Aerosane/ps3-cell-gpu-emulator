@@ -678,6 +678,43 @@ inline void vp_execute(const uint32_t* vpData, uint32_t vpLen, uint32_t vpStart,
             case VP_VEC_SGE:
                 for (int k = 0; k < 4; ++k) r[k] = src0[k] >= src1[k] ? 1.0f : 0.0f;
                 break;
+            case VP_VEC_DST: {
+                // DST: distance vector — r = {1, s0.y*s1.y, s0.z, s1.w}
+                r[0] = 1.0f;
+                r[1] = src0[1] * src1[1];
+                r[2] = src0[2];
+                r[3] = src1[3];
+                break;
+            }
+            case VP_VEC_SEQ:
+                for (int k = 0; k < 4; ++k) r[k] = src0[k] == src1[k] ? 1.0f : 0.0f;
+                break;
+            case VP_VEC_SGT:
+                for (int k = 0; k < 4; ++k) r[k] = src0[k] >  src1[k] ? 1.0f : 0.0f;
+                break;
+            case VP_VEC_SLE:
+                for (int k = 0; k < 4; ++k) r[k] = src0[k] <= src1[k] ? 1.0f : 0.0f;
+                break;
+            case VP_VEC_SNE:
+                for (int k = 0; k < 4; ++k) r[k] = src0[k] != src1[k] ? 1.0f : 0.0f;
+                break;
+            case VP_VEC_SFL:
+                for (int k = 0; k < 4; ++k) r[k] = 0.0f;  // always false
+                break;
+            case VP_VEC_STR:
+                for (int k = 0; k < 4; ++k) r[k] = 1.0f;  // always true
+                break;
+            case VP_VEC_SSG:
+                for (int k = 0; k < 4; ++k) {
+                    r[k] = src0[k] > 0.0f ? 1.0f : (src0[k] < 0.0f ? -1.0f : 0.0f);
+                }
+                break;
+            case VP_VEC_ARL:
+                // Address register load — used for relative addressing.
+                // Store int(floor(src0.x)) for later use. We don't yet
+                // support indexed constant access, so just pass through.
+                for (int k = 0; k < 4; ++k) r[k] = src0[k];
+                break;
             default:
                 for (int k = 0; k < 4; ++k) r[k] = src0[k];
                 break;
@@ -708,12 +745,69 @@ inline void vp_execute(const uint32_t* vpData, uint32_t vpLen, uint32_t vpStart,
             switch (insn.scaOp) {
             case VP_SCA_MOV: r[0] = r[1] = r[2] = r[3] = s; break;
             case VP_SCA_RCP: r[0] = r[1] = r[2] = r[3] = (s != 0 ? 1.0f / s : 0); break;
+            case VP_SCA_RCC: {
+                // RCP clamped: clamp result to [5.42101e-36, 1.884467e+19]
+                float v = (s != 0) ? 1.0f / s : 0.0f;
+                if (v > 0.0f) v = v < 5.42101e-36f ? 5.42101e-36f : (v > 1.884467e+19f ? 1.884467e+19f : v);
+                else v = v > -5.42101e-36f ? -5.42101e-36f : (v < -1.884467e+19f ? -1.884467e+19f : v);
+                r[0] = r[1] = r[2] = r[3] = v;
+                break;
+            }
             case VP_SCA_RSQ: {
                 float a = s < 0 ? -s : s;
                 float inv = (a != 0 ? 1.0f / __builtin_sqrtf(a) : 0);
                 r[0] = r[1] = r[2] = r[3] = inv;
                 break;
             }
+            case VP_SCA_EXP: {
+                // Partial floor-based EXP: {2^floor(s), frac(s), 2^s, 1}
+                float fl = __builtin_floorf(s);
+                float fr = s - fl;
+                float pw = __builtin_exp2f(s);
+                r[0] = __builtin_exp2f(fl); r[1] = fr; r[2] = pw; r[3] = 1.0f;
+                break;
+            }
+            case VP_SCA_LOG: {
+                // Partial floor-based LOG: {floor(log2|s|), |s|/2^floor, log2|s|, 1}
+                float a = s < 0 ? -s : s;
+                if (a == 0.0f) { r[0] = r[1] = r[2] = -__builtin_inff(); r[3] = 1.0f; }
+                else {
+                    float lg = __builtin_log2f(a);
+                    float fl = __builtin_floorf(lg);
+                    r[0] = fl; r[1] = a / __builtin_exp2f(fl); r[2] = lg; r[3] = 1.0f;
+                }
+                break;
+            }
+            case VP_SCA_LIT: {
+                // LIT: lighting helper — s = src2, but we need all 4 components
+                // LIT uses src2.xyzw: r = {1, max(s.x,0), s.x>0 ? pow(max(s.y,0), clamp(s.w,-128,128)) : 0, 1}
+                float sx = src2[0], sy = src2[1], sw = src2[3];
+                r[0] = 1.0f;
+                r[1] = sx > 0.0f ? sx : 0.0f;
+                if (sx > 0.0f) {
+                    float base = sy > 0.0f ? sy : 0.0f;
+                    float exp = sw < -128.0f ? -128.0f : (sw > 128.0f ? 128.0f : sw);
+                    r[2] = __builtin_powf(base, exp);
+                } else {
+                    r[2] = 0.0f;
+                }
+                r[3] = 1.0f;
+                break;
+            }
+            case VP_SCA_EX2:
+                r[0] = r[1] = r[2] = r[3] = __builtin_exp2f(s);
+                break;
+            case VP_SCA_LG2: {
+                float a = s < 0 ? -s : s;
+                r[0] = r[1] = r[2] = r[3] = (a != 0 ? __builtin_log2f(a) : -__builtin_inff());
+                break;
+            }
+            case VP_SCA_SIN:
+                r[0] = r[1] = r[2] = r[3] = __builtin_sinf(s);
+                break;
+            case VP_SCA_COS:
+                r[0] = r[1] = r[2] = r[3] = __builtin_cosf(s);
+                break;
             default:
                 r[0] = r[1] = r[2] = r[3] = s;
                 break;
