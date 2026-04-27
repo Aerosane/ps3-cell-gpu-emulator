@@ -130,6 +130,7 @@ struct TexBank {
     const uint32_t* tex[4];
     uint32_t w[4], h[4];
     uint8_t wrapS[4], wrapT[4];  // RSX wrap: 1=REPEAT, 2=MIRROR, 3=CLAMP_EDGE
+    uint8_t magFilter[4];        // 0=NEAREST, 1=LINEAR (per unit)
 };
 
 // Read a source operand with swizzle and negate
@@ -188,7 +189,7 @@ __device__ bool fpExecute(
     const uint32_t* __restrict__ insns, uint32_t insnCount,
     const float* __restrict__ consts, uint32_t constCount,
     const FPVec4* fpInputs, uint32_t nInputs,
-    const TexBank& texBank, int texBilinear,
+    const TexBank& texBank,
     float& outR, float& outG, float& outB, float& outA)
 {
     FPVec4 temps[8] = {};  // r0..r7 (most FPs use few regs)
@@ -272,7 +273,7 @@ __device__ bool fpExecute(
             if (texUnit < 4 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
-                          texBank.h[texUnit], s0.x, s0.y, texBilinear,
+                          texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
                           tr, tg, tb, ta,
                           texBank.wrapS[texUnit], texBank.wrapT[texUnit]);
             } else {
@@ -395,7 +396,7 @@ __device__ bool fpExecute(
             if (texUnit < 4 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
-                          texBank.h[texUnit], pu, pv, texBilinear,
+                          texBank.h[texUnit], pu, pv, (int)texBank.magFilter[texUnit],
                           tr, tg, tb, ta,
                           texBank.wrapS[texUnit], texBank.wrapT[texUnit]);
             } else {
@@ -411,7 +412,7 @@ __device__ bool fpExecute(
             if (texUnit < 4 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
-                          texBank.h[texUnit], s0.x, s0.y, texBilinear,
+                          texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
                           tr, tg, tb, ta,
                           texBank.wrapS[texUnit], texBank.wrapT[texUnit]);
             } else {
@@ -619,7 +620,6 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   int depthWrite,
                                   uint32_t depthFunc,
                                   TexBank texBank,
-                                  int texBilinear,
                                   int scX, int scY, uint32_t scW, uint32_t scH,
                                   int alphaTest, uint32_t alphaRef,
                                   int   depthClip,
@@ -737,13 +737,13 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             fpIn[7] = {w0*v0.tex3[0]+w1*v1.tex3[0]+w2*v2.tex3[0],
                        w0*v0.tex3[1]+w1*v1.tex3[1]+w2*v2.tex3[1], 0, 1};  // TEX3
             bool alive = fpExecute(fpInsns, fpInsnCount, fpConsts, fpConstCount,
-                      fpIn, 8, texBank, texBilinear,
+                      fpIn, 8, texBank,
                       r, g, b, a);
             if (!alive) continue;  // KIL'd — discard pixel
         } else if (texBank.tex[0]) {
             float tr, tg, tb, ta;
             sampleTex(texBank.tex[0], texBank.w[0], texBank.h[0],
-                      u, vv, texBilinear, tr, tg, tb, ta,
+                      u, vv, (int)texBank.magFilter[0], tr, tg, tb, ta,
                       texBank.wrapS[0], texBank.wrapT[0]);
             // Fallback: texture replaces vertex color when no FP
             r = tr; g = tg; b = tb; a = ta;
@@ -1218,6 +1218,7 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     for (int i = 0; i < 4; ++i) {
         tb.tex[i] = d_tex_[i]; tb.w[i] = texW_[i]; tb.h[i] = texH_[i];
         tb.wrapS[i] = wrapS_[i]; tb.wrapT[i] = wrapT_[i];
+        tb.magFilter[i] = magFilter_[i];
     }
     k_rasterTriangles<<<gs, bs>>>(fb_.d_color, fb_.d_depth, fb_.d_stencil,
                                   fb_.width, fb_.height,
@@ -1227,7 +1228,6 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   depthWrite_ ? 1 : 0,
                                   uint32_t(depthFunc_),
                                   tb,
-                                  texBilinear_ ? 1 : 0,
                                   scX_, scY_, scW_, scH_,
                                   alphaTestEnable_ ? 1 : 0,
                                   uint32_t(alphaRef_),

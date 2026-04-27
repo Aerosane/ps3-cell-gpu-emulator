@@ -725,6 +725,10 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         if (wS == 0) wS = 1;  // default REPEAT
         if (wT == 0) wT = 1;
         rast_->setTextureWrap(tu, wS, wT);
+        // Extract mag filter from TEXTURE_FILTER register: bits [27:24]
+        // RSX: 1=NEAREST, 2=LINEAR
+        uint8_t mag = (t.filter >> 24) & 0xF;
+        rast_->setTextureMagFilter(tu, (mag == 1) ? 0 : 1);  // 0=NEAREST, 1=LINEAR
         if (tu == 0) {
             cachedTexOff_ = t.offset;
             cachedTexW_ = W;

@@ -198,6 +198,9 @@ public:
     int  setTexture2D(const uint32_t* data, uint32_t w, uint32_t h,
                       uint32_t unit = 0);
     void setTextureFilter(bool bilinear) { texBilinear_ = bilinear; }
+    void setTextureMagFilter(uint32_t unit, uint8_t mag) {
+        if (unit < MAX_TEX_UNITS) magFilter_[unit] = mag;
+    }
     void setTextureWrap(uint32_t unit, uint8_t wrapS, uint8_t wrapT) {
         if (unit < MAX_TEX_UNITS) { wrapS_[unit] = wrapS; wrapT_[unit] = wrapT; }
     }
@@ -326,6 +329,7 @@ private:
     uint32_t  texW_[MAX_TEX_UNITS]{}, texH_[MAX_TEX_UNITS]{};
     uint8_t   wrapS_[MAX_TEX_UNITS]{1,1,1,1};  // default REPEAT
     uint8_t   wrapT_[MAX_TEX_UNITS]{1,1,1,1};
+    uint8_t   magFilter_[MAX_TEX_UNITS]{1,1,1,1};  // default LINEAR (bilinear)
     bool      texBilinear_{true};
     CullMode  cullMode_{CullMode::None};
     FrontFace frontFace_{FrontFace::CCW};
