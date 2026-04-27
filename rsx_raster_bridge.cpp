@@ -841,7 +841,8 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                               ((insn.inputAttr & 0xF) << 15) |
                               ((insn.saturate ? 1u : 0u) << 19) |
                               ((insn.endFlag ? 1u : 0u) << 20) |
-                              ((insn.noDest ? 1u : 0u) << 21);
+                              ((insn.noDest ? 1u : 0u) << 21) |
+                              ((insn.setCond ? 1u : 0u) << 22);
 
                 auto packSrc = [](const FPDecodedSrc& s) -> uint32_t {
                     return (s.regType & 3) |
@@ -858,11 +859,22 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                 uint32_t w2 = packSrc(insn.src[1]);
                 uint32_t w3 = packSrc(insn.src[2]);
 
+                // w4: condition code fields
+                uint32_t w4 = (insn.execLT ? 1u : 0u) |
+                              ((insn.execEQ ? 1u : 0u) << 1) |
+                              ((insn.execGR ? 1u : 0u) << 2) |
+                              ((insn.condSwzX & 3) << 3) |
+                              ((insn.condSwzY & 3) << 5) |
+                              ((insn.condSwzZ & 3) << 7) |
+                              ((insn.condSwzW & 3) << 9) |
+                              ((insn.condModRegIdx & 1) << 11) |
+                              ((insn.condRegIdx & 1) << 12);
+
                 packed.push_back(w0);
                 packed.push_back(w1);
                 packed.push_back(w2);
                 packed.push_back(w3);
-                packed.push_back(0); // reserved
+                packed.push_back(w4);
                 packed.push_back(0); // reserved
 
                 if (insn.endFlag) break;

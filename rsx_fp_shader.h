@@ -123,6 +123,12 @@ struct FPDecodedInsn {
     uint32_t precision;    // precision mode
     uint32_t inputAttr;    // src_attr_reg_num
 
+    // Condition code fields (from SRC0 word)
+    bool execLT, execEQ, execGR;      // conditional execution mask
+    uint32_t condSwzX, condSwzY, condSwzZ, condSwzW;  // CC swizzle
+    uint32_t condModRegIdx;  // which CC reg to update on setCond (0 or 1)
+    uint32_t condRegIdx;     // which CC reg to test for conditional exec
+
     FPDecodedSrc src[3];
 
     // Flow control
@@ -172,6 +178,18 @@ inline FPDecodedInsn fp_decode(const uint32_t raw[4]) {
     insn.src[0].swzW    = (w1 >> 15) & 0x3;
     insn.src[0].neg     = (w1 >> 17) & 1;
     insn.src[0].abs     = (w1 >> 29) & 1;
+
+    // Condition code fields from SRC0 word
+    insn.execLT       = (w1 >> 18) & 1;
+    insn.execEQ       = (w1 >> 19) & 1;
+    insn.execGR       = (w1 >> 20) & 1;
+    insn.condSwzX     = (w1 >> 21) & 3;
+    insn.condSwzY     = (w1 >> 23) & 3;
+    insn.condSwzZ     = (w1 >> 25) & 3;
+    insn.condSwzW     = (w1 >> 27) & 3;
+    // bit 29 = abs (already decoded above)
+    insn.condModRegIdx = (w1 >> 30) & 1;
+    insn.condRegIdx    = (w1 >> 31) & 1;
 
     // Decode SRC1
     insn.src[1].regType = w2 & 0x3;

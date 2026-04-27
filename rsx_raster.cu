@@ -227,6 +227,10 @@ __device__ bool fpExecute(
     FPVec4 temps[48] = {};  // r0..r47 (RSX has 64 FP temps; 48 covers almost all games)
     const uint32_t nTemps = 48;
 
+    // Condition code registers: CC0 and CC1, each 4 components.
+    // Values: 0=GT, 1=EQ, 2=LT, 3=UN (unordered/NaN)
+    uint8_t cc[2][4] = {{1,1,1,1}, {1,1,1,1}};  // initialized to EQ (all zeros)
+
     for (uint32_t pc = 0; pc < insnCount; ++pc) {
         const uint32_t* iw = insns + pc * 6;
         uint32_t w0 = iw[0];
@@ -240,6 +244,42 @@ __device__ bool fpExecute(
         bool sat = (w0 >> 19) & 1;
         bool end = (w0 >> 20) & 1;
         bool noDest = (w0 >> 21) & 1;
+        bool setCond = (w0 >> 22) & 1;
+
+        // Condition code fields from w4
+        uint32_t w4 = iw[4];
+        bool execLT = w4 & 1;
+        bool execEQ = (w4 >> 1) & 1;
+        bool execGR = (w4 >> 2) & 1;
+        uint32_t cSwzX = (w4 >> 3) & 3;
+        uint32_t cSwzY = (w4 >> 5) & 3;
+        uint32_t cSwzZ = (w4 >> 7) & 3;
+        uint32_t cSwzW = (w4 >> 9) & 3;
+        uint32_t condModReg = (w4 >> 11) & 1;
+        uint32_t condReg    = (w4 >> 12) & 1;
+
+        // Conditional execution: if exec mask is not "always" (LT|EQ|GR all set),
+        // check CC register and mask out components that don't pass.
+        bool condActive = !(execLT && execEQ && execGR);
+        bool condMask[4] = {true, true, true, true};
+        if (condActive) {
+            uint32_t cSwz[4] = {cSwzX, cSwzY, cSwzZ, cSwzW};
+            for (int k = 0; k < 4; ++k) {
+                uint8_t cv = cc[condReg][cSwz[k]];
+                condMask[k] = (cv == 2 && execLT) ||
+                              (cv == 1 && execEQ) ||
+                              (cv == 0 && execGR) ||
+                              (cv == 3 && false);  // UN never passes normal conditions
+            }
+        }
+
+        // Merge condition mask with write mask
+        if (condActive) {
+            mx = mx && condMask[0];
+            my = my && condMask[1];
+            mz = mz && condMask[2];
+            mw = mw && condMask[3];
+        }
 
         uint32_t dst = iw[1] & 0xFF;
         uint32_t src0packed = (iw[1] >> 8);
@@ -544,6 +584,18 @@ __device__ bool fpExecute(
             break;
         default:
             break;
+        }
+
+        // Update condition code register if setCond is set.
+        // CC values: 0=GT (>0), 1=EQ (==0), 2=LT (<0), 3=UN (NaN)
+        if (setCond) {
+            float rv[4] = {result.x, result.y, result.z, result.w};
+            for (int k = 0; k < 4; ++k) {
+                if (isnan(rv[k]))    cc[condModReg][k] = 3;  // UN
+                else if (rv[k] > 0)  cc[condModReg][k] = 0;  // GT
+                else if (rv[k] == 0) cc[condModReg][k] = 1;  // EQ
+                else                 cc[condModReg][k] = 2;  // LT
+            }
         }
 
         if (end) break;
