@@ -106,6 +106,12 @@ __device__ void sampleTex(const uint32_t* tex,
 
 struct FPVec4 { float x, y, z, w; };
 
+// Texture bank passed to kernel — 4 units
+struct TexBank {
+    const uint32_t* tex[4];
+    uint32_t w[4], h[4];
+};
+
 // Read a source operand with swizzle and negate
 __device__ __forceinline__ FPVec4 fpReadSrc(
     uint32_t packed,  // packed source word
@@ -162,7 +168,7 @@ __device__ void fpExecute(
     const uint32_t* __restrict__ insns, uint32_t insnCount,
     const float* __restrict__ consts, uint32_t constCount,
     const FPVec4* fpInputs, uint32_t nInputs,
-    const uint32_t* tex, uint32_t texW, uint32_t texH, int texBilinear,
+    const TexBank& texBank, int texBilinear,
     float& outR, float& outG, float& outB, float& outA)
 {
     FPVec4 temps[8] = {};  // r0..r7 (most FPs use few regs)
@@ -242,10 +248,12 @@ __device__ void fpExecute(
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
             break;
         case FP_OP_TEX: {
-            // Sample texture unit using src0 as UV
             float tr, tg, tb, ta;
-            if (tex && texW > 0 && texH > 0 && texUnit == 0) {
-                sampleTex(tex, texW, texH, s0.x, s0.y, texBilinear, tr, tg, tb, ta);
+            if (texUnit < 4 && texBank.tex[texUnit] &&
+                texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
+                sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
+                          texBank.h[texUnit], s0.x, s0.y, texBilinear,
+                          tr, tg, tb, ta);
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
@@ -439,6 +447,7 @@ __device__ __forceinline__ void sampleTex(const uint32_t* tex,
 // Top-left fill rule handled via half-open interval (>= 0 for top/left
 // edges, > 0 for others) — we approximate with >= 0 which is acceptable
 // for colored triangles; textured paths will tighten this.
+
 __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   float*    __restrict__ depth,
                                   uint8_t*  __restrict__ stencil,
@@ -449,8 +458,7 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   int depthTest,
                                   int depthWrite,
                                   uint32_t depthFunc,
-                                  const uint32_t* __restrict__ tex,
-                                  uint32_t texW, uint32_t texH,
+                                  TexBank texBank,
                                   int texBilinear,
                                   int scX, int scY, uint32_t scW, uint32_t scH,
                                   int alphaTest, uint32_t alphaRef,
@@ -569,11 +577,12 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             fpIn[7] = {w0*v0.tex3[0]+w1*v1.tex3[0]+w2*v2.tex3[0],
                        w0*v0.tex3[1]+w1*v1.tex3[1]+w2*v2.tex3[1], 0, 1};  // TEX3
             fpExecute(fpInsns, fpInsnCount, fpConsts, fpConstCount,
-                      fpIn, 8, tex, texW, texH, texBilinear,
+                      fpIn, 8, texBank, texBilinear,
                       r, g, b, a);
-        } else if (tex) {
+        } else if (texBank.tex[0]) {
             float tr, tg, tb, ta;
-            sampleTex(tex, texW, texH, u, vv, texBilinear, tr, tg, tb, ta);
+            sampleTex(texBank.tex[0], texBank.w[0], texBank.h[0],
+                      u, vv, texBilinear, tr, tg, tb, ta);
             // Fallback: texture replaces vertex color when no FP
             r = tr; g = tg; b = tb; a = ta;
         }
@@ -826,8 +835,12 @@ void CudaRasterizer::shutdown() {
     if (d_colorC_) { cudaFree(d_colorC_); d_colorC_ = nullptr; }
     if (d_colorD_) { cudaFree(d_colorD_); d_colorD_ = nullptr; }
     mrtCount_ = 1;
-    if (d_tex_) { cudaFree(d_tex_); d_tex_ = nullptr; }
-    texW_ = texH_ = 0;
+    if (d_tex_[0]) { cudaFree(d_tex_[0]); d_tex_[0] = nullptr; }
+    if (d_tex_[1]) { cudaFree(d_tex_[1]); d_tex_[1] = nullptr; }
+    if (d_tex_[2]) { cudaFree(d_tex_[2]); d_tex_[2] = nullptr; }
+    if (d_tex_[3]) { cudaFree(d_tex_[3]); d_tex_[3] = nullptr; }
+    texW_[0] = texH_[0] = texW_[1] = texH_[1] = 0;
+    texW_[2] = texH_[2] = texW_[3] = texH_[3] = 0;
     if (d_fpInsns_) { cudaFree(d_fpInsns_); d_fpInsns_ = nullptr; }
     if (d_fpConsts_) { cudaFree(d_fpConsts_); d_fpConsts_ = nullptr; }
     fpInsnCount_ = 0; fpConstCount_ = 0;
@@ -887,14 +900,16 @@ void CudaRasterizer::readbackPlane(uint32_t n, uint32_t* out) const {
     cudaMemcpy(out, buf, bytes, cudaMemcpyDeviceToHost);
 }
 
-int CudaRasterizer::setTexture2D(const uint32_t* data, uint32_t w, uint32_t h) {
-    if (d_tex_) { cudaFree(d_tex_); d_tex_ = nullptr; texW_ = texH_ = 0; }
+int CudaRasterizer::setTexture2D(const uint32_t* data, uint32_t w, uint32_t h,
+                                 uint32_t unit) {
+    if (unit >= MAX_TEX_UNITS) return -1;
+    if (d_tex_[unit]) { cudaFree(d_tex_[unit]); d_tex_[unit] = nullptr; texW_[unit] = texH_[unit] = 0; }
     if (!data || w == 0 || h == 0) return 0;
     size_t bytes = size_t(w) * size_t(h) * sizeof(uint32_t);
-    CU_CHECK(cudaMalloc(&d_tex_, bytes));
-    cudaMemcpy(d_tex_, data, bytes, cudaMemcpyHostToDevice);
-    texW_ = w;
-    texH_ = h;
+    CU_CHECK(cudaMalloc(&d_tex_[unit], bytes));
+    cudaMemcpy(d_tex_[unit], data, bytes, cudaMemcpyHostToDevice);
+    texW_[unit] = w;
+    texH_[unit] = h;
     return 0;
 }
 
@@ -1037,6 +1052,10 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     dim3 bs(16, 16);
     dim3 gs((fb_.width + bs.x - 1) / bs.x,
             (fb_.height + bs.y - 1) / bs.y);
+    TexBank tb;
+    for (int i = 0; i < 4; ++i) {
+        tb.tex[i] = d_tex_[i]; tb.w[i] = texW_[i]; tb.h[i] = texH_[i];
+    }
     k_rasterTriangles<<<gs, bs>>>(fb_.d_color, fb_.d_depth, fb_.d_stencil,
                                   fb_.width, fb_.height,
                                   d_v, tris,
@@ -1044,7 +1063,7 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   depthTest_ ? 1 : 0,
                                   depthWrite_ ? 1 : 0,
                                   uint32_t(depthFunc_),
-                                  d_tex_, texW_, texH_,
+                                  tb,
                                   texBilinear_ ? 1 : 0,
                                   scX_, scY_, scW_, scH_,
                                   alphaTestEnable_ ? 1 : 0,

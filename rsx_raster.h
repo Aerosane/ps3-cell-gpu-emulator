@@ -195,7 +195,8 @@ public:
     // Texture binding. Data is RGBA8 (0xAARRGGBB little-endian),
     // row-major, no swizzle. Bilinear sampled; UVs wrap with mod 1.
     // Call with data=nullptr to unbind.
-    int  setTexture2D(const uint32_t* data, uint32_t w, uint32_t h);
+    int  setTexture2D(const uint32_t* data, uint32_t w, uint32_t h,
+                      uint32_t unit = 0);
     void setTextureFilter(bool bilinear) { texBilinear_ = bilinear; }
 
     // Culling: matches RSX NV4097_SET_CULL_FACE_ENABLE + SET_CULL_FACE +
@@ -316,9 +317,10 @@ private:
     RasterMat4 mvp_{RasterMat4::identity()};
     float vpX_{0}, vpY_{0}, vpW_{0}, vpH_{0};
 
-    // Texture state
-    uint32_t* d_tex_{nullptr};
-    uint32_t  texW_{0}, texH_{0};
+    // Texture state — up to 4 units (RSX supports 16, we handle the common 4)
+    static constexpr uint32_t MAX_TEX_UNITS = 4;
+    uint32_t* d_tex_[MAX_TEX_UNITS]{};
+    uint32_t  texW_[MAX_TEX_UNITS]{}, texH_[MAX_TEX_UNITS]{};
     bool      texBilinear_{true};
     CullMode  cullMode_{CullMode::None};
     FrontFace frontFace_{FrontFace::CCW};

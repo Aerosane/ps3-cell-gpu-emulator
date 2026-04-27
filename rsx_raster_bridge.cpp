@@ -378,55 +378,53 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         base = transformed.data();
     }
 
-    // ── Per-pixel texture binding ───────────────────────────────
-    // Upload texture unit 0 to the GPU rasterizer at draw time so we
-    // use the RSXState that's actually current. The rasterizer kernel
-    // does per-pixel UV interpolation + texture modulation, which is
-    // far superior to per-vertex FP sampling.
+    // ── Per-pixel texture binding (units 0-3) ─────────────────
+    // Upload enabled texture units to the GPU rasterizer at draw time.
     bool texBoundForDraw = false;
-    if (vram_ && s.textures[0].enabled &&
-        s.textures[0].width > 0 && s.textures[0].height > 0) {
-        const auto& t = s.textures[0];
-        bool stale =
-            !cachedTexValid_ ||
-            t.offset != cachedTexOff_ || t.width != cachedTexW_ ||
-            t.height != cachedTexH_   || t.format != cachedTexFmt_;
-        if (stale) {
-            uint8_t fmt = ((t.format >> 8) & 0xFF) & 0x9F;
-            uint32_t W = t.width, H = t.height;
-            uint64_t need = (uint64_t)W * H * (fmt == 0x81 ? 1u : 4u);
-            if ((uint64_t)t.offset + need <= vramSize_) {
-                const uint8_t* src = vram_ + t.offset;
-                std::vector<uint32_t> rgba8(W * H);
-                if (fmt == 0x85) {
-                    // A8R8G8B8 — guest stores as big-endian A8R8G8B8;
-                    // our rasterizer expects 0xAARRGGBB host-endian.
-                    const uint32_t* s32 = reinterpret_cast<const uint32_t*>(src);
-                    for (uint32_t i = 0; i < W * H; ++i) {
-                        uint32_t px = __builtin_bswap32(s32[i]);
-                        // Ensure alpha is opaque if guest left it 0
-                        if ((px >> 24) == 0) px |= 0xFF000000u;
-                        rgba8[i] = px;
-                    }
-                } else if (fmt == 0x81) {
-                    for (uint32_t i = 0; i < W * H; ++i) {
-                        uint8_t v = src[i];
-                        rgba8[i] = 0xFF000000u |
-                                   ((uint32_t)v << 16) |
-                                   ((uint32_t)v <<  8) | (uint32_t)v;
-                    }
-                } else {
-                    for (uint32_t i = 0; i < W * H; ++i) rgba8[i] = 0xFFFF00FFu;
-                }
-                rast_->setTexture2D(rgba8.data(), W, H);
-                cachedTexOff_ = t.offset;
-                cachedTexW_ = W;
-                cachedTexH_ = H;
-                cachedTexFmt_ = t.format;
-                cachedTexValid_ = true;
-            }
+    for (int tu = 0; tu < 4; ++tu) {
+        if (!vram_ || !s.textures[tu].enabled ||
+            s.textures[tu].width == 0 || s.textures[tu].height == 0) continue;
+        const auto& t = s.textures[tu];
+        // For unit 0, use cache; units 1-3 always upload (simple for now)
+        if (tu == 0) {
+            bool stale =
+                !cachedTexValid_ ||
+                t.offset != cachedTexOff_ || t.width != cachedTexW_ ||
+                t.height != cachedTexH_   || t.format != cachedTexFmt_;
+            if (!stale) { texBoundForDraw = true; continue; }
         }
-        texBoundForDraw = cachedTexValid_;
+        uint8_t fmt = ((t.format >> 8) & 0xFF) & 0x9F;
+        uint32_t W = t.width, H = t.height;
+        uint64_t need = (uint64_t)W * H * (fmt == 0x81 ? 1u : 4u);
+        if ((uint64_t)t.offset + need > vramSize_) continue;
+        const uint8_t* src = vram_ + t.offset;
+        std::vector<uint32_t> rgba8(W * H);
+        if (fmt == 0x85) {
+            const uint32_t* s32 = reinterpret_cast<const uint32_t*>(src);
+            for (uint32_t i = 0; i < W * H; ++i) {
+                uint32_t px = __builtin_bswap32(s32[i]);
+                if ((px >> 24) == 0) px |= 0xFF000000u;
+                rgba8[i] = px;
+            }
+        } else if (fmt == 0x81) {
+            for (uint32_t i = 0; i < W * H; ++i) {
+                uint8_t v = src[i];
+                rgba8[i] = 0xFF000000u |
+                           ((uint32_t)v << 16) |
+                           ((uint32_t)v <<  8) | (uint32_t)v;
+            }
+        } else {
+            for (uint32_t i = 0; i < W * H; ++i) rgba8[i] = 0xFFFF00FFu;
+        }
+        rast_->setTexture2D(rgba8.data(), W, H, tu);
+        if (tu == 0) {
+            cachedTexOff_ = t.offset;
+            cachedTexW_ = W;
+            cachedTexH_ = H;
+            cachedTexFmt_ = t.format;
+            cachedTexValid_ = true;
+        }
+        texBoundForDraw = true;
     }
 
     // ── Per-pixel FP decode + upload ─────────────────────────────
