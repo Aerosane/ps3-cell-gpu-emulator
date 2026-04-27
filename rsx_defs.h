@@ -145,6 +145,8 @@ static constexpr uint32_t NV4097_SET_CULL_FACE_ENABLE        = 0x0000183C;
 static constexpr uint32_t NV4097_SET_TEXTURE_OFFSET          = 0x00001A00;
 static constexpr uint32_t NV4097_SET_TEXTURE_FORMAT           = 0x00001A04;
 static constexpr uint32_t NV4097_SET_TEXTURE_CONTROL0         = 0x00001A0C;
+static constexpr uint32_t NV4097_SET_TEXTURE_ADDRESS          = 0x00001A08;
+static constexpr uint32_t NV4097_SET_TEXTURE_FILTER           = 0x00001A14;
 static constexpr uint32_t NV4097_SET_TEXTURE_IMAGE_RECT       = 0x00001A18;
 
 // Clear / present
@@ -344,6 +346,8 @@ struct RSXState {
         uint32_t format;
         uint32_t width, height;
         uint32_t control0;
+        uint32_t address;   // wrap modes: wrapS(4)@0 | wrapT(4)@8 | wrapR(4)@16
+        uint32_t filter;    // min/mag filter: min(16)@0 | mag(16)@16
         bool     enabled;
     } textures[16];
 

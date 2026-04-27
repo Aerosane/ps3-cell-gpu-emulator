@@ -9,6 +9,128 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <algorithm>
+
+// ─────────────────────────────────────────────────────────────────
+// DXT (S3TC) block-compression helpers — decode 4×4 blocks to RGBA8
+// ─────────────────────────────────────────────────────────────────
+namespace {
+
+// Decode a 565 color to 8-bit RGB
+inline void decode565(uint16_t c, uint8_t& r, uint8_t& g, uint8_t& b) {
+    r = ((c >> 11) & 0x1F) * 255 / 31;
+    g = ((c >>  5) & 0x3F) * 255 / 63;
+    b = ((c)       & 0x1F) * 255 / 31;
+}
+
+void decodeDXT1Block(const uint8_t* block, uint32_t out[16]) {
+    uint16_t c0 = block[0] | (block[1] << 8);
+    uint16_t c1 = block[2] | (block[3] << 8);
+    uint8_t r0, g0, b0, r1, g1, b1;
+    decode565(c0, r0, g0, b0);
+    decode565(c1, r1, g1, b1);
+
+    uint8_t palette[4][4];
+    palette[0][0] = r0; palette[0][1] = g0; palette[0][2] = b0; palette[0][3] = 255;
+    palette[1][0] = r1; palette[1][1] = g1; palette[1][2] = b1; palette[1][3] = 255;
+    if (c0 > c1) {
+        palette[2][0] = (2*r0+r1)/3; palette[2][1] = (2*g0+g1)/3;
+        palette[2][2] = (2*b0+b1)/3; palette[2][3] = 255;
+        palette[3][0] = (r0+2*r1)/3; palette[3][1] = (g0+2*g1)/3;
+        palette[3][2] = (b0+2*b1)/3; palette[3][3] = 255;
+    } else {
+        palette[2][0] = (r0+r1)/2; palette[2][1] = (g0+g1)/2;
+        palette[2][2] = (b0+b1)/2; palette[2][3] = 255;
+        palette[3][0] = 0; palette[3][1] = 0;
+        palette[3][2] = 0; palette[3][3] = 0;  // transparent black
+    }
+
+    uint32_t indices = block[4] | (block[5]<<8) | (block[6]<<16) | (block[7]<<24);
+    for (int i = 0; i < 16; ++i) {
+        int idx = (indices >> (i * 2)) & 3;
+        out[i] = ((uint32_t)palette[idx][3] << 24) |
+                 ((uint32_t)palette[idx][0] << 16) |
+                 ((uint32_t)palette[idx][1] <<  8) |
+                  (uint32_t)palette[idx][2];
+    }
+}
+
+void decodeDXT3Block(const uint8_t* block, uint32_t out[16]) {
+    // First 8 bytes: explicit alpha (4 bits per texel)
+    uint64_t alphaData = 0;
+    for (int i = 0; i < 8; ++i) alphaData |= (uint64_t)block[i] << (i * 8);
+
+    // Last 8 bytes: DXT1 color block (ignoring DXT1 alpha)
+    decodeDXT1Block(block + 8, out);
+
+    // Override alpha with explicit values
+    for (int i = 0; i < 16; ++i) {
+        uint8_t a4 = (alphaData >> (i * 4)) & 0xF;
+        uint8_t a8 = a4 * 17;  // expand 4-bit to 8-bit
+        out[i] = (out[i] & 0x00FFFFFF) | ((uint32_t)a8 << 24);
+    }
+}
+
+void decodeDXT5Block(const uint8_t* block, uint32_t out[16]) {
+    // First 8 bytes: interpolated alpha
+    uint8_t a0 = block[0], a1 = block[1];
+    uint8_t alphaPalette[8];
+    alphaPalette[0] = a0;
+    alphaPalette[1] = a1;
+    if (a0 > a1) {
+        for (int i = 2; i < 8; ++i)
+            alphaPalette[i] = ((8-i)*a0 + (i-1)*a1) / 7;
+    } else {
+        for (int i = 2; i < 6; ++i)
+            alphaPalette[i] = ((6-i)*a0 + (i-1)*a1) / 5;
+        alphaPalette[6] = 0;
+        alphaPalette[7] = 255;
+    }
+
+    // 6 bytes of 3-bit alpha indices (48 bits for 16 texels)
+    uint64_t aBits = 0;
+    for (int i = 0; i < 6; ++i) aBits |= (uint64_t)block[2+i] << (i * 8);
+
+    // Last 8 bytes: DXT1 color block
+    decodeDXT1Block(block + 8, out);
+
+    for (int i = 0; i < 16; ++i) {
+        int aIdx = (aBits >> (i * 3)) & 7;
+        out[i] = (out[i] & 0x00FFFFFF) | ((uint32_t)alphaPalette[aIdx] << 24);
+    }
+}
+
+// Decode full DXT texture to RGBA8 buffer
+void decodeDXTTexture(const uint8_t* src, uint32_t W, uint32_t H,
+                      int dxtType, std::vector<uint32_t>& rgba8) {
+    rgba8.resize(W * H);
+    uint32_t bw = (W + 3) / 4;  // blocks wide
+    uint32_t bh = (H + 3) / 4;  // blocks high
+    uint32_t blockSize = (dxtType == 1) ? 8 : 16;
+
+    for (uint32_t by = 0; by < bh; ++by) {
+        for (uint32_t bx = 0; bx < bw; ++bx) {
+            uint32_t blockIdx = by * bw + bx;
+            const uint8_t* block = src + blockIdx * blockSize;
+            uint32_t pixels[16];
+            switch (dxtType) {
+            case 1: decodeDXT1Block(block, pixels); break;
+            case 3: decodeDXT3Block(block, pixels); break;
+            case 5: decodeDXT5Block(block, pixels); break;
+            }
+            for (int py = 0; py < 4; ++py) {
+                for (int px = 0; px < 4; ++px) {
+                    uint32_t x = bx * 4 + px;
+                    uint32_t y = by * 4 + py;
+                    if (x < W && y < H)
+                        rgba8[y * W + x] = pixels[py * 4 + px];
+                }
+            }
+        }
+    }
+}
+
+} // anonymous namespace
 
 namespace rsx {
 
@@ -471,17 +593,28 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         uint32_t bpp;
         switch (fmt) {
         case 0x81: bpp = 1; break;  // B8
-        case 0x82: bpp = 2; break;  // G8B8
-        case 0x83: bpp = 2; break;  // RGB5A1
-        case 0x84: bpp = 2; break;  // RGBA4
+        case 0x82: bpp = 2; break;  // A1R5G5B5
+        case 0x83: bpp = 2; break;  // A4R4G4B4
+        case 0x84: bpp = 2; break;  // R5G6B5
         case 0x85: bpp = 4; break;  // A8R8G8B8
-        case 0x86: bpp = 4; break;  // X8R8G8B8 (no alpha)
-        case 0x87: bpp = 2; break;  // R5G6B5
-        case 0x94: bpp = 4; break;  // R8G8B8A8
-        case 0x93: bpp = 4; break;  // D24S8 depth
+        case 0x86: bpp = 0; break;  // DXT1 (block compressed)
+        case 0x87: bpp = 0; break;  // DXT23 (block compressed)
+        case 0x88: bpp = 0; break;  // DXT45 (block compressed)
+        case 0x8B: bpp = 2; break;  // G8B8
+        case 0x94: bpp = 2; break;  // X16 (single 16-bit channel)
+        case 0x97: bpp = 2; break;  // R5G5B5A1
+        case 0x9E: bpp = 4; break;  // D8R8G8B8
         default:   bpp = 4; break;
         }
-        uint64_t need = (uint64_t)W * H * bpp;
+        uint64_t need;
+        if (bpp == 0) {
+            // DXT block compressed: 4×4 blocks
+            uint32_t bw = (W + 3) / 4, bh = (H + 3) / 4;
+            uint32_t blockSize = (fmt == 0x86) ? 8 : 16;
+            need = (uint64_t)bw * bh * blockSize;
+        } else {
+            need = (uint64_t)W * H * bpp;
+        }
         if ((uint64_t)t.offset + need > vramSize_) continue;
         const uint8_t* src = vram_ + t.offset;
         std::vector<uint32_t> rgba8(W * H);
@@ -493,25 +626,12 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                 if ((px >> 24) == 0) px |= 0xFF000000u;
                 rgba8[i] = px;
             }
-        } else if (fmt == 0x86) {
-            // X8R8G8B8 — like A8R8G8B8 but alpha forced to 0xFF
+        } else if (fmt == 0x9E) {
+            // D8R8G8B8 — like A8R8G8B8 but alpha byte is "don't care"
             const uint32_t* s32 = reinterpret_cast<const uint32_t*>(src);
             for (uint32_t i = 0; i < W * H; ++i) {
                 uint32_t px = __builtin_bswap32(s32[i]);
                 rgba8[i] = px | 0xFF000000u;
-            }
-        } else if (fmt == 0x94) {
-            // R8G8B8A8 — big-endian, swizzle to ARGB
-            const uint32_t* s32 = reinterpret_cast<const uint32_t*>(src);
-            for (uint32_t i = 0; i < W * H; ++i) {
-                uint32_t px = __builtin_bswap32(s32[i]);
-                uint8_t rr = (px >> 24) & 0xFF;
-                uint8_t gg = (px >> 16) & 0xFF;
-                uint8_t bb = (px >>  8) & 0xFF;
-                uint8_t aa = (px)       & 0xFF;
-                if (aa == 0) aa = 0xFF;
-                rgba8[i] = ((uint32_t)aa << 24) | ((uint32_t)rr << 16) |
-                            ((uint32_t)gg << 8) | (uint32_t)bb;
             }
         } else if (fmt == 0x81) {
             // B8 — luminance
@@ -521,14 +641,14 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                            ((uint32_t)v << 16) |
                            ((uint32_t)v <<  8) | (uint32_t)v;
             }
-        } else if (fmt == 0x82) {
+        } else if (fmt == 0x8B) {
             // G8B8 — two-channel, big-endian
             for (uint32_t i = 0; i < W * H; ++i) {
                 uint8_t g = src[i * 2];
                 uint8_t b = src[i * 2 + 1];
                 rgba8[i] = 0xFF000000u | ((uint32_t)g << 8) | (uint32_t)b;
             }
-        } else if (fmt == 0x87) {
+        } else if (fmt == 0x84) {
             // R5G6B5 — 16-bit color, big-endian
             const uint16_t* s16 = reinterpret_cast<const uint16_t*>(src);
             for (uint32_t i = 0; i < W * H; ++i) {
@@ -539,8 +659,41 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                 rgba8[i] = 0xFF000000u | ((uint32_t)rr << 16) |
                             ((uint32_t)gg << 8) | (uint32_t)bb;
             }
+        } else if (fmt == 0x82) {
+            // A1R5G5B5 — 16-bit, big-endian
+            const uint16_t* s16 = reinterpret_cast<const uint16_t*>(src);
+            for (uint32_t i = 0; i < W * H; ++i) {
+                uint16_t px = __builtin_bswap16(s16[i]);
+                uint8_t aa = (px >> 15) ? 0xFF : 0x00;
+                uint8_t rr = ((px >> 10) & 0x1F) * 255 / 31;
+                uint8_t gg = ((px >>  5) & 0x1F) * 255 / 31;
+                uint8_t bb = ((px)       & 0x1F) * 255 / 31;
+                rgba8[i] = ((uint32_t)aa << 24) | ((uint32_t)rr << 16) |
+                            ((uint32_t)gg << 8) | (uint32_t)bb;
+            }
         } else if (fmt == 0x83) {
-            // RGB5A1 — 16-bit, big-endian
+            // A4R4G4B4 — 16-bit, big-endian
+            const uint16_t* s16 = reinterpret_cast<const uint16_t*>(src);
+            for (uint32_t i = 0; i < W * H; ++i) {
+                uint16_t px = __builtin_bswap16(s16[i]);
+                uint8_t aa = ((px >> 12) & 0xF) * 17;
+                uint8_t rr = ((px >>  8) & 0xF) * 17;
+                uint8_t gg = ((px >>  4) & 0xF) * 17;
+                uint8_t bb = ((px)       & 0xF) * 17;
+                rgba8[i] = ((uint32_t)aa << 24) | ((uint32_t)rr << 16) |
+                            ((uint32_t)gg << 8) | (uint32_t)bb;
+            }
+        } else if (fmt == 0x94) {
+            // X16 — 16-bit single channel, big-endian
+            const uint16_t* s16 = reinterpret_cast<const uint16_t*>(src);
+            for (uint32_t i = 0; i < W * H; ++i) {
+                uint16_t px = __builtin_bswap16(s16[i]);
+                uint8_t v = px >> 8;  // top 8 bits
+                rgba8[i] = 0xFF000000u | ((uint32_t)v << 16) |
+                            ((uint32_t)v << 8) | (uint32_t)v;
+            }
+        } else if (fmt == 0x97) {
+            // R5G5B5A1 — 16-bit, big-endian (alpha in LSB)
             const uint16_t* s16 = reinterpret_cast<const uint16_t*>(src);
             for (uint32_t i = 0; i < W * H; ++i) {
                 uint16_t px = __builtin_bswap16(s16[i]);
@@ -551,18 +704,15 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                 rgba8[i] = ((uint32_t)aa << 24) | ((uint32_t)rr << 16) |
                             ((uint32_t)gg << 8) | (uint32_t)bb;
             }
-        } else if (fmt == 0x84) {
-            // RGBA4 — 16-bit, big-endian
-            const uint16_t* s16 = reinterpret_cast<const uint16_t*>(src);
-            for (uint32_t i = 0; i < W * H; ++i) {
-                uint16_t px = __builtin_bswap16(s16[i]);
-                uint8_t rr = ((px >> 12) & 0xF) * 17;
-                uint8_t gg = ((px >>  8) & 0xF) * 17;
-                uint8_t bb = ((px >>  4) & 0xF) * 17;
-                uint8_t aa = ((px)       & 0xF) * 17;
-                rgba8[i] = ((uint32_t)aa << 24) | ((uint32_t)rr << 16) |
-                            ((uint32_t)gg << 8) | (uint32_t)bb;
-            }
+        } else if (fmt == 0x86) {
+            // DXT1 (S3TC) — block compressed
+            decodeDXTTexture(src, W, H, 1, rgba8);
+        } else if (fmt == 0x87) {
+            // DXT23 (S3TC) — block compressed with explicit alpha
+            decodeDXTTexture(src, W, H, 3, rgba8);
+        } else if (fmt == 0x88) {
+            // DXT45 (S3TC) — block compressed with interpolated alpha
+            decodeDXTTexture(src, W, H, 5, rgba8);
         } else {
             // Unknown format: magenta debug
             for (uint32_t i = 0; i < W * H; ++i) rgba8[i] = 0xFFFF00FFu;
@@ -682,9 +832,10 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
     if (!texBoundForDraw && vram_ && s.textures[0].enabled && base != nullptr &&
         s.fpOffset == 0) {
         uint8_t texFmt = ((s.textures[0].format >> 8) & 0xFF) & 0x9F;
-        bool fmtKnown = (texFmt == 0x85 || texFmt == 0x81 || texFmt == 0x86 ||
-                         texFmt == 0x87 || texFmt == 0x82 || texFmt == 0x83 ||
-                         texFmt == 0x84 || texFmt == 0x94);
+        bool fmtKnown = (texFmt == 0x85 || texFmt == 0x81 || texFmt == 0x82 ||
+                         texFmt == 0x83 || texFmt == 0x84 || texFmt == 0x86 ||
+                         texFmt == 0x87 || texFmt == 0x88 || texFmt == 0x8B ||
+                         texFmt == 0x94 || texFmt == 0x97 || texFmt == 0x9E);
         if (fmtKnown) {
             ps3rsx::HostTextureSamplerCtx tctx{ vram_, vramSize_, &s };
             textured.resize(count);
