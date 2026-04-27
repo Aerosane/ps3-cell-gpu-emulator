@@ -172,10 +172,13 @@ __device__ __forceinline__ FPVec4 fpReadSrc(
     uint32_t sw    = (packed >> 16) & 3;
     bool     neg   = (packed >> 18) & 1;
     bool     absv  = (packed >> 19) & 1;
+    bool     fp16  = (packed >> 20) & 1;
 
     FPVec4 base = {0,0,0,0};
     if (stype == FP_SRC_TEMP) {
-        if (sidx < nTemps) base = temps[sidx];
+        // H registers at indices [48..95], R registers at [0..47]
+        uint32_t effIdx = fp16 ? (sidx + 48) : sidx;
+        if (effIdx < nTemps) base = temps[effIdx];
     } else if (stype == FP_SRC_INPUT) {
         if (inputAttr < nInputs) base = fpInputs[inputAttr];
     } else if (stype == FP_SRC_CONST) {
@@ -224,8 +227,9 @@ __device__ bool fpExecute(
     float& outR, float& outG, float& outB, float& outA,
     FPVec4* mrtOut)  // mrtOut[0..3] for MRT planes B/C/D (mrtOut may be null)
 {
-    FPVec4 temps[48] = {};  // r0..r47 (RSX has 64 FP temps; 48 covers almost all games)
-    const uint32_t nTemps = 48;
+    // R0-R47 (fp32) at indices [0..47], H0-H47 (fp16-as-fp32) at [48..95]
+    FPVec4 temps[96] = {};
+    const uint32_t nTemps = 96;
 
     // Condition code registers: CC0 and CC1, each 4 components.
     // Values: 0=GT, 1=EQ, 2=LT, 3=UN (unordered/NaN)
@@ -253,6 +257,7 @@ __device__ bool fpExecute(
         bool end = (w0 >> 20) & 1;
         bool noDest = (w0 >> 21) & 1;
         bool setCond = (w0 >> 22) & 1;
+        bool dstFp16 = (w0 >> 23) & 1;
 
         // Condition code fields from w4
         uint32_t w4 = iw[4];
@@ -290,6 +295,8 @@ __device__ bool fpExecute(
         }
 
         uint32_t dst = iw[1] & 0xFF;
+        // H registers: offset destination into [48..95] range
+        if (dstFp16) dst += 48;
         uint32_t src0packed = (iw[1] >> 8);
         uint32_t src1packed = iw[2];
         uint32_t src2packed = iw[3];
@@ -1112,11 +1119,25 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                 fogFactor = (denom != 0.0f) ? (fogParam1 - fc) / denom : 1.0f;
                 break;
             }
+            case 0x0804: {  // LINEAR_ABS
+                float afc = fabsf(fc);
+                float denom = fogParam1 - fogParam0;
+                fogFactor = (denom != 0.0f) ? (fogParam1 - afc) / denom : 1.0f;
+                break;
+            }
             case 0x0800:    // EXP
                 fogFactor = __expf(-fogParam0 * fc);
                 break;
+            case 0x0802:    // EXP_ABS
+                fogFactor = __expf(-fogParam0 * fabsf(fc));
+                break;
             case 0x0801: {  // EXP2
                 float d = fogParam0 * fc;
+                fogFactor = __expf(-(d * d));
+                break;
+            }
+            case 0x0803: {  // EXP2_ABS
+                float d = fogParam0 * fabsf(fc);
                 fogFactor = __expf(-(d * d));
                 break;
             }
