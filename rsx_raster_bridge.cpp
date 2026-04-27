@@ -69,9 +69,82 @@ static inline bool decode_attr(const uint8_t* vram, uint32_t vramSize,
         }
         return true;
     }
+    case VERTEX_S1: {
+        // Signed normalized 16-bit: [-32768..32767] → [-1.0..1.0]
+        for (int i = 0; i < channels; ++i) {
+            uint16_t be;
+            std::memcpy(&be, p + i * 2, 2);
+            uint16_t le = __builtin_bswap16(be);
+            int16_t s16;
+            std::memcpy(&s16, &le, 2);
+            out[i] = s16 / 32767.0f;
+        }
+        return true;
+    }
+    case VERTEX_SF: {
+        // 16-bit half-float
+        for (int i = 0; i < channels; ++i) {
+            uint16_t be;
+            std::memcpy(&be, p + i * 2, 2);
+            uint16_t h = __builtin_bswap16(be);
+            // IEEE 754 half → float conversion
+            uint32_t sign = (uint32_t)(h >> 15) << 31;
+            uint32_t exp5 = (h >> 10) & 0x1F;
+            uint32_t man  = h & 0x3FF;
+            uint32_t f32;
+            if (exp5 == 0) {
+                if (man == 0) f32 = sign;
+                else {
+                    // Subnormal: normalize
+                    exp5 = 1;
+                    while (!(man & 0x400)) { man <<= 1; exp5--; }
+                    man &= 0x3FF;
+                    f32 = sign | ((exp5 + 127 - 15) << 23) | (man << 13);
+                }
+            } else if (exp5 == 31) {
+                f32 = sign | 0x7F800000 | (man << 13);
+            } else {
+                f32 = sign | ((exp5 + 127 - 15) << 23) | (man << 13);
+            }
+            float val;
+            std::memcpy(&val, &f32, 4);
+            out[i] = val;
+        }
+        return true;
+    }
+    case VERTEX_S32K: {
+        // Signed 16-bit integer (not normalized)
+        for (int i = 0; i < channels; ++i) {
+            uint16_t be;
+            std::memcpy(&be, p + i * 2, 2);
+            uint16_t le = __builtin_bswap16(be);
+            int16_t s16;
+            std::memcpy(&s16, &le, 2);
+            out[i] = (float)s16;
+        }
+        return true;
+    }
+    case VERTEX_CMP: {
+        // Compressed 11/11/10 packed into 32 bits (X11Y11Z10 signed)
+        uint32_t be;
+        std::memcpy(&be, p, 4);
+        uint32_t w = __builtin_bswap32(be);
+        // X: bits [0:10] signed 11-bit, Y: [11:21] signed 11-bit, Z: [22:31] signed 10-bit
+        int32_t ix = (int32_t)(w << 21) >> 21;
+        int32_t iy = (int32_t)(w << 10) >> 21;
+        int32_t iz = (int32_t)(w)       >> 22;
+        out[0] = ix / 1023.0f;
+        out[1] = iy / 1023.0f;
+        out[2] = iz / 511.0f;
+        if (channels > 3) out[3] = 1.0f;
+        return true;
+    }
+    case VERTEX_UB256: {
+        // Unsigned byte, not normalized (raw 0-255 as float)
+        for (int i = 0; i < channels; ++i) out[i] = (float)p[i];
+        return true;
+    }
     default:
-        // Unsupported type today — treat attribute as defaulted and
-        // let the caller fall back.
         return false;
     }
 }
@@ -395,25 +468,103 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         }
         uint8_t fmt = ((t.format >> 8) & 0xFF) & 0x9F;
         uint32_t W = t.width, H = t.height;
-        uint64_t need = (uint64_t)W * H * (fmt == 0x81 ? 1u : 4u);
+        uint32_t bpp;
+        switch (fmt) {
+        case 0x81: bpp = 1; break;  // B8
+        case 0x82: bpp = 2; break;  // G8B8
+        case 0x83: bpp = 2; break;  // RGB5A1
+        case 0x84: bpp = 2; break;  // RGBA4
+        case 0x85: bpp = 4; break;  // A8R8G8B8
+        case 0x86: bpp = 4; break;  // X8R8G8B8 (no alpha)
+        case 0x87: bpp = 2; break;  // R5G6B5
+        case 0x94: bpp = 4; break;  // R8G8B8A8
+        case 0x93: bpp = 4; break;  // D24S8 depth
+        default:   bpp = 4; break;
+        }
+        uint64_t need = (uint64_t)W * H * bpp;
         if ((uint64_t)t.offset + need > vramSize_) continue;
         const uint8_t* src = vram_ + t.offset;
         std::vector<uint32_t> rgba8(W * H);
         if (fmt == 0x85) {
+            // A8R8G8B8 — big-endian
             const uint32_t* s32 = reinterpret_cast<const uint32_t*>(src);
             for (uint32_t i = 0; i < W * H; ++i) {
                 uint32_t px = __builtin_bswap32(s32[i]);
                 if ((px >> 24) == 0) px |= 0xFF000000u;
                 rgba8[i] = px;
             }
+        } else if (fmt == 0x86) {
+            // X8R8G8B8 — like A8R8G8B8 but alpha forced to 0xFF
+            const uint32_t* s32 = reinterpret_cast<const uint32_t*>(src);
+            for (uint32_t i = 0; i < W * H; ++i) {
+                uint32_t px = __builtin_bswap32(s32[i]);
+                rgba8[i] = px | 0xFF000000u;
+            }
+        } else if (fmt == 0x94) {
+            // R8G8B8A8 — big-endian, swizzle to ARGB
+            const uint32_t* s32 = reinterpret_cast<const uint32_t*>(src);
+            for (uint32_t i = 0; i < W * H; ++i) {
+                uint32_t px = __builtin_bswap32(s32[i]);
+                uint8_t rr = (px >> 24) & 0xFF;
+                uint8_t gg = (px >> 16) & 0xFF;
+                uint8_t bb = (px >>  8) & 0xFF;
+                uint8_t aa = (px)       & 0xFF;
+                if (aa == 0) aa = 0xFF;
+                rgba8[i] = ((uint32_t)aa << 24) | ((uint32_t)rr << 16) |
+                            ((uint32_t)gg << 8) | (uint32_t)bb;
+            }
         } else if (fmt == 0x81) {
+            // B8 — luminance
             for (uint32_t i = 0; i < W * H; ++i) {
                 uint8_t v = src[i];
                 rgba8[i] = 0xFF000000u |
                            ((uint32_t)v << 16) |
                            ((uint32_t)v <<  8) | (uint32_t)v;
             }
+        } else if (fmt == 0x82) {
+            // G8B8 — two-channel, big-endian
+            for (uint32_t i = 0; i < W * H; ++i) {
+                uint8_t g = src[i * 2];
+                uint8_t b = src[i * 2 + 1];
+                rgba8[i] = 0xFF000000u | ((uint32_t)g << 8) | (uint32_t)b;
+            }
+        } else if (fmt == 0x87) {
+            // R5G6B5 — 16-bit color, big-endian
+            const uint16_t* s16 = reinterpret_cast<const uint16_t*>(src);
+            for (uint32_t i = 0; i < W * H; ++i) {
+                uint16_t px = __builtin_bswap16(s16[i]);
+                uint8_t rr = ((px >> 11) & 0x1F) * 255 / 31;
+                uint8_t gg = ((px >>  5) & 0x3F) * 255 / 63;
+                uint8_t bb = ((px)       & 0x1F) * 255 / 31;
+                rgba8[i] = 0xFF000000u | ((uint32_t)rr << 16) |
+                            ((uint32_t)gg << 8) | (uint32_t)bb;
+            }
+        } else if (fmt == 0x83) {
+            // RGB5A1 — 16-bit, big-endian
+            const uint16_t* s16 = reinterpret_cast<const uint16_t*>(src);
+            for (uint32_t i = 0; i < W * H; ++i) {
+                uint16_t px = __builtin_bswap16(s16[i]);
+                uint8_t rr = ((px >> 11) & 0x1F) * 255 / 31;
+                uint8_t gg = ((px >>  6) & 0x1F) * 255 / 31;
+                uint8_t bb = ((px >>  1) & 0x1F) * 255 / 31;
+                uint8_t aa = (px & 1) ? 0xFF : 0x00;
+                rgba8[i] = ((uint32_t)aa << 24) | ((uint32_t)rr << 16) |
+                            ((uint32_t)gg << 8) | (uint32_t)bb;
+            }
+        } else if (fmt == 0x84) {
+            // RGBA4 — 16-bit, big-endian
+            const uint16_t* s16 = reinterpret_cast<const uint16_t*>(src);
+            for (uint32_t i = 0; i < W * H; ++i) {
+                uint16_t px = __builtin_bswap16(s16[i]);
+                uint8_t rr = ((px >> 12) & 0xF) * 17;
+                uint8_t gg = ((px >>  8) & 0xF) * 17;
+                uint8_t bb = ((px >>  4) & 0xF) * 17;
+                uint8_t aa = ((px)       & 0xF) * 17;
+                rgba8[i] = ((uint32_t)aa << 24) | ((uint32_t)rr << 16) |
+                            ((uint32_t)gg << 8) | (uint32_t)bb;
+            }
         } else {
+            // Unknown format: magenta debug
             for (uint32_t i = 0; i < W * H; ++i) rgba8[i] = 0xFFFF00FFu;
         }
         rast_->setTexture2D(rgba8.data(), W, H, tu);
@@ -531,7 +682,9 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
     if (!texBoundForDraw && vram_ && s.textures[0].enabled && base != nullptr &&
         s.fpOffset == 0) {
         uint8_t texFmt = ((s.textures[0].format >> 8) & 0xFF) & 0x9F;
-        bool fmtKnown = (texFmt == 0x85 || texFmt == 0x81);
+        bool fmtKnown = (texFmt == 0x85 || texFmt == 0x81 || texFmt == 0x86 ||
+                         texFmt == 0x87 || texFmt == 0x82 || texFmt == 0x83 ||
+                         texFmt == 0x84 || texFmt == 0x94);
         if (fmtKnown) {
             ps3rsx::HostTextureSamplerCtx tctx{ vram_, vramSize_, &s };
             textured.resize(count);

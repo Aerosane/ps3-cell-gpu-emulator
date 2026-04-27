@@ -96,6 +96,22 @@ __device__ void sampleTex(const uint32_t* tex,
 #define FP_OP_COS  0x22
 #define FP_OP_SIN  0x23
 #define FP_OP_POW  0x26
+#define FP_OP_KIL  0x28
+#define FP_OP_DST  0x07
+#define FP_OP_DP2  0x0C
+#define FP_OP_DP2A 0x0D
+#define FP_OP_SEQ  0x0E
+#define FP_OP_SFL  0x0F
+#define FP_OP_SGT  0x12
+#define FP_OP_SLE  0x13
+#define FP_OP_SNE  0x14
+#define FP_OP_STR  0x15
+#define FP_OP_LIT  0x16
+#define FP_OP_TXB  0x19
+#define FP_OP_DIV  0x1E
+#define FP_OP_DDX  0x20
+#define FP_OP_DDY  0x21
+#define FP_OP_NRM  0x24
 #define FP_OP_FENCB 0x3E
 #define FP_OP_FENCT 0x3D
 
@@ -163,8 +179,8 @@ __device__ __forceinline__ void fpWriteDst(
     if (mw) d.w = sat ? clmp(val.w) : val.w;
 }
 
-// Execute fragment program. Returns final color in r0.
-__device__ void fpExecute(
+// Execute fragment program. Returns false if pixel was KIL'd (discard).
+__device__ bool fpExecute(
     const uint32_t* __restrict__ insns, uint32_t insnCount,
     const float* __restrict__ consts, uint32_t constCount,
     const FPVec4* fpInputs, uint32_t nInputs,
@@ -301,6 +317,120 @@ __device__ void fpExecute(
             result = {sinf(s0.x), sinf(s0.x), sinf(s0.x), sinf(s0.x)};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
             break;
+        case FP_OP_POW:
+            result = {powf(fabsf(s0.x), s1.x), powf(fabsf(s0.x), s1.x),
+                      powf(fabsf(s0.x), s1.x), powf(fabsf(s0.x), s1.x)};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_KIL:
+            // Discard pixel if any component of src0 < 0
+            if (s0.x < 0.0f || s0.y < 0.0f || s0.z < 0.0f || s0.w < 0.0f)
+                return false;
+            break;
+        case FP_OP_DST: {
+            // Distance: dst = (1, s0.y*s1.y, s0.z, s1.w)
+            result = {1.0f, s0.y * s1.y, s0.z, s1.w};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        case FP_OP_DP2: {
+            float d = s0.x*s1.x + s0.y*s1.y;
+            result = {d, d, d, d};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        case FP_OP_DP2A: {
+            float d = s0.x*s1.x + s0.y*s1.y + s2.x;
+            result = {d, d, d, d};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        case FP_OP_SEQ:
+            result = {s0.x==s1.x?1.f:0.f, s0.y==s1.y?1.f:0.f,
+                      s0.z==s1.z?1.f:0.f, s0.w==s1.w?1.f:0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_SFL:
+            result = {0.f, 0.f, 0.f, 0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_SGT:
+            result = {s0.x>s1.x?1.f:0.f, s0.y>s1.y?1.f:0.f,
+                      s0.z>s1.z?1.f:0.f, s0.w>s1.w?1.f:0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_SLE:
+            result = {s0.x<=s1.x?1.f:0.f, s0.y<=s1.y?1.f:0.f,
+                      s0.z<=s1.z?1.f:0.f, s0.w<=s1.w?1.f:0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_SNE:
+            result = {s0.x!=s1.x?1.f:0.f, s0.y!=s1.y?1.f:0.f,
+                      s0.z!=s1.z?1.f:0.f, s0.w!=s1.w?1.f:0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_STR:
+            result = {1.f, 1.f, 1.f, 1.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_LIT: {
+            // Lighting: dst = (1, max(s0.x,0), s0.y>0?pow(s0.y, clamp(s0.w,-128,128)):0, 1)
+            float diffuse = fmaxf(s0.x, 0.0f);
+            float specExp = fminf(fmaxf(s0.w, -128.f), 128.f);
+            float specular = s0.y > 0.0f ? powf(fmaxf(s0.y, 0.0f), specExp) : 0.0f;
+            result = {1.0f, diffuse, specular, 1.0f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        case FP_OP_TXP: {
+            // Projective texture: divide by w then sample
+            float w = (s0.w != 0.0f) ? s0.w : 1.0f;
+            float pu = s0.x / w, pv = s0.y / w;
+            float tr, tg, tb, ta;
+            if (texUnit < 4 && texBank.tex[texUnit] &&
+                texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
+                sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
+                          texBank.h[texUnit], pu, pv, texBilinear,
+                          tr, tg, tb, ta);
+            } else {
+                tr = tg = tb = ta = 1.0f;
+            }
+            result = {tr, tg, tb, ta};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        case FP_OP_TXB: {
+            // Biased texture: LOD bias in s0.w; we ignore bias (no mipmaps yet)
+            float tr, tg, tb, ta;
+            if (texUnit < 4 && texBank.tex[texUnit] &&
+                texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
+                sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
+                          texBank.h[texUnit], s0.x, s0.y, texBilinear,
+                          tr, tg, tb, ta);
+            } else {
+                tr = tg = tb = ta = 1.0f;
+            }
+            result = {tr, tg, tb, ta};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        case FP_OP_DIV:
+            result = {s0.x/s1.x, s0.y/s1.y, s0.z/s1.z, s0.w/s1.w};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_DDX:
+        case FP_OP_DDY:
+            // Screen-space derivatives: approximate as zero (no quad-level differencing)
+            result = {0.f, 0.f, 0.f, 0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_NRM: {
+            float len = sqrtf(s0.x*s0.x + s0.y*s0.y + s0.z*s0.z);
+            float inv = (len > 0.0f) ? (1.0f / len) : 0.0f;
+            result = {s0.x*inv, s0.y*inv, s0.z*inv, s0.w*inv};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
         default:
             break;
         }
@@ -311,6 +441,7 @@ __device__ void fpExecute(
     // Output is r0
     outR = temps[0].x; outG = temps[0].y;
     outB = temps[0].z; outA = temps[0].w;
+    return true;  // pixel not discarded
 }
 
 __device__ __forceinline__ bool depthCompare(uint32_t func, float src, float dst) {
@@ -576,9 +707,10 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                        w0*v0.tex2[1]+w1*v1.tex2[1]+w2*v2.tex2[1], 0, 1};  // TEX2
             fpIn[7] = {w0*v0.tex3[0]+w1*v1.tex3[0]+w2*v2.tex3[0],
                        w0*v0.tex3[1]+w1*v1.tex3[1]+w2*v2.tex3[1], 0, 1};  // TEX3
-            fpExecute(fpInsns, fpInsnCount, fpConsts, fpConstCount,
+            bool alive = fpExecute(fpInsns, fpInsnCount, fpConsts, fpConstCount,
                       fpIn, 8, texBank, texBilinear,
                       r, g, b, a);
+            if (!alive) continue;  // KIL'd — discard pixel
         } else if (texBank.tex[0]) {
             float tr, tg, tb, ta;
             sampleTex(texBank.tex[0], texBank.w[0], texBank.h[0],
