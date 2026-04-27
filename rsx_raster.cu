@@ -76,47 +76,70 @@ __device__ void sampleTex(const uint32_t* tex,
      (((sneg)&1)<<18))
 
 // FP opcodes (matching rsx_fp_shader.h)
-#define FP_OP_NOP  0x00
-#define FP_OP_MOV  0x01
-#define FP_OP_MUL  0x02
-#define FP_OP_ADD  0x03
-#define FP_OP_MAD  0x04
-#define FP_OP_DP3  0x05
-#define FP_OP_DP4  0x06
-#define FP_OP_MIN  0x08
-#define FP_OP_MAX  0x09
-#define FP_OP_SLT  0x0A
-#define FP_OP_SGE  0x0B
-#define FP_OP_FRC  0x10
-#define FP_OP_FLR  0x11
-#define FP_OP_TEX  0x17
-#define FP_OP_TXP  0x18
-#define FP_OP_RCP  0x1A
-#define FP_OP_RSQ  0x1B
-#define FP_OP_EX2  0x1C
-#define FP_OP_LG2  0x1D
-#define FP_OP_LRP  0x1F
-#define FP_OP_COS  0x22
-#define FP_OP_SIN  0x23
-#define FP_OP_POW  0x26
-#define FP_OP_KIL  0x28
-#define FP_OP_DST  0x07
-#define FP_OP_DP2  0x0C
-#define FP_OP_DP2A 0x0D
-#define FP_OP_SEQ  0x0E
-#define FP_OP_SFL  0x0F
-#define FP_OP_SGT  0x12
-#define FP_OP_SLE  0x13
-#define FP_OP_SNE  0x14
-#define FP_OP_STR  0x15
-#define FP_OP_LIT  0x16
-#define FP_OP_TXB  0x19
-#define FP_OP_DIV  0x1E
-#define FP_OP_DDX  0x20
-#define FP_OP_DDY  0x21
-#define FP_OP_NRM  0x24
-#define FP_OP_FENCB 0x3E
+// RSX FP hardware opcodes — must match RPCS3 FPOpcodes.h exactly
+#define FP_OP_NOP   0x00
+#define FP_OP_MOV   0x01
+#define FP_OP_MUL   0x02
+#define FP_OP_ADD   0x03
+#define FP_OP_MAD   0x04
+#define FP_OP_DP3   0x05
+#define FP_OP_DP4   0x06
+#define FP_OP_DST   0x07
+#define FP_OP_MIN   0x08
+#define FP_OP_MAX   0x09
+#define FP_OP_SLT   0x0A
+#define FP_OP_SGE   0x0B
+#define FP_OP_SLE   0x0C
+#define FP_OP_SGT   0x0D
+#define FP_OP_SNE   0x0E
+#define FP_OP_SEQ   0x0F
+#define FP_OP_FRC   0x10
+#define FP_OP_FLR   0x11
+#define FP_OP_KIL   0x12
+#define FP_OP_PK4   0x13
+#define FP_OP_UP4   0x14
+#define FP_OP_DDX   0x15
+#define FP_OP_DDY   0x16
+#define FP_OP_TEX   0x17
+#define FP_OP_TXP   0x18
+#define FP_OP_TXD   0x19
+#define FP_OP_RCP   0x1A
+#define FP_OP_RSQ   0x1B
+#define FP_OP_EX2   0x1C
+#define FP_OP_LG2   0x1D
+#define FP_OP_LIT   0x1E
+#define FP_OP_LRP   0x1F
+#define FP_OP_STR   0x20
+#define FP_OP_SFL   0x21
+#define FP_OP_COS   0x22
+#define FP_OP_SIN   0x23
+#define FP_OP_PK2   0x24
+#define FP_OP_UP2   0x25
+#define FP_OP_POW   0x26
+#define FP_OP_PKB   0x27
+#define FP_OP_UPB   0x28
+#define FP_OP_PK16  0x29
+#define FP_OP_UP16  0x2A
+#define FP_OP_BEM   0x2B
+#define FP_OP_PKG   0x2C
+#define FP_OP_UPG   0x2D
+#define FP_OP_DP2A  0x2E
+#define FP_OP_TXL   0x2F
+#define FP_OP_TXB   0x31
+#define FP_OP_REFL  0x36
+#define FP_OP_DP2   0x38
+#define FP_OP_NRM   0x39
+#define FP_OP_DIV   0x3A
+#define FP_OP_DIVSQ 0x3B
+#define FP_OP_LIF   0x3C
 #define FP_OP_FENCT 0x3D
+#define FP_OP_FENCB 0x3E
+#define FP_OP_BRK   0x40
+#define FP_OP_CAL   0x41
+#define FP_OP_IFE   0x42
+#define FP_OP_LOOP  0x43
+#define FP_OP_REP   0x44
+#define FP_OP_RET   0x45
 
 // Source register types
 #define FP_SRC_TEMP  0
@@ -440,6 +463,76 @@ __device__ bool fpExecute(
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
             break;
         }
+        case FP_OP_DIVSQ: {
+            // Division by square root: s0 / sqrt(|s1|)
+            float sq = sqrtf(fabsf(s1.x));
+            float inv = (sq > 0.0f) ? (1.0f / sq) : 0.0f;
+            result = {s0.x*inv, s0.y*inv, s0.z*inv, s0.w*inv};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        case FP_OP_LIF: {
+            // Final part of LIT — same as LIT with exponent already in s0.w
+            float diffuse = fmaxf(s0.y, 0.0f);
+            float specular = (s0.y > 0.0f) ? powf(fmaxf(s0.z, 0.0f),
+                fminf(fmaxf(s0.w, -128.0f), 128.0f)) : 0.0f;
+            result = {1.0f, diffuse, specular, 1.0f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        case FP_OP_REFL: {
+            // Reflection: R = 2*dot(N,I)*N - I  (s0=N, s1=I)
+            float d = s0.x*s1.x + s0.y*s1.y + s0.z*s1.z;
+            result = {2.0f*d*s0.x - s1.x, 2.0f*d*s0.y - s1.y,
+                      2.0f*d*s0.z - s1.z, 2.0f*d*s0.w - s1.w};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        case FP_OP_TXD: // Texture with derivatives — treat as TEX (no mipmap)
+        case FP_OP_TXL: { // Texture with explicit LOD — treat as TEX (no mipmap)
+            float tr, tg, tb, ta;
+            if (texUnit < 4 && texBank.tex[texUnit] &&
+                texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
+                sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
+                          texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
+                          tr, tg, tb, ta,
+                          texBank.wrapS[texUnit], texBank.wrapT[texUnit]);
+            } else {
+                tr = tg = tb = ta = 1.0f;
+            }
+            result = {tr, tg, tb, ta};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        case FP_OP_BEM: {
+            // Bump-environment map: 2D coordinate perturbation
+            // result.x = s0.x + s1.x, result.y = s0.y + s1.y
+            result = {s0.x + s1.x, s0.y + s1.y, s0.z, s0.w};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        // Control flow — not yet fully implemented, treat as NOPs
+        case FP_OP_BRK:
+        case FP_OP_CAL:
+        case FP_OP_IFE:
+        case FP_OP_LOOP:
+        case FP_OP_REP:
+        case FP_OP_RET:
+            break;
+        // Pack/unpack — rare, treat as MOV for now
+        case FP_OP_PK4:
+        case FP_OP_UP4:
+        case FP_OP_PK2:
+        case FP_OP_UP2:
+        case FP_OP_PKB:
+        case FP_OP_UPB:
+        case FP_OP_PK16:
+        case FP_OP_UP16:
+        case FP_OP_PKG:
+        case FP_OP_UPG:
+            result = s0;
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
         default:
             break;
         }
