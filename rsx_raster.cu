@@ -1055,7 +1055,8 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         if (fpInsns && fpInsnCount > 0) {
             // Build FP input array from interpolated vertex data
             // 0=WPOS, 1=COL0, 2=COL1, 3=FOGC, 4=TEX0, 5=TEX1, 6=TEX2, 7=TEX3
-            FPVec4 fpIn[8];
+            // 8=TEX4, 9=TEX5, 10=TEX6, 11=TEX7, 12=BFC0, 13=BFC1
+            FPVec4 fpIn[14];
             fpIn[0] = {(float)x + 0.5f, (float)y + 0.5f, z, 1.0f};  // WPOS
             fpIn[1] = {r, g, b, a};  // COL0
             if (flatShade) {
@@ -1068,16 +1069,30 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                            p0*v0.col1[3]+p1*v1.col1[3]+p2*v2.col1[3]};
                 fpIn[3] = {p0*v0.fog+p1*v1.fog+p2*v2.fog, 0, 0, 1};
             }
-            fpIn[4] = {u, vv, 0.0f, 1.0f};  // TEX0
-            fpIn[5] = {p0*v0.tex1[0]+p1*v1.tex1[0]+p2*v2.tex1[0],
-                       p0*v0.tex1[1]+p1*v1.tex1[1]+p2*v2.tex1[1], 0, 1};  // TEX1
-            fpIn[6] = {p0*v0.tex2[0]+p1*v1.tex2[0]+p2*v2.tex2[0],
-                       p0*v0.tex2[1]+p1*v1.tex2[1]+p2*v2.tex2[1], 0, 1};  // TEX2
-            fpIn[7] = {p0*v0.tex3[0]+p1*v1.tex3[0]+p2*v2.tex3[0],
-                       p0*v0.tex3[1]+p1*v1.tex3[1]+p2*v2.tex3[1], 0, 1};  // TEX3
+            // TEX0 with full 4 components (r,q from tex0q)
+            float t0r = p0*v0.tex0q[0]+p1*v1.tex0q[0]+p2*v2.tex0q[0];
+            float t0q = p0*v0.tex0q[1]+p1*v1.tex0q[1]+p2*v2.tex0q[1];
+            fpIn[4] = {u, vv, t0r, t0q};  // TEX0
+            // TEX1-TEX7: full 4-component interpolation
+            #define INTERP4(arr) { \
+                p0*v0.arr[0]+p1*v1.arr[0]+p2*v2.arr[0], \
+                p0*v0.arr[1]+p1*v1.arr[1]+p2*v2.arr[1], \
+                p0*v0.arr[2]+p1*v1.arr[2]+p2*v2.arr[2], \
+                p0*v0.arr[3]+p1*v1.arr[3]+p2*v2.arr[3]  \
+            }
+            fpIn[5]  = INTERP4(tex1);
+            fpIn[6]  = INTERP4(tex2);
+            fpIn[7]  = INTERP4(tex3);
+            fpIn[8]  = INTERP4(tex4);
+            fpIn[9]  = INTERP4(tex5);
+            fpIn[10] = INTERP4(tex6);
+            fpIn[11] = INTERP4(tex7);
+            fpIn[12] = INTERP4(backCol0);
+            fpIn[13] = INTERP4(backCol1);
+            #undef INTERP4
             FPVec4 mrtVals[3] = {};
             bool alive = fpExecute(fpInsns, fpInsnCount, fpConsts, fpConstCount,
-                      fpIn, 8, texBank,
+                      fpIn, 14, texBank,
                       r, g, b, a, mrtVals);
             if (!alive) continue;  // KIL'd — discard pixel
             mrtAccum[0] = mrtVals[0];

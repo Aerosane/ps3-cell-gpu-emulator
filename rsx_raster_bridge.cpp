@@ -605,13 +605,27 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
             v.r = outputs[1].v[0]; v.g = outputs[1].v[1];
             v.b = outputs[1].v[2]; v.a = outputs[1].v[3];
             v.u = outputs[7].v[0]; v.v = outputs[7].v[1];
+            v.tex0q[0] = outputs[7].v[2]; v.tex0q[1] = outputs[7].v[3];
             // Extended VP outputs → FP inputs
             v.col1[0] = outputs[2].v[0]; v.col1[1] = outputs[2].v[1];
             v.col1[2] = outputs[2].v[2]; v.col1[3] = outputs[2].v[3];
+            // Back-face colors from o[3] (BFC0), o[4] (BFC1)
+            v.backCol0[0] = outputs[3].v[0]; v.backCol0[1] = outputs[3].v[1];
+            v.backCol0[2] = outputs[3].v[2]; v.backCol0[3] = outputs[3].v[3];
+            v.backCol1[0] = outputs[4].v[0]; v.backCol1[1] = outputs[4].v[1];
+            v.backCol1[2] = outputs[4].v[2]; v.backCol1[3] = outputs[4].v[3];
             v.fog = outputs[5].v[0];
-            v.tex1[0] = outputs[8].v[0]; v.tex1[1] = outputs[8].v[1];
-            v.tex2[0] = outputs[9].v[0]; v.tex2[1] = outputs[9].v[1];
-            v.tex3[0] = outputs[10].v[0]; v.tex3[1] = outputs[10].v[1];
+            v.pointSize = outputs[6].v[0];  // PSIZ
+            // TEX1-TEX7: full 4-component texture coordinates
+            for (int ti = 0; ti < 4; ++ti) {
+                v.tex1[ti] = outputs[8].v[ti];
+                v.tex2[ti] = outputs[9].v[ti];
+                v.tex3[ti] = outputs[10].v[ti];
+                v.tex4[ti] = outputs[11].v[ti];
+                v.tex5[ti] = outputs[12].v[ti];
+                v.tex6[ti] = outputs[13].v[ti];
+                v.tex7[ti] = outputs[14].v[ti];
+            }
         }
         base = transformed.data();
     }

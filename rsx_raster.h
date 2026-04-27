@@ -28,13 +28,21 @@ struct RasterVertex {
     float x, y, z;     // Screen-space position after perspective divide.
     float w;           // Clip-space W for perspective-correct interpolation.
     float r, g, b, a;  // COL0: Linear RGBA diffuse color.
-    float u, v;        // TEX0: Texture coords, [0,1] with current wrap mode.
+    float u, v;        // TEX0: Texture coords (s,t), [0,1] with current wrap mode.
     // Extended VP outputs for per-pixel FP input
     float col1[4];     // COL1: specular color (FP input 2)
     float fog;         // FOGC: fog coordinate (FP input 3)
-    float tex1[2];     // TEX1 (FP input 5)
-    float tex2[2];     // TEX2 (FP input 6)
-    float tex3[2];     // TEX3 (FP input 7)
+    float tex0q[2];    // TEX0 r,q components (s,t are u,v above)
+    float tex1[4];     // TEX1 (FP input 5) - full s,t,r,q
+    float tex2[4];     // TEX2 (FP input 6) - full s,t,r,q
+    float tex3[4];     // TEX3 (FP input 7) - full s,t,r,q
+    float tex4[4];     // TEX4 (FP input 8)
+    float tex5[4];     // TEX5 (FP input 9)
+    float tex6[4];     // TEX6 (FP input 10)
+    float tex7[4];     // TEX7 (FP input 11)
+    float pointSize;   // PSIZ: point size (VP output 6)
+    float backCol0[4]; // BFC0: back-face color 0 (FP input 12)
+    float backCol1[4]; // BFC1: back-face color 1 (FP input 13)
 };
 
 // Column-major 4x4 matrix, mirroring GL/RSX convention:
