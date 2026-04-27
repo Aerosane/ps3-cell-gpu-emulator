@@ -60,6 +60,13 @@ int rsx_init(RSXState* state) {
     state->scissorX  = 0;  state->scissorY  = 0;
     state->scissorW  = 4096; state->scissorH = 4096;
 
+    // Viewport offset/scale defaults (identity for 1280×720)
+    state->vpOffset[0] = 640.0f; state->vpOffset[1] = 360.0f;
+    state->vpOffset[2] = 0.5f;   state->vpOffset[3] = 0.0f;
+    state->vpScale[0]  = 640.0f; state->vpScale[1]  = -360.0f;
+    state->vpScale[2]  = 0.5f;   state->vpScale[3]  = 0.0f;
+    state->vpOffsetScaleSet = false;
+
     // Depth defaults
     state->depthTestEnable = false;
     state->depthFunc       = CMP_LESS;
@@ -259,6 +266,29 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         }
         RSX_EMIT(onViewport, state);
         return;
+
+    // Viewport offset/scale — 4 float registers each (consecutive methods)
+    case NV4097_SET_VIEWPORT_OFFSET:
+    case NV4097_SET_VIEWPORT_OFFSET + 4:
+    case NV4097_SET_VIEWPORT_OFFSET + 8:
+    case NV4097_SET_VIEWPORT_OFFSET + 12: {
+        uint32_t idx = (method - NV4097_SET_VIEWPORT_OFFSET) / 4;
+        float f; memcpy(&f, &data, 4);
+        state->vpOffset[idx] = f;
+        state->vpOffsetScaleSet = true;
+        return;
+    }
+    case NV4097_SET_VIEWPORT_SCALE:
+    case NV4097_SET_VIEWPORT_SCALE + 4:
+    case NV4097_SET_VIEWPORT_SCALE + 8:
+    case NV4097_SET_VIEWPORT_SCALE + 12: {
+        uint32_t idx = (method - NV4097_SET_VIEWPORT_SCALE) / 4;
+        float f; memcpy(&f, &data, 4);
+        state->vpScale[idx] = f;
+        state->vpOffsetScaleSet = true;
+        return;
+    }
+
     case NV4097_SET_SCISSOR_HORIZONTAL:
         state->scissorX = (uint16_t)(data & 0xFFFF);
         state->scissorW = (uint16_t)(data >> 16);

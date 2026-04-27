@@ -562,11 +562,18 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
             float nx = ox / ow;
             float ny = oy / ow;
             float nz = oz / ow;
-            float W = (float)(s.surfaceWidth  ? s.surfaceWidth  : 1280);
-            float H = (float)(s.surfaceHeight ? s.surfaceHeight : 720);
-            v.x = (nx * 0.5f + 0.5f) * W;
-            v.y = (1.0f - (ny * 0.5f + 0.5f)) * H;
-            v.z = nz * 0.5f + 0.5f;
+            // Use viewport offset/scale if explicitly set by game
+            if (s.vpOffsetScaleSet) {
+                v.x = s.vpScale[0] * nx + s.vpOffset[0];
+                v.y = s.vpScale[1] * ny + s.vpOffset[1];
+                v.z = s.vpScale[2] * nz + s.vpOffset[2];
+            } else {
+                float W = (float)(s.surfaceWidth  ? s.surfaceWidth  : 1280);
+                float H = (float)(s.surfaceHeight ? s.surfaceHeight : 720);
+                v.x = (nx * 0.5f + 0.5f) * W;
+                v.y = (1.0f - (ny * 0.5f + 0.5f)) * H;
+                v.z = nz * 0.5f + 0.5f;
+            }
             // Color from o[1] (COL0), UV from o[7] (TEX0)
             v.r = outputs[1].v[0]; v.g = outputs[1].v[1];
             v.b = outputs[1].v[2]; v.a = outputs[1].v[3];

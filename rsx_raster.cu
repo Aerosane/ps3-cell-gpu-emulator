@@ -190,7 +190,8 @@ __device__ bool fpExecute(
     const float* __restrict__ consts, uint32_t constCount,
     const FPVec4* fpInputs, uint32_t nInputs,
     const TexBank& texBank,
-    float& outR, float& outG, float& outB, float& outA)
+    float& outR, float& outG, float& outB, float& outA,
+    FPVec4* mrtOut)  // mrtOut[0..3] for MRT planes B/C/D (mrtOut may be null)
 {
     FPVec4 temps[8] = {};  // r0..r7 (most FPs use few regs)
     const uint32_t nTemps = 8;
@@ -449,6 +450,12 @@ __device__ bool fpExecute(
     // Output is r0
     outR = temps[0].x; outG = temps[0].y;
     outB = temps[0].z; outA = temps[0].w;
+    // MRT outputs: temps[1]→B, temps[2]→C, temps[3]→D
+    if (mrtOut) {
+        mrtOut[0] = temps[1];
+        mrtOut[1] = temps[2];
+        mrtOut[2] = temps[3];
+    }
     return true;  // pixel not discarded
 }
 
@@ -641,7 +648,10 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   const uint32_t* __restrict__ fpInsns,
                                   uint32_t fpInsnCount,
                                   const float* __restrict__ fpConsts,
-                                  uint32_t fpConstCount) {
+                                  uint32_t fpConstCount,
+                                  uint32_t* __restrict__ mrtB,
+                                  uint32_t* __restrict__ mrtC,
+                                  uint32_t* __restrict__ mrtD) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -659,6 +669,10 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
     uint32_t dstPx = dst[base];
     float    dstZ  = depth ? depth[base] : 1.0f;
     uint8_t  dstS  = stencil ? stencil[base] : 0;
+    uint32_t mrtPxB = mrtB ? mrtB[base] : 0;
+    uint32_t mrtPxC = mrtC ? mrtC[base] : 0;
+    uint32_t mrtPxD = mrtD ? mrtD[base] : 0;
+    FPVec4   mrtAccum[3] = {};  // accumulated MRT values from FP
 
     for (uint32_t t = 0; t < triangleCount; ++t) {
         const RasterVertex v0 = verts[t*3 + 0];
@@ -749,10 +763,14 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                        w0*v0.tex2[1]+w1*v1.tex2[1]+w2*v2.tex2[1], 0, 1};  // TEX2
             fpIn[7] = {w0*v0.tex3[0]+w1*v1.tex3[0]+w2*v2.tex3[0],
                        w0*v0.tex3[1]+w1*v1.tex3[1]+w2*v2.tex3[1], 0, 1};  // TEX3
+            FPVec4 mrtVals[3] = {};
             bool alive = fpExecute(fpInsns, fpInsnCount, fpConsts, fpConstCount,
                       fpIn, 8, texBank,
-                      r, g, b, a);
+                      r, g, b, a, mrtVals);
             if (!alive) continue;  // KIL'd — discard pixel
+            mrtAccum[0] = mrtVals[0];
+            mrtAccum[1] = mrtVals[1];
+            mrtAccum[2] = mrtVals[2];
         } else if (texBank.tex[0]) {
             float tr, tg, tb, ta;
             sampleTex(texBank.tex[0], texBank.w[0], texBank.h[0],
@@ -817,10 +835,26 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             newPx = (dstPx & keep) | (newPx & write);
         }
         dstPx = newPx;
+        // MRT planes — convert FP output to ARGB8
+        if (mrtB) {
+            mrtPxB = (sat(mrtAccum[0].w) << 24) | (sat(mrtAccum[0].x) << 16) |
+                     (sat(mrtAccum[0].y) << 8) | sat(mrtAccum[0].z);
+        }
+        if (mrtC) {
+            mrtPxC = (sat(mrtAccum[1].w) << 24) | (sat(mrtAccum[1].x) << 16) |
+                     (sat(mrtAccum[1].y) << 8) | sat(mrtAccum[1].z);
+        }
+        if (mrtD) {
+            mrtPxD = (sat(mrtAccum[2].w) << 24) | (sat(mrtAccum[2].x) << 16) |
+                     (sat(mrtAccum[2].y) << 8) | sat(mrtAccum[2].z);
+        }
         if (depthWrite) dstZ = z;
     }
 
     dst[base] = dstPx;
+    if (mrtB) mrtB[base] = mrtPxB;
+    if (mrtC) mrtC[base] = mrtPxC;
+    if (mrtD) mrtD[base] = mrtPxD;
     if (depth && depthWrite) depth[base] = dstZ;
     if (stencil && stencilTest) stencil[base] = dstS;
 }
@@ -1283,7 +1317,8 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   blendConstR_, blendConstG_,
                                   blendConstB_, blendConstA_,
                                   d_fpInsns_, fpInsnCount_,
-                                  d_fpConsts_, fpConstCount_);
+                                  d_fpConsts_, fpConstCount_,
+                                  d_colorB_, d_colorC_, d_colorD_);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;

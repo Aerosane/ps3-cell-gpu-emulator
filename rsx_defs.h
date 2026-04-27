@@ -288,6 +288,10 @@ struct RSXState {
     // Viewport / Scissor
     uint16_t viewportX, viewportY, viewportW, viewportH;
     uint16_t scissorX, scissorY, scissorW, scissorH;
+    // Viewport offset/scale — NDC→screen transform (4 floats each)
+    float    vpOffset[4];   // x, y, z, w offset
+    float    vpScale[4];    // x, y, z, w scale
+    bool     vpOffsetScaleSet;  // true if game explicitly set offset/scale
 
     // Clear
     uint32_t colorClearValue;
