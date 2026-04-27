@@ -157,6 +157,15 @@ public:
     }
     void setStencilWriteMask(uint8_t mask) { stencilWriteMask_ = mask; }
 
+    void setTwoSidedStencil(bool enable) { twoSidedStencil_ = enable; }
+    void setBackStencilFunc(StencilFunc f, uint8_t ref, uint8_t mask = 0xFF) {
+        backStencilFunc_ = f; backStencilRef_ = ref; backStencilMask_ = mask;
+    }
+    void setBackStencilOp(StencilOp sFail, StencilOp zFail, StencilOp zPass) {
+        backStencilSFail_ = sFail; backStencilZFail_ = zFail; backStencilZPass_ = zPass;
+    }
+    void setBackStencilWriteMask(uint8_t mask) { backStencilWriteMask_ = mask; }
+
     // Enable/disable alpha blending. When enabled the blend factors and
     // equation set via setBlendFunc / setBlendEquation apply. Defaults
     // keep the classic SRC_ALPHA, ONE_MINUS_SRC_ALPHA over-blend so
@@ -400,6 +409,15 @@ private:
     StencilOp stencilSFail_{StencilOp::Keep};
     StencilOp stencilZFail_{StencilOp::Keep};
     StencilOp stencilZPass_{StencilOp::Keep};
+
+    bool      twoSidedStencil_{false};
+    StencilFunc backStencilFunc_{StencilFunc::Always};
+    uint8_t   backStencilRef_{0};
+    uint8_t   backStencilMask_{0xFF};
+    uint8_t   backStencilWriteMask_{0xFF};
+    StencilOp backStencilSFail_{StencilOp::Keep};
+    StencilOp backStencilZFail_{StencilOp::Keep};
+    StencilOp backStencilZPass_{StencilOp::Keep};
 
     // Blend func / equation state. Defaults match legacy SRC_ALPHA over.
     BlendFactor bfSrcRGB_{BlendFactor::SrcAlpha};

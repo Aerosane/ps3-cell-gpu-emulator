@@ -784,7 +784,19 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   int flatShade,
                                   int logicOpEnable,
                                   uint32_t logicOp,
-                                  int ditherEnable) {
+                                  int ditherEnable,
+                                  int twoSidedStencil,
+                                  uint32_t backStencilFunc,
+                                  uint32_t backStencilRef,
+                                  uint32_t backStencilMask,
+                                  uint32_t backStencilWriteMask,
+                                  uint32_t backOpSFail,
+                                  uint32_t backOpZFail,
+                                  uint32_t backOpZPass,
+                                  int frontFaceCCW,
+                                  uint32_t fogMode,
+                                  float fogParam0,
+                                  float fogParam1) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -861,12 +873,25 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         // relying on depth clamping by not enabling NV4097 depth-clamp.
         if (depthClip && (z < 0.0f || z > 1.0f)) continue;
 
-        // Stencil test happens before depth test (matches RSX/GL order).
+        // Two-sided stencil: select front/back params based on winding
+        bool isFrontFace = frontFaceCCW ? (area > 0.0f) : (area < 0.0f);
+        uint32_t effStFunc, effStRef, effStMask, effStWMask;
+        uint32_t effSFail, effZFail, effZPass;
+        if (twoSidedStencil && !isFrontFace) {
+            effStFunc = backStencilFunc; effStRef = backStencilRef;
+            effStMask = backStencilMask; effStWMask = backStencilWriteMask;
+            effSFail = backOpSFail; effZFail = backOpZFail; effZPass = backOpZPass;
+        } else {
+            effStFunc = stencilFunc; effStRef = stencilRef;
+            effStMask = stencilMask; effStWMask = stencilWriteMask;
+            effSFail = opSFail; effZFail = opZFail; effZPass = opZPass;
+        }
+
         bool sPass = true;
         if (stencilTest && stencil) {
-            uint8_t refM = (uint8_t)(stencilRef & stencilMask);
-            uint8_t curM = (uint8_t)(dstS & stencilMask);
-            sPass = stencilCompare(stencilFunc, refM, curM);
+            uint8_t refM = (uint8_t)(effStRef & effStMask);
+            uint8_t curM = (uint8_t)(dstS & effStMask);
+            sPass = stencilCompare(effStFunc, refM, curM);
         }
 
         bool zPass = true;
@@ -874,11 +899,10 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             zPass = depthCompare(depthFunc, z, dstZ);
         }
 
-        // Stencil-op selection + masked write.
         if (stencilTest && stencil) {
-            uint32_t op = sPass ? (zPass ? opZPass : opZFail) : opSFail;
-            uint8_t newS = stencilApply(op, dstS, (uint8_t)stencilRef);
-            dstS = (uint8_t)((dstS & ~stencilWriteMask) | (newS & stencilWriteMask));
+            uint32_t op = sPass ? (zPass ? effZPass : effZFail) : effSFail;
+            uint8_t newS = stencilApply(op, dstS, (uint8_t)effStRef);
+            dstS = (uint8_t)((dstS & ~effStWMask) | (newS & effStWMask));
         }
 
         if (!sPass) continue;
@@ -953,6 +977,30 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                 default:     pass = true; break;            // ALWAYS (0x0207)
             }
             if (!pass) continue;
+        }
+
+        // Fog: blend fragment RGB toward fog color (black) using fog factor
+        if (fogMode != 0) {
+            float fc = flatShade ? v2.fog
+                : (p0 * v0.fog + p1 * v1.fog + p2 * v2.fog);
+            float fogFactor = 1.0f;
+            switch (fogMode) {
+            case 0x2601: {  // LINEAR
+                float denom = fogParam1 - fogParam0;
+                fogFactor = (denom != 0.0f) ? (fogParam1 - fc) / denom : 1.0f;
+                break;
+            }
+            case 0x0800:    // EXP
+                fogFactor = __expf(-fogParam0 * fc);
+                break;
+            case 0x0801: {  // EXP2
+                float d = fogParam0 * fc;
+                fogFactor = __expf(-(d * d));
+                break;
+            }
+            }
+            fogFactor = fminf(fmaxf(fogFactor, 0.0f), 1.0f);
+            r *= fogFactor; g *= fogFactor; b *= fogFactor;
         }
 
         if (blendEnable) {
@@ -1509,7 +1557,18 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   flatShade_ ? 1 : 0,
                                   logicOpEnable_ ? 1 : 0,
                                   logicOp_,
-                                  ditherEnable_ ? 1 : 0);
+                                  ditherEnable_ ? 1 : 0,
+                                  twoSidedStencil_ ? 1 : 0,
+                                  uint32_t(backStencilFunc_),
+                                  uint32_t(backStencilRef_),
+                                  uint32_t(backStencilMask_),
+                                  uint32_t(backStencilWriteMask_),
+                                  uint32_t(backStencilSFail_),
+                                  uint32_t(backStencilZFail_),
+                                  uint32_t(backStencilZPass_),
+                                  (frontFace_ == FrontFace::CCW) ? 1 : 0,
+                                  fogMode_,
+                                  fogParam0_, fogParam1_);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;

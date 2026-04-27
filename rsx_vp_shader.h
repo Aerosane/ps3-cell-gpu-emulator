@@ -608,18 +608,30 @@ inline void vp_execute(const uint32_t* vpData, uint32_t vpLen, uint32_t vpStart,
                        const VPFloat4 constants[256],
                        VPFloat4 outputs[16]) {
     VPFloat4 temps[48] = {};
+    int32_t addrReg[4] = {0, 0, 0, 0};
     uint32_t numInsns = vpLen / 4;
+    uint32_t callStack[4] = {};
+    int callDepth = 0;
+    uint32_t maxIter = numInsns * 16;
 
-    for (uint32_t i = vpStart; i < numInsns; ++i) {
+    for (uint32_t i = vpStart; i < numInsns && maxIter > 0; ++i, --maxIter) {
         VPDecodedInsn insn = vp_decode(&vpData[i * 4]);
+
+        uint32_t effectiveConstIdx = insn.constIdx;
+        bool indexInput = (vpData[i*4] >> 27) & 1;
+        if (indexInput) {
+            uint32_t addrSwz = vpData[i*4] & 3;
+            effectiveConstIdx = (uint32_t)((int32_t)insn.constIdx + addrReg[addrSwz]);
+            if (effectiveConstIdx > 511) effectiveConstIdx = 0;
+        }
 
         // Read sources
         float src0[4], src1[4], src2[4];
-        vp_read_src(insn.src[0], insn.inputIdx, insn.constIdx,
+        vp_read_src(insn.src[0], insn.inputIdx, effectiveConstIdx,
                     inputs, constants, temps, src0);
-        vp_read_src(insn.src[1], insn.inputIdx, insn.constIdx,
+        vp_read_src(insn.src[1], insn.inputIdx, effectiveConstIdx,
                     inputs, constants, temps, src1);
-        vp_read_src(insn.src[2], insn.inputIdx, insn.constIdx,
+        vp_read_src(insn.src[2], insn.inputIdx, effectiveConstIdx,
                     inputs, constants, temps, src2);
 
         // Vector op
@@ -710,10 +722,9 @@ inline void vp_execute(const uint32_t* vpData, uint32_t vpLen, uint32_t vpStart,
                 }
                 break;
             case VP_VEC_ARL:
-                // Address register load — used for relative addressing.
-                // Store int(floor(src0.x)) for later use. We don't yet
-                // support indexed constant access, so just pass through.
-                for (int k = 0; k < 4; ++k) r[k] = src0[k];
+                for (int k = 0; k < 4; ++k) {
+                    addrReg[k] = (int32_t)__builtin_floorf(src0[k]);
+                }
                 break;
             default:
                 for (int k = 0; k < 4; ++k) r[k] = src0[k];
@@ -808,6 +819,24 @@ inline void vp_execute(const uint32_t* vpData, uint32_t vpLen, uint32_t vpStart,
             case VP_SCA_COS:
                 r[0] = r[1] = r[2] = r[3] = __builtin_cosf(s);
                 break;
+            case VP_SCA_BRA: case VP_SCA_BRI: case VP_SCA_BRB: {
+                uint32_t target = insn.constIdx;
+                if (target < numInsns) i = target - 1;
+                break;
+            }
+            case VP_SCA_CAL: case VP_SCA_CLI: case VP_SCA_CLB: {
+                uint32_t target = insn.constIdx;
+                if (callDepth < 4 && target < numInsns) {
+                    callStack[callDepth++] = i;
+                    i = target - 1;
+                }
+                break;
+            }
+            case VP_SCA_RET:
+                if (callDepth > 0) i = callStack[--callDepth];
+                break;
+            case VP_SCA_PSH: case VP_SCA_POP:
+                break;  // CC stack stubs
             default:
                 r[0] = r[1] = r[2] = r[3] = s;
                 break;

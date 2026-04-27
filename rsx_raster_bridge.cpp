@@ -479,6 +479,21 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
     // Dither
     rast_->setDither(s.ditherEnable);
 
+    // Two-sided stencil
+    rast_->setTwoSidedStencil(s.twoSidedStencilEnable);
+    if (s.twoSidedStencilEnable) {
+        rast_->setBackStencilFunc(nv_to_stencilFunc(s.backStencilFunc),
+                                  (uint8_t)(s.backStencilFuncRef & 0xFF),
+                                  (uint8_t)(s.backStencilFuncMask & 0xFF));
+        rast_->setBackStencilOp(nv_to_stencilOp(s.backStencilOpFail),
+                                nv_to_stencilOp(s.backStencilOpZFail),
+                                nv_to_stencilOp(s.backStencilOpZPass));
+        rast_->setBackStencilWriteMask((uint8_t)(s.backStencilWriteMask & 0xFF));
+    }
+
+    // Fog
+    rast_->setFogParams(s.fogMode, s.fogParam0, s.fogParam1);
+
     // Cull
     rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
 
