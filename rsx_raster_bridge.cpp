@@ -10,6 +10,7 @@
 #include <cstring>
 #include <vector>
 #include <algorithm>
+#include <unordered_map>
 
 // ─────────────────────────────────────────────────────────────────
 // DXT (S3TC) block-compression helpers — decode 4×4 blocks to RGBA8
@@ -799,8 +800,18 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
             // sequential constant indices for the GPU-side array.
             std::vector<uint32_t> packed;
             std::vector<float> fpConstants; // 4 floats per constant
+
+            // Pass 1: pack instructions, build byte-offset → packed-index map
+            struct FlowInfo { uint32_t packedIdx; uint32_t opcode;
+                uint32_t elseOff; uint32_t endOff;
+                uint32_t loopEnd; uint32_t loopInit; uint32_t loopIncr; };
+            std::vector<FlowInfo> flowFixups;
+            std::unordered_map<uint32_t, uint32_t> byteToIdx;  // byte_offset → packed_idx
+
             uint32_t pc = 0;
+            uint32_t packedIdx = 0;
             while (pc * 4 + 3 < fpMaxWords && pc < 256) {
+                byteToIdx[pc * 16] = packedIdx;  // each slot is 16 bytes
                 FPDecodedInsn insn = fp_decode(fpData + pc * 4);
 
                 // Check if any source uses inline constant
@@ -875,11 +886,46 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                 packed.push_back(w2);
                 packed.push_back(w3);
                 packed.push_back(w4);
-                packed.push_back(0); // reserved
+                packed.push_back(0); // w5 placeholder for flow control
+
+                // Record flow control info for fixup
+                if (insn.opcode == 0x42 /*IFE*/ || insn.opcode == 0x43 /*LOOP*/ ||
+                    insn.opcode == 0x44 /*REP*/) {
+                    flowFixups.push_back({packedIdx, insn.opcode,
+                        insn.elseOffset, insn.endOffset,
+                        insn.loopEnd, insn.loopInit, insn.loopIncr});
+                }
 
                 if (insn.endFlag) break;
                 // Skip inline constant data (4 extra words) when present
                 pc += hasConst ? 2 : 1;
+                packedIdx++;
+            }
+
+            // Pass 2: fix up flow control w5 words
+            // Offsets are in byte units: else_byte = elseOffset << 2
+            // We map byte offsets to packed instruction indices
+            auto resolveOffset = [&](uint32_t rawOff) -> uint32_t {
+                uint32_t byteOff = rawOff << 2;
+                auto it = byteToIdx.find(byteOff);
+                if (it != byteToIdx.end()) return it->second;
+                // Fallback: offset past end → total instruction count
+                return packedIdx;
+            };
+            for (auto& f : flowFixups) {
+                uint32_t w5 = 0;
+                if (f.opcode == 0x42) { // IFE
+                    uint32_t elseIdx = resolveOffset(f.elseOff);
+                    uint32_t endIdx  = resolveOffset(f.endOff);
+                    w5 = (elseIdx & 0xFFFF) | ((endIdx & 0xFFFF) << 16);
+                } else { // LOOP/REP
+                    uint32_t endIdx = resolveOffset(f.endOff);
+                    w5 = (f.loopEnd & 0xFF) |
+                         ((f.loopInit & 0xFF) << 8) |
+                         ((f.loopIncr & 0xFF) << 16) |
+                         ((endIdx & 0xFF) << 24);
+                }
+                packed[f.packedIdx * 6 + 5] = w5;
             }
 
             uint32_t insnCount = (uint32_t)(packed.size() / 6);

@@ -231,7 +231,15 @@ __device__ bool fpExecute(
     // Values: 0=GT, 1=EQ, 2=LT, 3=UN (unordered/NaN)
     uint8_t cc[2][4] = {{1,1,1,1}, {1,1,1,1}};  // initialized to EQ (all zeros)
 
-    for (uint32_t pc = 0; pc < insnCount; ++pc) {
+    // Flow control stacks
+    uint32_t callStack[4] = {};
+    int callDepth = 0;
+    struct LoopFrame { uint32_t startPC; uint32_t endPC; int counter; int limit; int incr; };
+    LoopFrame loopStack[4] = {};
+    int loopDepth = 0;
+    uint32_t maxIter = insnCount * 64;  // safety guard
+
+    for (uint32_t pc = 0; pc < insnCount && maxIter > 0; ++pc, --maxIter) {
         const uint32_t* iw = insns + pc * 6;
         uint32_t w0 = iw[0];
         uint32_t opcode = w0 & 0x7F;
@@ -561,12 +569,61 @@ __device__ bool fpExecute(
             break;
         }
         // Control flow — not yet fully implemented, treat as NOPs
+        case FP_OP_IFE: {
+            // w5: bits [0:15] = else instruction index, [16:31] = end index
+            uint32_t w5 = iw[5];
+            uint32_t elseIdx = w5 & 0xFFFF;
+            // Conditional check: if CC test fails, skip to else clause
+            bool anyCond = condMask[0] || condMask[1] || condMask[2] || condMask[3];
+            if (!anyCond) {
+                pc = elseIdx - 1;  // -1 because loop increments
+            }
+            // If condition passes, we just fall through into the if-body.
+            // The else/endif boundaries are handled by the structured execution.
+            break;
+        }
+        case FP_OP_LOOP: {
+            uint32_t w5 = iw[5];
+            uint32_t endCtr  = w5 & 0xFF;
+            uint32_t initCtr = (w5 >> 8) & 0xFF;
+            uint32_t incr    = (w5 >> 16) & 0xFF;
+            uint32_t endPC   = (w5 >> 24) & 0xFF;
+            if (loopDepth < 4) {
+                loopStack[loopDepth] = {pc + 1, endPC, (int)initCtr, (int)endCtr, (int)(incr ? incr : 1)};
+                loopDepth++;
+            }
+            break;
+        }
+        case FP_OP_REP: {
+            uint32_t w5 = iw[5];
+            uint32_t repCnt = w5 & 0xFF;
+            uint32_t endPC  = (w5 >> 24) & 0xFF;
+            if (loopDepth < 4) {
+                loopStack[loopDepth] = {pc + 1, endPC, 0, (int)repCnt, 1};
+                loopDepth++;
+            }
+            break;
+        }
         case FP_OP_BRK:
-        case FP_OP_CAL:
-        case FP_OP_IFE:
-        case FP_OP_LOOP:
-        case FP_OP_REP:
+            // Break out of innermost loop
+            if (loopDepth > 0) {
+                pc = loopStack[--loopDepth].endPC - 1;
+            }
+            break;
+        case FP_OP_CAL: {
+            // Call subroutine — push return PC, jump to target
+            uint32_t w5 = iw[5];
+            uint32_t target = w5 & 0xFFFF;
+            if (callDepth < 4 && target < insnCount) {
+                callStack[callDepth++] = pc;
+                pc = target - 1;
+            }
+            break;
+        }
         case FP_OP_RET:
+            if (callDepth > 0) {
+                pc = callStack[--callDepth];
+            }
             break;
         // Pack/unpack — rare, treat as MOV for now
         case FP_OP_PK4:
@@ -595,6 +652,19 @@ __device__ bool fpExecute(
                 else if (rv[k] > 0)  cc[condModReg][k] = 0;  // GT
                 else if (rv[k] == 0) cc[condModReg][k] = 1;  // EQ
                 else                 cc[condModReg][k] = 2;  // LT
+            }
+        }
+
+        // Loop end: when pc+1 reaches endPC, increment counter and loop or exit
+        if (loopDepth > 0) {
+            LoopFrame& lf = loopStack[loopDepth - 1];
+            if (pc + 1 >= lf.endPC) {
+                lf.counter += lf.incr;
+                if (lf.counter < lf.limit) {
+                    pc = lf.startPC - 1;  // -1 because for-loop increments
+                } else {
+                    loopDepth--;
+                }
             }
         }
 
