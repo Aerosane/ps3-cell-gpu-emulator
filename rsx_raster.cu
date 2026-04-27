@@ -622,6 +622,9 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   TexBank texBank,
                                   int scX, int scY, uint32_t scW, uint32_t scH,
                                   int alphaTest, uint32_t alphaRef,
+                                  uint32_t alphaFunc,
+                                  uint32_t colorMask,
+                                  float polyOffsetFactor, float polyOffsetUnits,
                                   int   depthClip,
                                   int   stencilTest,
                                   uint32_t stencilFunc,
@@ -680,6 +683,16 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         float w2 = 1.0f - w0 - w1;
 
         float z = w0 * v0.z + w1 * v1.z + w2 * v2.z;
+
+        // Polygon offset (depth bias) for decals and shadow maps
+        if (polyOffsetFactor != 0.0f || polyOffsetUnits != 0.0f) {
+            // Approximate dz/dx and dz/dy from triangle vertices
+            float dzdx = (v1.z - v0.z) * (v2.y - v0.y) - (v2.z - v0.z) * (v1.y - v0.y);
+            float dzdy = (v2.z - v0.z) * (v1.x - v0.x) - (v1.z - v0.z) * (v2.x - v0.x);
+            float maxSlope = fmaxf(fabsf(dzdx), fabsf(dzdy)) * invArea;
+            float r_unit = 1.0f / 16777216.0f;  // 1/2^24 for 24-bit depth
+            z += polyOffsetFactor * maxSlope + polyOffsetUnits * r_unit;
+        }
 
         // Near/far plane clip (NDC-space depth after /w is mapped to
         // [0,1]; values outside mean the pixel is past the near/far
@@ -751,7 +764,18 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
 
         if (alphaTest) {
             uint32_t af = (uint32_t)(a * 255.0f + 0.5f);
-            if (af <= alphaRef) continue;
+            bool pass = false;
+            switch (alphaFunc) {
+                case 0x0200: pass = false; break;          // NEVER
+                case 0x0201: pass = af <  alphaRef; break;  // LESS
+                case 0x0202: pass = af == alphaRef; break;  // EQUAL
+                case 0x0203: pass = af <= alphaRef; break;  // LEQUAL
+                case 0x0204: pass = af >  alphaRef; break;  // GREATER
+                case 0x0205: pass = af != alphaRef; break;  // NOTEQUAL
+                case 0x0206: pass = af >= alphaRef; break;  // GEQUAL
+                default:     pass = true; break;            // ALWAYS (0x0207)
+            }
+            if (!pass) continue;
         }
 
         if (blendEnable) {
@@ -782,7 +806,17 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             if (i < 0) i = 0; else if (i > 255) i = 255;
             return (uint32_t)i;
         };
-        dstPx = (sat(a) << 24) | (sat(r) << 16) | (sat(g) << 8) | sat(b);
+        uint32_t newPx = (sat(a) << 24) | (sat(r) << 16) | (sat(g) << 8) | sat(b);
+        // Color mask: RSX bit layout — 0x01000000=R, 0x00010000=G, 0x00000100=B, 0x00000001=A
+        if (colorMask != 0x01010101u) {
+            uint32_t keep = 0, write = 0;
+            if (colorMask & 0x01000000u) write |= 0x00FF0000u; else keep |= 0x00FF0000u;
+            if (colorMask & 0x00010000u) write |= 0x0000FF00u; else keep |= 0x0000FF00u;
+            if (colorMask & 0x00000100u) write |= 0x000000FFu; else keep |= 0x000000FFu;
+            if (colorMask & 0x00000001u) write |= 0xFF000000u; else keep |= 0xFF000000u;
+            newPx = (dstPx & keep) | (newPx & write);
+        }
+        dstPx = newPx;
         if (depthWrite) dstZ = z;
     }
 
@@ -1231,6 +1265,9 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   scX_, scY_, scW_, scH_,
                                   alphaTestEnable_ ? 1 : 0,
                                   uint32_t(alphaRef_),
+                                  uint32_t(alphaFunc_),
+                                  colorMask_,
+                                  polyOffsetFactor_, polyOffsetUnits_,
                                   depthClip_ ? 1 : 0,
                                   stencilTest_ ? 1 : 0,
                                   uint32_t(stencilFunc_),

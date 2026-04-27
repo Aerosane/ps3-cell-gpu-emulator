@@ -93,6 +93,11 @@ int rsx_init(RSXState* state) {
     state->colorMask       = 0xFFFFFFFF; // all writes enabled
     state->shadeMode       = 0x1D01;     // SMOOTH
 
+    // Polygon offset defaults
+    state->polyOffsetFillEnable = false;
+    state->polyOffsetFactor     = 0.0f;
+    state->polyOffsetBias       = 0.0f;
+
     // Draw state
     state->currentPrim = PRIM_TRIANGLES;
     state->inBeginEnd  = false;
@@ -343,6 +348,22 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     case NV4097_SET_SHADE_MODE:
         state->shadeMode = data;
         return;
+
+    // ── Polygon offset (depth bias) ──────────────────────────────
+    case NV4097_SET_POLY_OFFSET_FILL_ENABLE:
+        state->polyOffsetFillEnable = (data != 0);
+        return;
+    case NV4097_SET_POLYGON_OFFSET_SCALE_FACTOR: {
+        // Float encoded as uint32_t (reinterpret bits)
+        float f; memcpy(&f, &data, 4);
+        state->polyOffsetFactor = f;
+        return;
+    }
+    case NV4097_SET_POLYGON_OFFSET_BIAS: {
+        float f; memcpy(&f, &data, 4);
+        state->polyOffsetBias = f;
+        return;
+    }
 
     // ── Clear ──────────────────────────────────────────────────
     case NV4097_SET_COLOR_CLEAR_VALUE:

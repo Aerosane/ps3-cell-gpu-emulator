@@ -210,12 +210,24 @@ public:
     void setCullMode(CullMode m) { cullMode_ = m; }
     void setFrontFace(FrontFace f) { frontFace_ = f; }
 
-    // Alpha test: fragments with a*255 < ref are rejected when enabled.
+    // Alpha test: fragments failing the compare function are rejected.
     // Mirrors RSX NV4097_SET_ALPHA_TEST_ENABLE + SET_ALPHA_FUNC/REF.
-    // Only Greater (>) is implemented today since it's the common case;
-    // other funcs can be added as games need them.
+    // Supports all 8 GL compare functions (NEVER=0x200 .. ALWAYS=0x207).
     void setAlphaTest(bool enable, uint8_t ref = 0) {
         alphaTestEnable_ = enable; alphaRef_ = ref;
+        if (enable && alphaFunc_ == 0x0207) alphaFunc_ = 0x0204; // default to GREATER
+    }
+    void setAlphaFunc(uint32_t func) { alphaFunc_ = func; }
+
+    // Color mask: per-channel write enable. RSX format:
+    // bit 0x01000000=R, 0x00010000=G, 0x00000100=B, 0x00000001=A
+    void setColorMask(uint32_t mask) { colorMask_ = mask; }
+
+    // Polygon offset (depth bias): prevents z-fighting for decals/shadows.
+    void setPolygonOffset(bool enable, float factor = 0.0f, float units = 0.0f) {
+        polyOffsetFill_ = enable;
+        polyOffsetFactor_ = enable ? factor : 0.0f;
+        polyOffsetUnits_ = enable ? units : 0.0f;
     }
 
     // Near/far depth clip. When enabled (default), fragments whose
@@ -337,6 +349,11 @@ private:
     uint32_t  scW_{0}, scH_{0};
     bool      alphaTestEnable_{false};
     uint8_t   alphaRef_{0};
+    uint32_t  alphaFunc_{0x0207};  // GL_ALWAYS default
+    uint32_t  colorMask_{0x01010101u};  // RGBA all enabled
+    float     polyOffsetFactor_{0.0f};
+    float     polyOffsetUnits_{0.0f};
+    bool      polyOffsetFill_{false};
     bool      depthClip_{true};
 
     // Fragment program state — pre-decoded microcode uploaded to device.

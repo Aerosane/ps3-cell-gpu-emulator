@@ -120,6 +120,11 @@ static constexpr uint32_t NV4097_SET_DEPTH_FUNC               = 0x00000A6C;
 static constexpr uint32_t NV4097_SET_DEPTH_MASK               = 0x00000A70;
 static constexpr uint32_t NV4097_SET_DEPTH_TEST_ENABLE        = 0x00000A74;
 
+// Polygon offset (depth bias)
+static constexpr uint32_t NV4097_SET_POLY_OFFSET_FILL_ENABLE  = 0x00000A68;
+static constexpr uint32_t NV4097_SET_POLYGON_OFFSET_SCALE_FACTOR = 0x00000A78;
+static constexpr uint32_t NV4097_SET_POLYGON_OFFSET_BIAS      = 0x00000A7C;
+
 // Transform program (vertex shader)
 static constexpr uint32_t NV4097_SET_TRANSFORM_PROGRAM        = 0x00000B80;
 
@@ -318,6 +323,11 @@ struct RSXState {
     uint32_t frontFace;           // 0x0900 CW, 0x0901 CCW
     uint32_t colorMask;           // ARGB bits, 0xFFFFFFFF = all writes enabled
     uint32_t shadeMode;           // 0x1D00 FLAT, 0x1D01 SMOOTH
+
+    // Polygon offset (depth bias)
+    bool     polyOffsetFillEnable;
+    float    polyOffsetFactor;
+    float    polyOffsetBias;
 
     // Vertex arrays (16 slots)
     struct VertexArray {

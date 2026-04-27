@@ -460,6 +460,15 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
         rast_->setStencilWriteMask((uint8_t)(s.stencilWriteMask & 0xFF));
     }
 
+    // Color mask
+    rast_->setColorMask(s.colorMask);
+
+    // Alpha function (full 8 GL compare modes)
+    rast_->setAlphaFunc(s.alphaFunc);
+
+    // Polygon offset (depth bias)
+    rast_->setPolygonOffset(s.polyOffsetFillEnable, s.polyOffsetFactor, s.polyOffsetBias);
+
     // Cull
     rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
 
