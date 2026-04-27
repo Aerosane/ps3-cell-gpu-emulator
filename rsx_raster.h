@@ -210,6 +210,14 @@ public:
     // RSX depth-clamp mode (NV4097_SET_DEPTH_CLAMP_CONTROL).
     void setDepthClip(bool enable) { depthClip_ = enable; }
 
+    // Fragment program — pre-decoded micro-instructions for GPU execution.
+    // Each insn is 8 uint32_t packed: [opcode|masks|texUnit|inputAttr,
+    //  dstReg, src0Type|idx|swz, src1Type|idx|swz, src2Type|idx|swz,
+    //  flags, pad, pad]. Constants are fp32×4 each.
+    // Call with count=0 to disable FP (reverts to fixed texture-replace).
+    int  setFragmentProgram(const uint32_t* packedInsns, uint32_t insnCount,
+                            const float* constants, uint32_t constCount);
+
     // Indexed draw — vertex buffer addressed by an index array.
     // Index type uint16 or uint32 selected via indexIs32.
     uint32_t drawIndexed(const RasterVertex* verts, uint32_t vertexCount,
@@ -313,6 +321,14 @@ private:
     bool      alphaTestEnable_{false};
     uint8_t   alphaRef_{0};
     bool      depthClip_{true};
+
+    // Fragment program state — pre-decoded microcode uploaded to device.
+    // When set (fpInsnCount_ > 0), the rasterizer executes the FP per-pixel
+    // instead of the fixed vertex×texture modulation.
+    uint32_t* d_fpInsns_{nullptr};  // device: packed FPMicroInsn array
+    float*    d_fpConsts_{nullptr}; // device: FP constants (4 floats each)
+    uint32_t  fpInsnCount_{0};
+    uint32_t  fpConstCount_{0};
 
     bool      stencilTest_{false};
     StencilFunc stencilFunc_{StencilFunc::Always};

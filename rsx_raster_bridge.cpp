@@ -420,52 +420,109 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         texBoundForDraw = cachedTexValid_;
     }
 
-    // ── Per-vertex FP shading ─────────────────────────────────
-    // Run the FP for each vertex and replace colors with FP output.
-    // Skip when the rasterizer already has a per-pixel texture bound
-    // (the rasterizer's per-pixel UV interpolation + texture modulation
-    // produces far better results than per-vertex FP with its degenerate
-    // corner-UV sampling).
-    // TODO: True per-pixel FP execution for non-modulate shaders.
-    std::vector<RasterVertex> fpShaded;
-    if (!texBoundForDraw && vram_ && s.fpOffset != 0 && base != nullptr) {
-        const uint32_t* fpData = reinterpret_cast<const uint32_t*>(
-            vram_ + (s.fpOffset & 0x0FFFFFFFu));
+    // ── Per-pixel FP decode + upload ─────────────────────────────
+    // Decode the guest FP microcode into packed instructions and upload
+    // to the GPU rasterizer for per-pixel execution. Falls back to
+    // texture-replace when no FP is available.
+    if (vram_ && s.fpOffset != 0) {
         uint32_t fpOff = s.fpOffset & 0x0FFFFFFFu;
         if (fpOff < vramSize_ && (vramSize_ - fpOff) >= 16) {
+            const uint32_t* fpData = reinterpret_cast<const uint32_t*>(vram_ + fpOff);
             uint32_t fpMaxWords = (uint32_t)((vramSize_ - fpOff) / 4);
             if (fpMaxWords > 16384) fpMaxWords = 16384;
 
-            ps3rsx::HostTextureSamplerCtx tctx{ vram_, vramSize_, &s };
-            fpShaded.resize(count);
-            for (uint32_t i = 0; i < count; ++i) {
-                const RasterVertex& v = base[i];
-                FPFloat4 fpIn[16] = {};
-                fpIn[0] = FPFloat4{{ v.x, v.y, v.z, 1.0f }};
-                fpIn[1] = FPFloat4{{ v.r, v.g, v.b, v.a }};
-                fpIn[2] = FPFloat4{{ 0, 0, 0, 0 }};
-                fpIn[3] = FPFloat4{{ 0, 0, 0, 0 }};
-                fpIn[4] = FPFloat4{{ v.u, v.v, 0, 1 }};
+            // Decode and pack FP instructions.
+            // RSX FP embeds constants inline: when any source uses type=CONST,
+            // the next 4 words after that instruction are the constant's 4 floats
+            // (byte-swapped like all RSX FP data). We extract them and assign
+            // sequential constant indices for the GPU-side array.
+            std::vector<uint32_t> packed;
+            std::vector<float> fpConstants; // 4 floats per constant
+            uint32_t pc = 0;
+            while (pc * 4 + 3 < fpMaxWords && pc < 256) {
+                FPDecodedInsn insn = fp_decode(fpData + pc * 4);
 
-                FPFloat4 fpOut[4] = {};
-                fp_execute(fpData, fpMaxWords, fpIn, fpOut,
-                           ps3rsx::rsx_host_sampler, &tctx);
+                // Check if any source uses inline constant
+                bool hasConst = false;
+                for (int si = 0; si < 3; ++si) {
+                    if (insn.src[si].regType == 2) { // FP_REG_CONSTANT
+                        hasConst = true;
+                        break;
+                    }
+                }
 
-                RasterVertex& o = fpShaded[i];
-                o = v;
-                o.r = fpOut[0].v[0];
-                o.g = fpOut[0].v[1];
-                o.b = fpOut[0].v[2];
-                o.a = fpOut[0].v[3];
+                // Extract inline constant data if present
+                uint32_t constIdx = 0;
+                if (hasConst) {
+                    uint32_t constWordOff = (pc + 1) * 4;
+                    if (constWordOff + 3 < fpMaxWords) {
+                        constIdx = (uint32_t)(fpConstants.size() / 4);
+                        for (int ci = 0; ci < 4; ++ci) {
+                            uint32_t raw = fp_swap_word(fpData[constWordOff + ci]);
+                            float fval;
+                            memcpy(&fval, &raw, sizeof(float));
+                            fpConstants.push_back(fval);
+                        }
+                        for (int si = 0; si < 3; ++si) {
+                            if (insn.src[si].regType == 2) {
+                                insn.src[si].regIdx = constIdx;
+                            }
+                        }
+                    }
+                }
+
+                uint32_t w0 = ((insn.opcode & 0x7F)) |
+                              ((insn.maskX ? 1u : 0u) << 7) |
+                              ((insn.maskY ? 1u : 0u) << 8) |
+                              ((insn.maskZ ? 1u : 0u) << 9) |
+                              ((insn.maskW ? 1u : 0u) << 10) |
+                              ((insn.texUnit & 0xF) << 11) |
+                              ((insn.inputAttr & 0xF) << 15) |
+                              ((insn.saturate ? 1u : 0u) << 19) |
+                              ((insn.endFlag ? 1u : 0u) << 20);
+
+                auto packSrc = [](const FPDecodedSrc& s) -> uint32_t {
+                    return (s.regType & 3) |
+                           ((s.regIdx & 0xFF) << 2) |
+                           ((s.swzX & 3) << 10) |
+                           ((s.swzY & 3) << 12) |
+                           ((s.swzZ & 3) << 14) |
+                           ((s.swzW & 3) << 16) |
+                           ((s.neg ? 1u : 0u) << 18);
+                };
+
+                uint32_t w1 = (insn.dstReg & 0xFF) | (packSrc(insn.src[0]) << 8);
+                uint32_t w2 = packSrc(insn.src[1]);
+                uint32_t w3 = packSrc(insn.src[2]);
+
+                packed.push_back(w0);
+                packed.push_back(w1);
+                packed.push_back(w2);
+                packed.push_back(w3);
+                packed.push_back(0); // reserved
+                packed.push_back(0); // reserved
+
+                if (insn.endFlag) break;
+                // Skip inline constant data (4 extra words) when present
+                pc += hasConst ? 2 : 1;
             }
-            base = fpShaded.data();
+
+            uint32_t insnCount = (uint32_t)(packed.size() / 6);
+            if (insnCount > 0) {
+                uint32_t constCount = (uint32_t)(fpConstants.size() / 4);
+                rast_->setFragmentProgram(packed.data(), insnCount,
+                                          constCount > 0 ? fpConstants.data() : nullptr,
+                                          constCount);
+            }
         }
     }
+
     // ── Fallback: per-vertex texture modulation (no FP active) ──
     // When no fragment program is set and no GPU-side texture is bound,
     // modulate vertex colors by texture unit 0 at each vertex's UV.
     std::vector<RasterVertex> textured;
-    if (!texBoundForDraw && fpShaded.empty() && vram_ && s.textures[0].enabled && base != nullptr) {
+    if (!texBoundForDraw && vram_ && s.textures[0].enabled && base != nullptr &&
+        s.fpOffset == 0) {
         uint8_t texFmt = ((s.textures[0].format >> 8) & 0xFF) & 0x9F;
         bool fmtKnown = (texFmt == 0x85 || texFmt == 0x81);
         if (fmtKnown) {

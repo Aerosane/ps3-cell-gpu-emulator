@@ -37,6 +37,282 @@ __global__ void k_clearDepth(float* __restrict__ dst,
     dst[y * width + x] = value;
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Per-pixel Fragment Program Interpreter
+// ═══════════════════════════════════════════════════════════════
+//
+// Packed instruction format (6 × uint32_t per instruction):
+//   [0] opcode(7) | maskX(1) | maskY(1) | maskZ(1) | maskW(1) |
+//       texUnit(4) | inputAttr(4) | saturate(1) | endFlag(1) | pad(11)
+//   [1] dstReg(8) | src0_type(2) | src0_idx(8) | src0_swz(8) | src0_neg(1) | pad(5)
+//   [2] src1_type(2) | src1_idx(8) | src1_swz(8) | src1_neg(1) | pad(13)
+//   [3] src2_type(2) | src2_idx(8) | src2_swz(8) | src2_neg(1) | pad(13)
+//   [4-5] reserved
+
+// Forward-declare texture helpers (defined later in this file)
+__device__ uint32_t texFetch(const uint32_t* tex,
+    uint32_t tw, uint32_t th, int tx, int ty);
+__device__ void sampleTex(const uint32_t* tex,
+    uint32_t tw, uint32_t th,
+    float u, float v, int bilinear,
+    float& outR, float& outG, float& outB, float& outA);
+
+#define FP_PACK_W0(op, mx, my, mz, mw, tu, ia, sat, end) \
+    (((op)&0x7F) | (((mx)&1)<<7) | (((my)&1)<<8) | (((mz)&1)<<9) | \
+     (((mw)&1)<<10) | (((tu)&0xF)<<11) | (((ia)&0xF)<<15) | \
+     (((sat)&1)<<19) | (((end)&1)<<20))
+
+#define FP_PACK_W1(dst, stype, sidx, sx, sy, sz, sw, sneg) \
+    (((dst)&0xFF) | (((stype)&3)<<8) | (((sidx)&0xFF)<<10) | \
+     (((sx)&3)<<18) | (((sy)&3)<<20) | (((sz)&3)<<22) | (((sw)&3)<<24) | \
+     (((sneg)&1)<<26))
+
+#define FP_PACK_SRC(stype, sidx, sx, sy, sz, sw, sneg) \
+    (((stype)&3) | (((sidx)&0xFF)<<2) | \
+     (((sx)&3)<<10) | (((sy)&3)<<12) | (((sz)&3)<<14) | (((sw)&3)<<16) | \
+     (((sneg)&1)<<18))
+
+// FP opcodes (matching rsx_fp_shader.h)
+#define FP_OP_NOP  0x00
+#define FP_OP_MOV  0x01
+#define FP_OP_MUL  0x02
+#define FP_OP_ADD  0x03
+#define FP_OP_MAD  0x04
+#define FP_OP_DP3  0x05
+#define FP_OP_DP4  0x06
+#define FP_OP_MIN  0x08
+#define FP_OP_MAX  0x09
+#define FP_OP_SLT  0x0A
+#define FP_OP_SGE  0x0B
+#define FP_OP_FRC  0x10
+#define FP_OP_FLR  0x11
+#define FP_OP_TEX  0x17
+#define FP_OP_TXP  0x18
+#define FP_OP_RCP  0x1A
+#define FP_OP_RSQ  0x1B
+#define FP_OP_EX2  0x1C
+#define FP_OP_LG2  0x1D
+#define FP_OP_LRP  0x1F
+#define FP_OP_COS  0x22
+#define FP_OP_SIN  0x23
+#define FP_OP_POW  0x26
+#define FP_OP_FENCB 0x3E
+#define FP_OP_FENCT 0x3D
+
+// Source register types
+#define FP_SRC_TEMP  0
+#define FP_SRC_INPUT 1
+#define FP_SRC_CONST 2
+
+struct FPVec4 { float x, y, z, w; };
+
+// Read a source operand with swizzle and negate
+__device__ __forceinline__ FPVec4 fpReadSrc(
+    uint32_t packed,  // packed source word
+    const FPVec4* temps, uint32_t nTemps,
+    const FPVec4& col0, const FPVec4& tex0,
+    const FPVec4& fragCoord, const float* consts, uint32_t nConsts,
+    uint32_t inputAttr)
+{
+    uint32_t stype = packed & 3;
+    uint32_t sidx  = (packed >> 2) & 0xFF;
+    uint32_t sx    = (packed >> 10) & 3;
+    uint32_t sy    = (packed >> 12) & 3;
+    uint32_t sz    = (packed >> 14) & 3;
+    uint32_t sw    = (packed >> 16) & 3;
+    bool     neg   = (packed >> 18) & 1;
+
+    FPVec4 base = {0,0,0,0};
+    if (stype == FP_SRC_TEMP) {
+        if (sidx < nTemps) base = temps[sidx];
+    } else if (stype == FP_SRC_INPUT) {
+        // inputAttr from instruction word selects which FP input
+        switch (inputAttr) {
+        case 0:  base = fragCoord; break;  // WPOS
+        case 1:  base = col0; break;       // COL0
+        case 4:  base = tex0; break;       // TEX0
+        default: break;
+        }
+    } else if (stype == FP_SRC_CONST) {
+        if (sidx * 4 + 3 < nConsts * 4) {
+            base.x = consts[sidx*4+0]; base.y = consts[sidx*4+1];
+            base.z = consts[sidx*4+2]; base.w = consts[sidx*4+3];
+        }
+    }
+
+    // Apply swizzle
+    float arr[4] = {base.x, base.y, base.z, base.w};
+    FPVec4 result = {arr[sx], arr[sy], arr[sz], arr[sw]};
+
+    if (neg) { result.x = -result.x; result.y = -result.y;
+               result.z = -result.z; result.w = -result.w; }
+    return result;
+}
+
+// Write result to destination with mask and optional saturate
+__device__ __forceinline__ void fpWriteDst(
+    FPVec4* temps, uint32_t dst, const FPVec4& val,
+    bool mx, bool my, bool mz, bool mw, bool sat, uint32_t nTemps)
+{
+    if (dst >= nTemps) return;
+    FPVec4& d = temps[dst];
+    auto clmp = [](float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); };
+    if (mx) d.x = sat ? clmp(val.x) : val.x;
+    if (my) d.y = sat ? clmp(val.y) : val.y;
+    if (mz) d.z = sat ? clmp(val.z) : val.z;
+    if (mw) d.w = sat ? clmp(val.w) : val.w;
+}
+
+// Execute fragment program. Returns final color in r0.
+__device__ void fpExecute(
+    const uint32_t* __restrict__ insns, uint32_t insnCount,
+    const float* __restrict__ consts, uint32_t constCount,
+    const FPVec4& col0,       // vertex color (interpolated)
+    const FPVec4& tex0Coord,  // texture coordinate (interpolated)
+    const FPVec4& fragCoord,  // pixel position
+    const uint32_t* tex, uint32_t texW, uint32_t texH, int texBilinear,
+    float& outR, float& outG, float& outB, float& outA)
+{
+    FPVec4 temps[8] = {};  // r0..r7 (most FPs use few regs)
+    const uint32_t nTemps = 8;
+
+    for (uint32_t pc = 0; pc < insnCount; ++pc) {
+        const uint32_t* iw = insns + pc * 6;
+        uint32_t w0 = iw[0];
+        uint32_t opcode = w0 & 0x7F;
+        bool mx  = (w0 >> 7) & 1;
+        bool my  = (w0 >> 8) & 1;
+        bool mz  = (w0 >> 9) & 1;
+        bool mw  = (w0 >> 10) & 1;
+        uint32_t texUnit  = (w0 >> 11) & 0xF;
+        uint32_t inAttr   = (w0 >> 15) & 0xF;
+        bool sat = (w0 >> 19) & 1;
+        bool end = (w0 >> 20) & 1;
+
+        uint32_t dst = iw[1] & 0xFF;
+        uint32_t src0packed = (iw[1] >> 8);
+        uint32_t src1packed = iw[2];
+        uint32_t src2packed = iw[3];
+
+        FPVec4 s0 = fpReadSrc(src0packed, temps, nTemps, col0, tex0Coord, fragCoord, consts, constCount, inAttr);
+        FPVec4 s1 = fpReadSrc(src1packed, temps, nTemps, col0, tex0Coord, fragCoord, consts, constCount, inAttr);
+        FPVec4 s2 = fpReadSrc(src2packed, temps, nTemps, col0, tex0Coord, fragCoord, consts, constCount, inAttr);
+
+        FPVec4 result = {0,0,0,0};
+
+        switch (opcode) {
+        case FP_OP_NOP:
+        case FP_OP_FENCT:
+        case FP_OP_FENCB:
+            break;
+        case FP_OP_MOV:
+            result = s0;
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_MUL:
+            result = {s0.x*s1.x, s0.y*s1.y, s0.z*s1.z, s0.w*s1.w};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_ADD:
+            result = {s0.x+s1.x, s0.y+s1.y, s0.z+s1.z, s0.w+s1.w};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_MAD:
+            result = {s0.x*s1.x+s2.x, s0.y*s1.y+s2.y, s0.z*s1.z+s2.z, s0.w*s1.w+s2.w};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_DP3: {
+            float d = s0.x*s1.x + s0.y*s1.y + s0.z*s1.z;
+            result = {d, d, d, d};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        case FP_OP_DP4: {
+            float d = s0.x*s1.x + s0.y*s1.y + s0.z*s1.z + s0.w*s1.w;
+            result = {d, d, d, d};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        case FP_OP_MIN:
+            result = {fminf(s0.x,s1.x), fminf(s0.y,s1.y), fminf(s0.z,s1.z), fminf(s0.w,s1.w)};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_MAX:
+            result = {fmaxf(s0.x,s1.x), fmaxf(s0.y,s1.y), fmaxf(s0.z,s1.z), fmaxf(s0.w,s1.w)};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_RCP:
+            result = {1.0f/s0.x, 1.0f/s0.x, 1.0f/s0.x, 1.0f/s0.x};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_RSQ:
+            result = {rsqrtf(fabsf(s0.x)), rsqrtf(fabsf(s0.x)), rsqrtf(fabsf(s0.x)), rsqrtf(fabsf(s0.x))};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_TEX: {
+            // Sample texture unit using src0 as UV
+            float tr, tg, tb, ta;
+            if (tex && texW > 0 && texH > 0 && texUnit == 0) {
+                sampleTex(tex, texW, texH, s0.x, s0.y, texBilinear, tr, tg, tb, ta);
+            } else {
+                tr = tg = tb = ta = 1.0f;
+            }
+            result = {tr, tg, tb, ta};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        }
+        case FP_OP_LRP: // lerp: s0*(s1-s2)+s2 = mix(s2,s1,s0)
+            result = {s0.x*(s1.x-s2.x)+s2.x, s0.y*(s1.y-s2.y)+s2.y,
+                      s0.z*(s1.z-s2.z)+s2.z, s0.w*(s1.w-s2.w)+s2.w};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_FRC:
+            result = {s0.x - floorf(s0.x), s0.y - floorf(s0.y),
+                      s0.z - floorf(s0.z), s0.w - floorf(s0.w)};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_FLR:
+            result = {floorf(s0.x), floorf(s0.y), floorf(s0.z), floorf(s0.w)};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_SLT:
+            result = {s0.x<s1.x?1.f:0.f, s0.y<s1.y?1.f:0.f,
+                      s0.z<s1.z?1.f:0.f, s0.w<s1.w?1.f:0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_SGE:
+            result = {s0.x>=s1.x?1.f:0.f, s0.y>=s1.y?1.f:0.f,
+                      s0.z>=s1.z?1.f:0.f, s0.w>=s1.w?1.f:0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_EX2:
+            result = {exp2f(s0.x), exp2f(s0.x), exp2f(s0.x), exp2f(s0.x)};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_LG2:
+            result = {log2f(fabsf(s0.x)), log2f(fabsf(s0.x)), log2f(fabsf(s0.x)), log2f(fabsf(s0.x))};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_COS:
+            result = {cosf(s0.x), cosf(s0.x), cosf(s0.x), cosf(s0.x)};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        case FP_OP_SIN:
+            result = {sinf(s0.x), sinf(s0.x), sinf(s0.x), sinf(s0.x)};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps);
+            break;
+        default:
+            break;
+        }
+
+        if (end) break;
+    }
+
+    // Output is r0
+    outR = temps[0].x; outG = temps[0].y;
+    outB = temps[0].z; outA = temps[0].w;
+}
+
 __device__ __forceinline__ bool depthCompare(uint32_t func, float src, float dst) {
     switch (func) {
     case 0: return false;            // Never
@@ -198,7 +474,11 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   uint32_t bfSrcRGB, uint32_t bfDstRGB,
                                   uint32_t bfSrcA,   uint32_t bfDstA,
                                   uint32_t beRGB,    uint32_t beA,
-                                  float    ccR, float ccG, float ccB, float ccA) {
+                                  float    ccR, float ccG, float ccB, float ccA,
+                                  const uint32_t* __restrict__ fpInsns,
+                                  uint32_t fpInsnCount,
+                                  const float* __restrict__ fpConsts,
+                                  uint32_t fpConstCount) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -275,13 +555,21 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         float b = w0 * v0.b + w1 * v1.b + w2 * v2.b;
         float a = w0 * v0.a + w1 * v1.a + w2 * v2.a;
 
-        if (tex) {
-            float u = w0 * v0.u + w1 * v1.u + w2 * v2.u;
-            float vv = w0 * v0.v + w1 * v1.v + w2 * v2.v;
+        float u = w0 * v0.u + w1 * v1.u + w2 * v2.u;
+        float vv = w0 * v0.v + w1 * v1.v + w2 * v2.v;
+
+        if (fpInsns && fpInsnCount > 0) {
+            // Per-pixel FP execution
+            FPVec4 col0 = {r, g, b, a};
+            FPVec4 tex0 = {u, vv, 0.0f, 1.0f};
+            FPVec4 fragC = {(float)x + 0.5f, (float)y + 0.5f, z, 1.0f};
+            fpExecute(fpInsns, fpInsnCount, fpConsts, fpConstCount,
+                      col0, tex0, fragC, tex, texW, texH, texBilinear,
+                      r, g, b, a);
+        } else if (tex) {
             float tr, tg, tb, ta;
             sampleTex(tex, texW, texH, u, vv, texBilinear, tr, tg, tb, ta);
-            // Use texture color directly — real FP controls combination;
-            // modulating by per-face vertex color tints/kills channels.
+            // Fallback: texture replaces vertex color when no FP
             r = tr; g = tg; b = tb; a = ta;
         }
 
@@ -535,6 +823,9 @@ void CudaRasterizer::shutdown() {
     mrtCount_ = 1;
     if (d_tex_) { cudaFree(d_tex_); d_tex_ = nullptr; }
     texW_ = texH_ = 0;
+    if (d_fpInsns_) { cudaFree(d_fpInsns_); d_fpInsns_ = nullptr; }
+    if (d_fpConsts_) { cudaFree(d_fpConsts_); d_fpConsts_ = nullptr; }
+    fpInsnCount_ = 0; fpConstCount_ = 0;
     fb_.width = fb_.height = 0;
 }
 
@@ -599,6 +890,28 @@ int CudaRasterizer::setTexture2D(const uint32_t* data, uint32_t w, uint32_t h) {
     cudaMemcpy(d_tex_, data, bytes, cudaMemcpyHostToDevice);
     texW_ = w;
     texH_ = h;
+    return 0;
+}
+
+int CudaRasterizer::setFragmentProgram(const uint32_t* packedInsns, uint32_t insnCount,
+                                       const float* constants, uint32_t constCount) {
+    if (d_fpInsns_) { cudaFree(d_fpInsns_); d_fpInsns_ = nullptr; }
+    if (d_fpConsts_) { cudaFree(d_fpConsts_); d_fpConsts_ = nullptr; }
+    fpInsnCount_ = 0;
+    fpConstCount_ = 0;
+    if (!packedInsns || insnCount == 0) return 0;
+
+    size_t iBytes = size_t(insnCount) * 6 * sizeof(uint32_t);
+    CU_CHECK(cudaMalloc(&d_fpInsns_, iBytes));
+    cudaMemcpy(d_fpInsns_, packedInsns, iBytes, cudaMemcpyHostToDevice);
+    fpInsnCount_ = insnCount;
+
+    if (constants && constCount > 0) {
+        size_t cBytes = size_t(constCount) * 4 * sizeof(float);
+        CU_CHECK(cudaMalloc(&d_fpConsts_, cBytes));
+        cudaMemcpy(d_fpConsts_, constants, cBytes, cudaMemcpyHostToDevice);
+        fpConstCount_ = constCount;
+    }
     return 0;
 }
 
@@ -744,7 +1057,9 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   uint32_t(bfSrcA_),   uint32_t(bfDstA_),
                                   uint32_t(beRGB_),    uint32_t(beA_),
                                   blendConstR_, blendConstG_,
-                                  blendConstB_, blendConstA_);
+                                  blendConstB_, blendConstA_,
+                                  d_fpInsns_, fpInsnCount_,
+                                  d_fpConsts_, fpConstCount_);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;
