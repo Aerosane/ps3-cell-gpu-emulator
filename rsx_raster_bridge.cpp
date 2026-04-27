@@ -772,6 +772,9 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         // RSX: 1=NEAREST, 2=LINEAR
         uint8_t mag = (t.filter >> 24) & 0xF;
         rast_->setTextureMagFilter(tu, (mag == 1) ? 0 : 1);  // 0=NEAREST, 1=LINEAR
+        // Min filter: bits [19:16]. RSX: 1=NEAREST, 2=LINEAR, 5=NEAREST_MIPMAP_NEAREST, etc.
+        uint8_t minF = (t.filter >> 16) & 0xF;
+        rast_->setTextureMinFilter(tu, (minF == 1 || minF == 4 || minF == 5) ? 0 : 1);
         if (tu == 0) {
             cachedTexOff_ = t.offset;
             cachedTexW_ = W;

@@ -211,6 +211,9 @@ public:
     void setTextureMagFilter(uint32_t unit, uint8_t mag) {
         if (unit < MAX_TEX_UNITS) magFilter_[unit] = mag;
     }
+    void setTextureMinFilter(uint32_t unit, uint8_t min) {
+        if (unit < MAX_TEX_UNITS) minFilter_[unit] = min;
+    }
     void setTextureWrap(uint32_t unit, uint8_t wrapS, uint8_t wrapT) {
         if (unit < MAX_TEX_UNITS) { wrapS_[unit] = wrapS; wrapT_[unit] = wrapT; }
     }
@@ -372,6 +375,7 @@ private:
     uint8_t   wrapS_[MAX_TEX_UNITS]{1,1,1,1};  // default REPEAT
     uint8_t   wrapT_[MAX_TEX_UNITS]{1,1,1,1};
     uint8_t   magFilter_[MAX_TEX_UNITS]{1,1,1,1};  // default LINEAR (bilinear)
+    uint8_t   minFilter_[MAX_TEX_UNITS]{1,1,1,1};  // default LINEAR
     bool      texBilinear_{true};
     CullMode  cullMode_{CullMode::None};
     FrontFace frontFace_{FrontFace::CCW};
