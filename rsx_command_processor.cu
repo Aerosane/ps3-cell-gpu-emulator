@@ -105,6 +105,28 @@ int rsx_init(RSXState* state) {
     state->polyOffsetFactor     = 0.0f;
     state->polyOffsetBias       = 0.0f;
 
+    // Logic op defaults
+    state->logicOpEnable = false;
+    state->logicOp       = 0x1503; // GL_COPY (passthrough)
+
+    // Dither default
+    state->ditherEnable  = true;  // RSX default is enabled
+
+    // Two-sided stencil defaults
+    state->twoSidedStencilEnable = false;
+    state->backStencilFunc       = 0x0207; // ALWAYS
+    state->backStencilFuncRef    = 0;
+    state->backStencilFuncMask   = 0xFF;
+    state->backStencilOpFail     = 0x1E00; // KEEP
+    state->backStencilOpZFail    = 0x1E00;
+    state->backStencilOpZPass    = 0x1E00;
+    state->backStencilWriteMask  = 0xFF;
+
+    // Fog defaults
+    state->fogMode   = 0x2601; // LINEAR
+    state->fogParam0 = 0.0f;
+    state->fogParam1 = 1.0f;
+
     // Draw state
     state->currentPrim = PRIM_TRIANGLES;
     state->inBeginEnd  = false;
@@ -392,6 +414,60 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     case NV4097_SET_POLYGON_OFFSET_BIAS: {
         float f; memcpy(&f, &data, 4);
         state->polyOffsetBias = f;
+        return;
+    }
+
+    // ── Logic op ─────────────────────────────────────────────────
+    case NV4097_SET_LOGIC_OP_ENABLE:
+        state->logicOpEnable = (data != 0);
+        return;
+    case NV4097_SET_LOGIC_OP:
+        state->logicOp = data;
+        return;
+
+    // ── Dither ───────────────────────────────────────────────────
+    case NV4097_SET_DITHER_ENABLE:
+        state->ditherEnable = (data != 0);
+        return;
+
+    // ── Two-sided stencil ────────────────────────────────────────
+    case NV4097_SET_TWO_SIDED_STENCIL_TEST_ENABLE:
+        state->twoSidedStencilEnable = (data != 0);
+        return;
+    case NV4097_SET_BACK_STENCIL_FUNC:
+        state->backStencilFunc = data;
+        return;
+    case NV4097_SET_BACK_STENCIL_FUNC_REF:
+        state->backStencilFuncRef = data;
+        return;
+    case NV4097_SET_BACK_STENCIL_FUNC_MASK:
+        state->backStencilFuncMask = data;
+        return;
+    case NV4097_SET_BACK_STENCIL_OP_FAIL:
+        state->backStencilOpFail = data;
+        return;
+    case NV4097_SET_BACK_STENCIL_OP_ZFAIL:
+        state->backStencilOpZFail = data;
+        return;
+    case NV4097_SET_BACK_STENCIL_OP_ZPASS:
+        state->backStencilOpZPass = data;
+        return;
+    case NV4097_SET_BACK_STENCIL_MASK:
+        state->backStencilWriteMask = data;
+        return;
+
+    // ── Fog ──────────────────────────────────────────────────────
+    case NV4097_SET_FOG_MODE:
+        state->fogMode = data;
+        return;
+    case NV4097_SET_FOG_PARAMS: {
+        float f; memcpy(&f, &data, 4);
+        state->fogParam0 = f;
+        return;
+    }
+    case NV4097_SET_FOG_PARAMS + 4: {
+        float f; memcpy(&f, &data, 4);
+        state->fogParam1 = f;
         return;
     }
 

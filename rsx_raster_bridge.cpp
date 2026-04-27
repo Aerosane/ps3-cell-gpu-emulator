@@ -469,6 +469,15 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
     // Polygon offset (depth bias)
     rast_->setPolygonOffset(s.polyOffsetFillEnable, s.polyOffsetFactor, s.polyOffsetBias);
 
+    // Flat shading (provoking vertex) vs smooth interpolation
+    rast_->setFlatShade(s.shadeMode == 0x1D00);
+
+    // Logic op (bitwise framebuffer ops)
+    rast_->setLogicOp(s.logicOpEnable, s.logicOp);
+
+    // Dither
+    rast_->setDither(s.ditherEnable);
+
     // Cull
     rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
 

@@ -608,6 +608,33 @@ __device__ __forceinline__ float blendEquation(uint32_t eq,
     }
 }
 
+// GL logic op: operates on 8-bit channel values (s=source, d=dest).
+// GL enums 0x1500..0x150F map to: CLEAR, AND, AND_REVERSE, COPY,
+// AND_INVERTED, NOOP, XOR, OR, NOR, EQUIV, INVERT, OR_REVERSE,
+// COPY_INVERTED, OR_INVERTED, NAND, SET.
+__device__ __forceinline__ uint8_t logicOpApply(uint32_t op,
+                                                uint8_t s, uint8_t d) {
+    switch (op & 0xF) {
+    case 0x0: return 0;            // CLEAR
+    case 0x1: return s & d;        // AND
+    case 0x2: return s & ~d;       // AND_REVERSE
+    case 0x3: return s;            // COPY
+    case 0x4: return ~s & d;       // AND_INVERTED
+    case 0x5: return d;            // NOOP
+    case 0x6: return s ^ d;        // XOR
+    case 0x7: return s | d;        // OR
+    case 0x8: return ~(s | d);     // NOR
+    case 0x9: return ~(s ^ d);     // EQUIV
+    case 0xA: return ~d;           // INVERT
+    case 0xB: return s | ~d;       // OR_REVERSE
+    case 0xC: return ~s;           // COPY_INVERTED
+    case 0xD: return ~s | d;       // OR_INVERTED
+    case 0xE: return ~(s & d);     // NAND
+    case 0xF: return 0xFF;         // SET
+    default:  return s;
+    }
+}
+
 __device__ __forceinline__ bool stencilCompare(uint32_t func, uint8_t a, uint8_t b) {
     switch (func) {
     case 0: return false;
@@ -744,7 +771,11 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   uint32_t fpConstCount,
                                   uint32_t* __restrict__ mrtB,
                                   uint32_t* __restrict__ mrtC,
-                                  uint32_t* __restrict__ mrtD) {
+                                  uint32_t* __restrict__ mrtD,
+                                  int flatShade,
+                                  int logicOpEnable,
+                                  uint32_t logicOp,
+                                  int ditherEnable) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -830,11 +861,18 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         if (!sPass) continue;
         if (!zPass) continue;
 
-        float r = w0 * v0.r + w1 * v1.r + w2 * v2.r;
-        float g = w0 * v0.g + w1 * v1.g + w2 * v2.g;
-        float b = w0 * v0.b + w1 * v1.b + w2 * v2.b;
-        float a = w0 * v0.a + w1 * v1.a + w2 * v2.a;
+        // Vertex attribute interpolation: smooth (barycentric) or flat (provoking = v2)
+        float r, g, b, a;
+        if (flatShade) {
+            r = v2.r; g = v2.g; b = v2.b; a = v2.a;
+        } else {
+            r = w0 * v0.r + w1 * v1.r + w2 * v2.r;
+            g = w0 * v0.g + w1 * v1.g + w2 * v2.g;
+            b = w0 * v0.b + w1 * v1.b + w2 * v2.b;
+            a = w0 * v0.a + w1 * v1.a + w2 * v2.a;
+        }
 
+        // Texcoords always interpolated (even in flat shading mode)
         float u = w0 * v0.u + w1 * v1.u + w2 * v2.u;
         float vv = w0 * v0.v + w1 * v1.v + w2 * v2.v;
 
@@ -844,11 +882,16 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             FPVec4 fpIn[8];
             fpIn[0] = {(float)x + 0.5f, (float)y + 0.5f, z, 1.0f};  // WPOS
             fpIn[1] = {r, g, b, a};  // COL0
-            fpIn[2] = {w0*v0.col1[0]+w1*v1.col1[0]+w2*v2.col1[0],
-                       w0*v0.col1[1]+w1*v1.col1[1]+w2*v2.col1[1],
-                       w0*v0.col1[2]+w1*v1.col1[2]+w2*v2.col1[2],
-                       w0*v0.col1[3]+w1*v1.col1[3]+w2*v2.col1[3]};  // COL1
-            fpIn[3] = {w0*v0.fog+w1*v1.fog+w2*v2.fog, 0, 0, 1};  // FOGC
+            if (flatShade) {
+                fpIn[2] = {v2.col1[0], v2.col1[1], v2.col1[2], v2.col1[3]};
+                fpIn[3] = {v2.fog, 0, 0, 1};
+            } else {
+                fpIn[2] = {w0*v0.col1[0]+w1*v1.col1[0]+w2*v2.col1[0],
+                           w0*v0.col1[1]+w1*v1.col1[1]+w2*v2.col1[1],
+                           w0*v0.col1[2]+w1*v1.col1[2]+w2*v2.col1[2],
+                           w0*v0.col1[3]+w1*v1.col1[3]+w2*v2.col1[3]};
+                fpIn[3] = {w0*v0.fog+w1*v1.fog+w2*v2.fog, 0, 0, 1};
+            }
             fpIn[4] = {u, vv, 0.0f, 1.0f};  // TEX0
             fpIn[5] = {w0*v0.tex1[0]+w1*v1.tex1[0]+w2*v2.tex1[0],
                        w0*v0.tex1[1]+w1*v1.tex1[1]+w2*v2.tex1[1], 0, 1};  // TEX1
@@ -912,12 +955,39 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             a = blendEquation(beA,   a * fSa, da * fDa);
         }
 
+        // Ordered 4×4 Bayer dither: small perturbation to reduce banding.
+        // Applied before quantization to 8-bit. Dither strength ≈ ±0.5/255.
+        if (ditherEnable) {
+            static constexpr float bayerD = 1.0f / 255.0f;
+            static constexpr float bayer4[4][4] = {
+                { -0.46875f * bayerD,  0.03125f * bayerD, -0.34375f * bayerD,  0.15625f * bayerD},
+                {  0.28125f * bayerD, -0.21875f * bayerD,  0.40625f * bayerD, -0.09375f * bayerD},
+                { -0.28125f * bayerD,  0.21875f * bayerD, -0.40625f * bayerD,  0.09375f * bayerD},
+                {  0.46875f * bayerD, -0.03125f * bayerD,  0.34375f * bayerD, -0.15625f * bayerD}
+            };
+            float d = bayer4[y & 3][x & 3];
+            r += d; g += d; b += d;
+        }
+
         auto sat = [](float v) -> uint32_t {
             int i = (int)(v * 255.0f + 0.5f);
             if (i < 0) i = 0; else if (i > 255) i = 255;
             return (uint32_t)i;
         };
         uint32_t newPx = (sat(a) << 24) | (sat(r) << 16) | (sat(g) << 8) | sat(b);
+
+        // Logic op: bitwise operation on quantized source/dest (replaces blend output)
+        if (logicOpEnable) {
+            uint8_t sA = (uint8_t)(newPx >> 24), dA = (uint8_t)(dstPx >> 24);
+            uint8_t sR = (uint8_t)(newPx >> 16), dR = (uint8_t)(dstPx >> 16);
+            uint8_t sG = (uint8_t)(newPx >> 8),  dG = (uint8_t)(dstPx >> 8);
+            uint8_t sB = (uint8_t)(newPx),        dB = (uint8_t)(dstPx);
+            newPx = ((uint32_t)logicOpApply(logicOp, sA, dA) << 24) |
+                    ((uint32_t)logicOpApply(logicOp, sR, dR) << 16) |
+                    ((uint32_t)logicOpApply(logicOp, sG, dG) << 8)  |
+                    (uint32_t)logicOpApply(logicOp, sB, dB);
+        }
+
         // Color mask: RSX bit layout — 0x01000000=R, 0x00010000=G, 0x00000100=B, 0x00000001=A
         if (colorMask != 0x01010101u) {
             uint32_t keep = 0, write = 0;
@@ -1411,7 +1481,11 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   blendConstB_, blendConstA_,
                                   d_fpInsns_, fpInsnCount_,
                                   d_fpConsts_, fpConstCount_,
-                                  d_colorB_, d_colorC_, d_colorD_);
+                                  d_colorB_, d_colorC_, d_colorD_,
+                                  flatShade_ ? 1 : 0,
+                                  logicOpEnable_ ? 1 : 0,
+                                  logicOp_,
+                                  ditherEnable_ ? 1 : 0);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;

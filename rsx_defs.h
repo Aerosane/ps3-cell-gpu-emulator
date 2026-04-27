@@ -98,6 +98,24 @@ static constexpr uint32_t NV4097_SET_STENCIL_OP_ZFAIL         = 0x00000340;
 static constexpr uint32_t NV4097_SET_STENCIL_OP_ZPASS         = 0x00000344;
 static constexpr uint32_t NV4097_SET_SHADE_MODE               = 0x00000368;
 
+// Logic op
+static constexpr uint32_t NV4097_SET_LOGIC_OP_ENABLE          = 0x00000D04;
+static constexpr uint32_t NV4097_SET_LOGIC_OP                 = 0x00000D08;
+
+// Two-sided stencil
+static constexpr uint32_t NV4097_SET_TWO_SIDED_STENCIL_TEST_ENABLE = 0x00000D54;
+static constexpr uint32_t NV4097_SET_BACK_STENCIL_FUNC        = 0x00000D58;
+static constexpr uint32_t NV4097_SET_BACK_STENCIL_FUNC_REF    = 0x00000D5C;
+static constexpr uint32_t NV4097_SET_BACK_STENCIL_FUNC_MASK   = 0x00000D60;
+static constexpr uint32_t NV4097_SET_BACK_STENCIL_OP_FAIL     = 0x00000D64;
+static constexpr uint32_t NV4097_SET_BACK_STENCIL_OP_ZFAIL    = 0x00000D68;
+static constexpr uint32_t NV4097_SET_BACK_STENCIL_OP_ZPASS    = 0x00000D6C;
+static constexpr uint32_t NV4097_SET_BACK_STENCIL_MASK        = 0x00000D70;
+
+// Fog
+static constexpr uint32_t NV4097_SET_FOG_MODE                 = 0x000008A4;
+static constexpr uint32_t NV4097_SET_FOG_PARAMS               = 0x000008A8; // 2 floats (param0, param1)
+
 // Depth bounds
 static constexpr uint32_t NV4097_SET_DEPTH_BOUNDS_TEST_ENABLE = 0x00000380;
 
@@ -332,6 +350,28 @@ struct RSXState {
     bool     polyOffsetFillEnable;
     float    polyOffsetFactor;
     float    polyOffsetBias;
+
+    // Logic op
+    bool     logicOpEnable;
+    uint32_t logicOp;             // GL logic op enum (0x1500..0x150F)
+
+    // Dither
+    bool     ditherEnable;
+
+    // Two-sided stencil (back face)
+    bool     twoSidedStencilEnable;
+    uint32_t backStencilFunc;
+    uint32_t backStencilFuncRef;
+    uint32_t backStencilFuncMask;
+    uint32_t backStencilOpFail;
+    uint32_t backStencilOpZFail;
+    uint32_t backStencilOpZPass;
+    uint32_t backStencilWriteMask;
+
+    // Fog
+    uint32_t fogMode;             // 0x2601=LINEAR, 0x0800=EXP, 0x0801=EXP2
+    float    fogParam0;           // start (linear), density (exp/exp2)
+    float    fogParam1;           // end (linear), unused (exp)
 
     // Vertex arrays (16 slots)
     struct VertexArray {

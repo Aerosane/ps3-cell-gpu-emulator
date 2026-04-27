@@ -230,6 +230,26 @@ public:
         polyOffsetUnits_ = enable ? units : 0.0f;
     }
 
+    // Flat shading: use provoking vertex color for the whole triangle
+    // instead of barycentric interpolation. RSX: 0x1D00=FLAT, 0x1D01=SMOOTH.
+    void setFlatShade(bool flat) { flatShade_ = flat; }
+
+    // Logic op: bitwise operations on framebuffer pixels post-blend.
+    // GL enums 0x1500..0x150F (CLEAR, AND, AND_REVERSE, COPY, ..., SET).
+    void setLogicOp(bool enable, uint32_t op = 0x1503) {
+        logicOpEnable_ = enable; logicOp_ = op;
+    }
+
+    // Dither: ordered 4×4 Bayer dither for banding reduction on low-bit
+    // surfaces. RSX default is enabled.
+    void setDither(bool enable) { ditherEnable_ = enable; }
+
+    // Fog: hardware fog computation from VP fog coordinate.
+    // mode: 0x2601=LINEAR, 0x0800=EXP, 0x0801=EXP2
+    void setFogParams(uint32_t mode, float param0, float param1) {
+        fogMode_ = mode; fogParam0_ = param0; fogParam1_ = param1;
+    }
+
     // Near/far depth clip. When enabled (default), fragments whose
     // interpolated depth falls outside [0,1] are rejected. Disable for
     // RSX depth-clamp mode (NV4097_SET_DEPTH_CLAMP_CONTROL).
@@ -355,6 +375,13 @@ private:
     float     polyOffsetUnits_{0.0f};
     bool      polyOffsetFill_{false};
     bool      depthClip_{true};
+    bool      flatShade_{false};
+    bool      logicOpEnable_{false};
+    uint32_t  logicOp_{0x1503};       // GL_COPY
+    bool      ditherEnable_{true};    // RSX default on
+    uint32_t  fogMode_{0x2601};       // LINEAR
+    float     fogParam0_{0.0f};
+    float     fogParam1_{1.0f};
 
     // Fragment program state — pre-decoded microcode uploaded to device.
     // When set (fpInsnCount_ > 0), the rasterizer executes the FP per-pixel
