@@ -658,6 +658,21 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         return;
     }
 
+    // ── Inline vertex data (SET_VERTEX_DATA4F_M) ──────────────
+    // 16 attributes × 4 floats each, stride 0x10 per attribute
+    if (method >= NV4097_SET_VERTEX_DATA4F_M &&
+        method <  NV4097_SET_VERTEX_DATA4F_M + 16 * 0x10) {
+        uint32_t byteOff = method - NV4097_SET_VERTEX_DATA4F_M;
+        uint32_t attr = byteOff / 0x10;
+        uint32_t comp = (byteOff % 0x10) / 4;
+        if (attr < 16 && comp < 4) {
+            float fval;
+            memcpy(&fval, &data, 4);
+            state->vertexData4f[attr][comp] = fval;
+        }
+        return;
+    }
+
     // ── Transform program upload (sequential words) ────────────
     // NV47 uploads VP microcode through a small window at 0x0B80.
     // Real hardware uses non-incrementing writes; limit to 32 words per batch.

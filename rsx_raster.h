@@ -290,6 +290,10 @@ public:
     // RSX depth-clamp mode (NV4097_SET_DEPTH_CLAMP_CONTROL).
     void setDepthClip(bool enable) { depthClip_ = enable; }
     void setFpDepthReplace(bool enable) { fpDepthReplace_ = enable; }
+    void setShaderWindow(int origin, float height) {
+        shaderWindowOrigin_ = origin;
+        shaderWindowHeight_ = height;
+    }
 
     // Fragment program — pre-decoded micro-instructions for GPU execution.
     // Each insn is 8 uint32_t packed: [opcode|masks|texUnit|inputAttr,
@@ -433,6 +437,8 @@ private:
     uint32_t  fpInsnCount_{0};
     uint32_t  fpConstCount_{0};
     bool      fpDepthReplace_{false};
+    int       shaderWindowOrigin_{0};   // 0=top, 1=bottom
+    float     shaderWindowHeight_{720}; // default 720p
 
     bool      stencilTest_{false};
     StencilFunc stencilFunc_{StencilFunc::Always};

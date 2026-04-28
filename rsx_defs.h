@@ -137,6 +137,9 @@ static constexpr uint32_t NV4097_SET_SCISSOR_VERTICAL         = 0x000008C4;
 // Shader programs
 static constexpr uint32_t NV4097_SET_SHADER_PROGRAM          = 0x000008E4;
 
+// Inline vertex data (4 floats per attribute, 16 attributes)
+static constexpr uint32_t NV4097_SET_VERTEX_DATA4F_M         = 0x00001C00;
+
 // Viewport
 static constexpr uint32_t NV4097_SET_VIEWPORT_HORIZONTAL  = 0x00000A00;
 static constexpr uint32_t NV4097_SET_VIEWPORT_VERTICAL    = 0x00000A04;
@@ -406,6 +409,9 @@ struct RSXState {
         uint32_t format;    // type | (size << 4) | (stride << 8)
         bool     enabled;
     } vertexArrays[16];
+
+    // Inline vertex data (SET_VERTEX_DATA4F_M): per-attribute constant fallback
+    float    vertexData4f[16][4];  // 16 attrs × 4 floats
 
     // Vertex program (transform program)
     uint32_t vpStart;           // start instruction index

@@ -1047,7 +1047,9 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   float depthBoundsMin,
                                   float depthBoundsMax,
                                   int twoSidedColor,
-                                  int fpDepthReplace) {
+                                  int fpDepthReplace,
+                                  int shaderWindowOrigin,
+                                  float shaderWindowHeight) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -1205,7 +1207,11 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             // RSX FP input mapping: 0=WPOS, 1=COL0, 2=COL1, 3=FOGC,
             // 4-13=TEX0-TEX9, 14=SSA
             FPVec4 fpIn[15];
-            fpIn[0] = {(float)x + 0.5f, (float)y + 0.5f, z, 1.0f};  // WPOS
+            // WPOS: origin 0=top (Y as-is), origin 1=bottom (Y flipped)
+            float wposY = (shaderWindowOrigin == 0)
+                        ? (float)y + 0.5f
+                        : shaderWindowHeight - ((float)y + 0.5f);
+            fpIn[0] = {(float)x + 0.5f, wposY, z, 1.0f};  // WPOS
             fpIn[1] = {r, g, b, a};  // COL0 (or BFC0 for back faces)
             fpIn[2] = {col1R, col1G, col1B, col1A};  // COL1 (or BFC1 for back faces)
             if (flatShade) {
@@ -1907,7 +1913,9 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   depthBoundsTestEnable_ ? 1 : 0,
                                   depthBoundsMin_, depthBoundsMax_,
                                   twoSidedColor_ ? 1 : 0,
-                                  fpDepthReplace_ ? 1 : 0);
+                                  fpDepthReplace_ ? 1 : 0,
+                                  shaderWindowOrigin_,
+                                  shaderWindowHeight_);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;

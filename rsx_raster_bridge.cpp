@@ -504,6 +504,14 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
     // FP depth replace: fpControl bit 0 enables fragment shader depth write
     rast_->setFpDepthReplace((s.fpControl & 1) != 0);
 
+    // Shader window: WPOS Y origin and height
+    {
+        uint32_t swH = s.shaderWindow & 0xFFFF;
+        int swOrigin = (s.shaderWindow >> 16) & 1;  // 0=top, 1=bottom
+        if (swH == 0) swH = s.surfaceHeight;
+        rast_->setShaderWindow(swOrigin, (float)swH);
+    }
+
     // Cull
     rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
 
@@ -558,8 +566,15 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         for (uint32_t i = 0; i < count; ++i) {
             VPFloat4 inputs[16] = {};
             // Populate VP inputs from each enabled VA → input[va_idx]
+            // Disabled attributes fall back to vertexData4f (inline constants)
             for (int va = 0; va < 16; ++va) {
-                if (!s.vertexArrays[va].enabled) continue;
+                if (!s.vertexArrays[va].enabled) {
+                    inputs[va].v[0] = s.vertexData4f[va][0];
+                    inputs[va].v[1] = s.vertexData4f[va][1];
+                    inputs[va].v[2] = s.vertexData4f[va][2];
+                    inputs[va].v[3] = s.vertexData4f[va][3];
+                    continue;
+                }
                 float attr[4] = {0, 0, 0, 1};
                 decode_attr(vram_, vramSize_, s.vertexArrays[va],
                             first + i, 4, attr);
