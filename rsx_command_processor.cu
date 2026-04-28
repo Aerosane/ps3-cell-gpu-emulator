@@ -536,6 +536,10 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         state->shaderWindow = data;
         return;
 
+    case NV4097_SET_SHADER_CONTROL:
+        state->sRGBWrite = (data & 2) != 0;  // bit 1 = sRGB write enable
+        return;
+
     case NV4097_SET_POINT_SIZE:
         {
             float sz;

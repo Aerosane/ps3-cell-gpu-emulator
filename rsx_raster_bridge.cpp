@@ -523,6 +523,9 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
     // User clip planes
     rast_->setClipPlaneControl(s.userClipPlaneControl);
 
+    // sRGB framebuffer write
+    rast_->setSRGBWrite(s.sRGBWrite);
+
     // Cull
     rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
 

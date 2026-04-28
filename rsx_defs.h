@@ -207,6 +207,7 @@ static constexpr uint32_t NV4097_SET_TEXTURE_CONTROL3         = 0x00000B00; // d
 
 // Clear / present
 static constexpr uint32_t NV4097_SET_SHADER_WINDOW           = 0x00001D88;
+static constexpr uint32_t NV4097_SET_SHADER_CONTROL          = 0x00001D60;  // bit1=sRGB write
 static constexpr uint32_t NV4097_SET_ZSTENCIL_CLEAR_VALUE    = 0x00001D8C;
 static constexpr uint32_t NV4097_SET_COLOR_CLEAR_VALUE       = 0x00001D90;
 static constexpr uint32_t NV4097_CLEAR_SURFACE               = 0x00001D94;
@@ -450,6 +451,7 @@ struct RSXState {
     uint32_t colorMaskMrt;         // per-MRT (1-3) color write masks
     uint32_t vpAttribOutputMask;   // which VP outputs are active
     uint32_t freqDividerOp;        // vertex attrib instancing dividers
+    bool     sRGBWrite;            // gamma encode on FB write
 
     // Transform constants (up to 468 × vec4 on NV47; round up to 512)
     float    vpConstants[512][4];

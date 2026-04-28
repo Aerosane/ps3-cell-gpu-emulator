@@ -68,6 +68,11 @@ __device__ void sampleTex3D(const uint32_t* tex,
     float u, float v, float w, int bilinear,
     float& ro, float& go, float& bo, float& ao,
     uint8_t wrapS, uint8_t wrapT, uint8_t wrapR, uint32_t borderColor);
+__device__ void sampleTexLod(
+    const uint32_t* tex, uint32_t baseW, uint32_t baseH,
+    float u, float v, float lod, uint8_t mipLevels, uint8_t minFilt,
+    float& r, float& g, float& b, float& a,
+    uint8_t wrapS, uint8_t wrapT, uint32_t borderColor);
 
 // Apply RSX texture channel remap to sampled RGBA.
 // remap16: bits [7:0] = channel_map (2b × ARGB), bits [15:8] = control (2b × ARGB)
@@ -178,7 +183,7 @@ __device__ __forceinline__ void texRemap(uint16_t remap16,
 
 struct FPVec4 { float x, y, z, w; };
 
-// Texture bank passed to kernel — 4 units
+// Texture bank passed to kernel — 8 units
 struct TexBank {
     const uint32_t* tex[8];
     uint32_t w[8], h[8];
@@ -188,6 +193,8 @@ struct TexBank {
     uint8_t magFilter[8];        // 0=NEAREST, 1=LINEAR (per unit)
     uint32_t borderColor[8];     // ARGB32 border color for CLAMP_TO_BORDER
     uint8_t dimension[8];        // 1=1D, 2=2D, 3=3D, 6=CUBE
+    uint8_t mipLevels[8];        // number of mip levels stored (1=base only)
+    uint8_t minFilter[8];        // RSX min filter: 1=NEAREST, 2=LINEAR, 3-6=mipmap modes
 };
 
 // Read a source operand with swizzle and negate
@@ -260,7 +267,8 @@ __device__ bool fpExecute(
     const TexBank& texBank,
     float& outR, float& outG, float& outB, float& outA,
     FPVec4* mrtOut,  // mrtOut[0..3] for MRT planes B/C/D (mrtOut may be null)
-    float* depthOut = nullptr)  // receives r1.z for depth replace
+    float* depthOut = nullptr,  // receives r1.z for depth replace
+    const float* texLod = nullptr)  // per-unit auto LOD (8 floats, or null for base level)
 {
     // R0-R47 (fp32) at indices [0..47], H0-H47 (fp16-as-fp32) at [48..95]
     FPVec4 temps[96] = {};
@@ -396,13 +404,11 @@ __device__ bool fpExecute(
             if (texUnit < 8 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
                 if (texBank.dimension[texUnit] == 6) {
-                    // Cubemap: s0.xyz is direction vector
                     sampleTexCube(texBank.tex[texUnit], texBank.w[texUnit],
                                   texBank.h[texUnit], s0.x, s0.y, s0.z,
                                   (int)texBank.magFilter[texUnit],
                                   tr, tg, tb, ta);
                 } else if (texBank.dimension[texUnit] == 3) {
-                    // 3D texture: s0.xyz = UVW
                     uint32_t sliceH = texBank.h[texUnit] / texBank.depth[texUnit];
                     if (sliceH == 0) sliceH = texBank.h[texUnit];
                     sampleTex3D(texBank.tex[texUnit], texBank.w[texUnit],
@@ -412,6 +418,14 @@ __device__ bool fpExecute(
                                 tr, tg, tb, ta,
                                 texBank.wrapS[texUnit], texBank.wrapT[texUnit],
                                 texBank.wrapR[texUnit], texBank.borderColor[texUnit]);
+                } else if (texLod && texBank.mipLevels[texUnit] > 1) {
+                    sampleTexLod(texBank.tex[texUnit], texBank.w[texUnit],
+                                 texBank.h[texUnit], s0.x, s0.y,
+                                 texLod[texUnit], texBank.mipLevels[texUnit],
+                                 texBank.minFilter[texUnit],
+                                 tr, tg, tb, ta,
+                                 texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                                 texBank.borderColor[texUnit]);
                 } else {
                     sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                               texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
@@ -533,7 +547,6 @@ __device__ bool fpExecute(
             break;
         }
         case FP_OP_TXP: {
-            // Projective texture: divide by w then sample
             float w = (s0.w != 0.0f) ? s0.w : 1.0f;
             float pu = s0.x / w, pv = s0.y / w;
             float tr, tg, tb, ta;
@@ -554,6 +567,14 @@ __device__ bool fpExecute(
                                 tr, tg, tb, ta,
                                 texBank.wrapS[texUnit], texBank.wrapT[texUnit],
                                 texBank.wrapR[texUnit], texBank.borderColor[texUnit]);
+                } else if (texLod && texBank.mipLevels[texUnit] > 1) {
+                    sampleTexLod(texBank.tex[texUnit], texBank.w[texUnit],
+                                 texBank.h[texUnit], pu, pv,
+                                 texLod[texUnit], texBank.mipLevels[texUnit],
+                                 texBank.minFilter[texUnit],
+                                 tr, tg, tb, ta,
+                                 texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                                 texBank.borderColor[texUnit]);
                 } else {
                     sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                               texBank.h[texUnit], pu, pv, (int)texBank.magFilter[texUnit],
@@ -570,7 +591,7 @@ __device__ bool fpExecute(
             break;
         }
         case FP_OP_TXB: {
-            // Biased texture: LOD bias in s0.w; we ignore bias (no mipmaps yet)
+            // Biased texture: LOD = auto LOD + s0.w bias
             float tr, tg, tb, ta;
             if (texUnit < 8 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
@@ -589,6 +610,15 @@ __device__ bool fpExecute(
                                 tr, tg, tb, ta,
                                 texBank.wrapS[texUnit], texBank.wrapT[texUnit],
                                 texBank.wrapR[texUnit], texBank.borderColor[texUnit]);
+                } else if (texLod && texBank.mipLevels[texUnit] > 1) {
+                    float biasedLod = fmaxf(texLod[texUnit] + s0.w, 0.0f);
+                    sampleTexLod(texBank.tex[texUnit], texBank.w[texUnit],
+                                 texBank.h[texUnit], s0.x, s0.y,
+                                 biasedLod, texBank.mipLevels[texUnit],
+                                 texBank.minFilter[texUnit],
+                                 tr, tg, tb, ta,
+                                 texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                                 texBank.borderColor[texUnit]);
                 } else {
                     sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                               texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
@@ -646,11 +676,20 @@ __device__ bool fpExecute(
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
-        case FP_OP_TXD: // Texture with derivatives — treat as TEX (no mipmap)
-        case FP_OP_TXL: { // Texture with explicit LOD — treat as TEX (no mipmap)
+        case FP_OP_TXD: // Texture with explicit derivatives — use auto LOD
+        case FP_OP_TXL: { // Texture with explicit LOD in s0.w
             float tr, tg, tb, ta;
             if (texUnit < 8 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
+                // Compute LOD: TXL uses s0.w directly, TXD uses auto LOD
+                float lodVal = 0.0f;
+                if (texBank.mipLevels[texUnit] > 1) {
+                    if (opcode == FP_OP_TXL) {
+                        lodVal = fmaxf(s0.w, 0.0f);
+                    } else {
+                        lodVal = texLod ? texLod[texUnit] : 0.0f;
+                    }
+                }
                 if (texBank.dimension[texUnit] == 6) {
                     sampleTexCube(texBank.tex[texUnit], texBank.w[texUnit],
                                   texBank.h[texUnit], s0.x, s0.y, s0.z,
@@ -666,6 +705,14 @@ __device__ bool fpExecute(
                                 tr, tg, tb, ta,
                                 texBank.wrapS[texUnit], texBank.wrapT[texUnit],
                                 texBank.wrapR[texUnit], texBank.borderColor[texUnit]);
+                } else if (lodVal > 0.0f && texBank.mipLevels[texUnit] > 1) {
+                    sampleTexLod(texBank.tex[texUnit], texBank.w[texUnit],
+                                 texBank.h[texUnit], s0.x, s0.y,
+                                 lodVal, texBank.mipLevels[texUnit],
+                                 texBank.minFilter[texUnit],
+                                 tr, tg, tb, ta,
+                                 texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                                 texBank.borderColor[texUnit]);
                 } else {
                     sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                               texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
@@ -1142,6 +1189,73 @@ __device__ __forceinline__ void sampleTex(const uint32_t* tex,
     r = ch(16); g = ch(8); b = ch(0); a = ch(24);
 }
 
+// Sample texture at a specific LOD (float), with optional trilinear blending.
+// Mip levels are stored contiguously: level 0 at offset 0, level 1 at w*h, etc.
+__device__ __forceinline__ void sampleTexLod(
+    const uint32_t* tex, uint32_t baseW, uint32_t baseH,
+    float u, float v, float lod, uint8_t mipLevels, uint8_t minFilt,
+    float& r, float& g, float& b, float& a,
+    uint8_t wrapS, uint8_t wrapT, uint32_t borderColor)
+{
+    if (mipLevels <= 1 || lod <= 0.0f) {
+        int bilin = (minFilt == 2 || minFilt == 4 || minFilt == 6) ? 1 : 0;
+        sampleTex(tex, baseW, baseH, u, v, bilin, r, g, b, a, wrapS, wrapT, borderColor);
+        return;
+    }
+    float maxLod = (float)(mipLevels - 1);
+    if (lod > maxLod) lod = maxLod;
+
+    // Mip filter: 5=NEAREST_MIPMAP_LINEAR, 6=LINEAR_MIPMAP_LINEAR → trilinear
+    bool mipLinear = (minFilt == 5 || minFilt == 6);
+    // Texel filter within level: 2=LINEAR, 4=LINEAR_MIPMAP_NEAREST, 6=LINEAR_MIPMAP_LINEAR
+    bool texLinear = (minFilt == 2 || minFilt == 4 || minFilt == 6);
+
+    int level0 = (int)floorf(lod);
+    if (level0 >= (int)mipLevels - 1) level0 = mipLevels - 1;
+
+    // Compute pixel offset for level0
+    uint32_t off0 = 0;
+    for (int i = 0; i < level0; i++) {
+        uint32_t lw = baseW >> i; if (lw == 0) lw = 1;
+        uint32_t lh = baseH >> i; if (lh == 0) lh = 1;
+        off0 += lw * lh;
+    }
+    uint32_t w0 = baseW >> level0; if (w0 == 0) w0 = 1;
+    uint32_t h0 = baseH >> level0; if (h0 == 0) h0 = 1;
+
+    sampleTex(tex + off0, w0, h0, u, v, texLinear ? 1 : 0, r, g, b, a, wrapS, wrapT, borderColor);
+
+    if (mipLinear && level0 < (int)mipLevels - 1) {
+        float frac = lod - (float)level0;
+        uint32_t off1 = off0 + w0 * h0;
+        uint32_t w1 = baseW >> (level0 + 1); if (w1 == 0) w1 = 1;
+        uint32_t h1 = baseH >> (level0 + 1); if (h1 == 0) h1 = 1;
+        float r1, g1, b1, a1;
+        sampleTex(tex + off1, w1, h1, u, v, texLinear ? 1 : 0, r1, g1, b1, a1, wrapS, wrapT, borderColor);
+        r += (r1 - r) * frac;
+        g += (g1 - g) * frac;
+        b += (b1 - b) * frac;
+        a += (a1 - a) * frac;
+    }
+}
+
+// Extract per-vertex tex coords for a given texture unit.
+__device__ __forceinline__ void getVertTexCoord(
+    const RasterVertex& vtx, int unit, float& s, float& t)
+{
+    switch (unit) {
+    case 0: s = vtx.u;       t = vtx.v;       break;
+    case 1: s = vtx.tex1[0]; t = vtx.tex1[1]; break;
+    case 2: s = vtx.tex2[0]; t = vtx.tex2[1]; break;
+    case 3: s = vtx.tex3[0]; t = vtx.tex3[1]; break;
+    case 4: s = vtx.tex4[0]; t = vtx.tex4[1]; break;
+    case 5: s = vtx.tex5[0]; t = vtx.tex5[1]; break;
+    case 6: s = vtx.tex6[0]; t = vtx.tex6[1]; break;
+    case 7: s = vtx.tex7[0]; t = vtx.tex7[1]; break;
+    default: s = t = 0; break;
+    }
+}
+
 // One thread per pixel per triangle batch. For each pixel we iterate the
 // triangle list and keep the last one that covers it (painter order).
 // That matches RSX "no depth test" behaviour when depth is disabled —
@@ -1212,7 +1326,8 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   int fpDepthReplace,
                                   int shaderWindowOrigin,
                                   float shaderWindowHeight,
-                                  uint32_t clipPlaneControl) {
+                                  uint32_t clipPlaneControl,
+                                  int sRGBWrite) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -1379,6 +1494,32 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         float vv = p0 * v0.v + p1 * v1.v + p2 * v2.v;
 
         if (fpInsns && fpInsnCount > 0) {
+            // Compute per-texture-unit LOD from affine UV gradients.
+            // Barycentric gradients (constant per triangle):
+            float dw0dx = (v2.y - v1.y) * invArea;
+            float dw0dy = -(v2.x - v1.x) * invArea;
+            float dw1dx = (v0.y - v2.y) * invArea;
+            float dw1dy = -(v0.x - v2.x) * invArea;
+            float triTexLod[8];
+            for (int tu = 0; tu < 8; tu++) {
+                triTexLod[tu] = 0.0f;
+                if (!texBank.tex[tu] || texBank.mipLevels[tu] <= 1) continue;
+                if (texBank.minFilter[tu] < 3) continue;
+                float s0t, t0t, s1t, t1t, s2t, t2t;
+                getVertTexCoord(v0, tu, s0t, t0t);
+                getVertTexCoord(v1, tu, s1t, t1t);
+                getVertTexCoord(v2, tu, s2t, t2t);
+                float ds_dx = dw0dx * (s0t - s2t) + dw1dx * (s1t - s2t);
+                float dt_dx = dw0dx * (t0t - t2t) + dw1dx * (t1t - t2t);
+                float ds_dy = dw0dy * (s0t - s2t) + dw1dy * (s1t - s2t);
+                float dt_dy = dw0dy * (t0t - t2t) + dw1dy * (t1t - t2t);
+                float tw = (float)texBank.w[tu];
+                float th = (float)texBank.h[tu];
+                float rhoX = sqrtf(ds_dx*ds_dx*tw*tw + dt_dx*dt_dx*th*th);
+                float rhoY = sqrtf(ds_dy*ds_dy*tw*tw + dt_dy*dt_dy*th*th);
+                triTexLod[tu] = log2f(fmaxf(fmaxf(rhoX, rhoY), 1.0f));
+            }
+
             // Build FP input array from interpolated vertex data
             // RSX FP input mapping: 0=WPOS, 1=COL0, 2=COL1, 3=FOGC,
             // 4-13=TEX0-TEX9, 14=SSA
@@ -1423,7 +1564,8 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             bool alive = fpExecute(fpInsns, fpInsnCount, fpConsts, fpConstCount,
                       fpIn, 15, texBank,
                       r, g, b, a, mrtVals,
-                      fpDepthReplace ? &fpDepthVal : nullptr);
+                      fpDepthReplace ? &fpDepthVal : nullptr,
+                      triTexLod);
             if (!alive) continue;  // KIL'd — discard pixel
             if (fpDepthReplace) z = fpDepthVal;
             mrtAccum[0] = mrtVals[0];
@@ -1528,6 +1670,17 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             };
             float d = bayer4[y & 3][x & 3];
             r += d; g += d; b += d;
+        }
+
+        // sRGB gamma encode: linear → sRGB for framebuffer write
+        if (sRGBWrite) {
+            auto lin2srgb = [](float v) -> float {
+                if (v <= 0.0f) return 0.0f;
+                if (v >= 1.0f) return 1.0f;
+                return (v <= 0.0031308f) ? 12.92f * v
+                                         : 1.055f * powf(v, 1.0f/2.4f) - 0.055f;
+            };
+            r = lin2srgb(r); g = lin2srgb(g); b = lin2srgb(b);
         }
 
         auto sat = [](float v) -> uint32_t {
@@ -1910,12 +2063,57 @@ int CudaRasterizer::setTexture2D(const uint32_t* data, uint32_t w, uint32_t h,
                                  uint32_t unit) {
     if (unit >= MAX_TEX_UNITS) return -1;
     if (d_tex_[unit]) { cudaFree(d_tex_[unit]); d_tex_[unit] = nullptr; texW_[unit] = texH_[unit] = 0; }
+    texMipLevels_[unit] = 1;
     if (!data || w == 0 || h == 0) return 0;
-    size_t bytes = size_t(w) * size_t(h) * sizeof(uint32_t);
-    CU_CHECK(cudaMalloc(&d_tex_[unit], bytes));
-    cudaMemcpy(d_tex_[unit], data, bytes, cudaMemcpyHostToDevice);
+
+    // Compute mip chain: levels = floor(log2(max(w,h))) + 1, capped at 13
+    uint32_t maxDim = (w > h) ? w : h;
+    uint32_t numLevels = 1;
+    while ((maxDim >> numLevels) >= 1 && numLevels < 13) numLevels++;
+
+    // Total pixels across all mip levels
+    size_t totalPixels = 0;
+    for (uint32_t l = 0; l < numLevels; l++) {
+        uint32_t lw = w >> l; if (lw == 0) lw = 1;
+        uint32_t lh = h >> l; if (lh == 0) lh = 1;
+        totalPixels += lw * lh;
+    }
+
+    // Generate mip chain on host via 2×2 box filter
+    std::vector<uint32_t> mipChain(totalPixels);
+    std::memcpy(mipChain.data(), data, size_t(w) * h * sizeof(uint32_t));
+    size_t offset = size_t(w) * h;
+    for (uint32_t l = 1; l < numLevels; l++) {
+        uint32_t pw = w >> (l - 1); if (pw == 0) pw = 1;
+        uint32_t ph = h >> (l - 1); if (ph == 0) ph = 1;
+        uint32_t lw = w >> l; if (lw == 0) lw = 1;
+        uint32_t lh = h >> l; if (lh == 0) lh = 1;
+        const uint32_t* prev = mipChain.data() + (offset - size_t(pw) * ph);
+        uint32_t* cur = mipChain.data() + offset;
+        for (uint32_t y = 0; y < lh; y++) {
+            for (uint32_t x = 0; x < lw; x++) {
+                uint32_t sx = x * 2, sy = y * 2;
+                uint32_t sx1 = (sx + 1 < pw) ? sx + 1 : sx;
+                uint32_t sy1 = (sy + 1 < ph) ? sy + 1 : sy;
+                uint32_t c00 = prev[sy  * pw + sx];
+                uint32_t c10 = prev[sy  * pw + sx1];
+                uint32_t c01 = prev[sy1 * pw + sx];
+                uint32_t c11 = prev[sy1 * pw + sx1];
+                uint32_t rr = (((c00>>16)&0xFF)+((c10>>16)&0xFF)+((c01>>16)&0xFF)+((c11>>16)&0xFF)+2)/4;
+                uint32_t gg = (((c00>> 8)&0xFF)+((c10>> 8)&0xFF)+((c01>> 8)&0xFF)+((c11>> 8)&0xFF)+2)/4;
+                uint32_t bb = (((c00    )&0xFF)+((c10    )&0xFF)+((c01    )&0xFF)+((c11    )&0xFF)+2)/4;
+                uint32_t aa = (((c00>>24)&0xFF)+((c10>>24)&0xFF)+((c01>>24)&0xFF)+((c11>>24)&0xFF)+2)/4;
+                cur[y * lw + x] = (aa << 24) | (rr << 16) | (gg << 8) | bb;
+            }
+        }
+        offset += size_t(lw) * lh;
+    }
+
+    CU_CHECK(cudaMalloc(&d_tex_[unit], totalPixels * sizeof(uint32_t)));
+    cudaMemcpy(d_tex_[unit], mipChain.data(), totalPixels * sizeof(uint32_t), cudaMemcpyHostToDevice);
     texW_[unit] = w;
     texH_[unit] = h;
+    texMipLevels_[unit] = numLevels;
     return 0;
 }
 
@@ -2077,6 +2275,8 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
         tb.magFilter[i] = magFilter_[i];
         tb.borderColor[i] = borderColor_[i];
         tb.dimension[i] = texDimension_[i];
+        tb.mipLevels[i] = (uint8_t)texMipLevels_[i];
+        tb.minFilter[i] = minFilter_[i];
     }
     k_rasterTriangles<<<gs, bs>>>(fb_.d_color, fb_.d_depth, fb_.d_stencil,
                                   fb_.width, fb_.height,
@@ -2130,7 +2330,8 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   fpDepthReplace_ ? 1 : 0,
                                   shaderWindowOrigin_,
                                   shaderWindowHeight_,
-                                  clipPlaneControl_);
+                                  clipPlaneControl_,
+                                  sRGBWrite_ ? 1 : 0);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;

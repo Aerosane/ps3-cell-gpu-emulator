@@ -320,6 +320,9 @@ public:
     // 0=disabled, 2=enable (clip when distance < 0).
     void setClipPlaneControl(uint32_t ctrl) { clipPlaneControl_ = ctrl; }
 
+    // sRGB framebuffer: gamma encode on write (linear→sRGB).
+    void setSRGBWrite(bool enable) { sRGBWrite_ = enable; }
+
     // Fragment program — pre-decoded micro-instructions for GPU execution.
     // Each insn is 8 uint32_t packed: [opcode|masks|texUnit|inputAttr,
     //  dstReg, src0Type|idx|swz, src1Type|idx|swz, src2Type|idx|swz,
@@ -433,6 +436,7 @@ private:
     uint32_t  texDepth_[MAX_TEX_UNITS]{1,1,1,1,1,1,1,1};   // 3D texture depth
     uint8_t   texDimension_[MAX_TEX_UNITS]{2,2,2,2,2,2,2,2}; // default 2D
     uint16_t  texRemap_[MAX_TEX_UNITS]{};  // 0 or 0xAAE4 = identity
+    uint32_t  texMipLevels_[MAX_TEX_UNITS]{1,1,1,1,1,1,1,1}; // mip chain levels
     bool      texBilinear_{true};
     CullMode  cullMode_{CullMode::None};
     FrontFace frontFace_{FrontFace::CCW};
@@ -476,6 +480,8 @@ private:
     uint32_t  restartIndex_{0xFFFFFFFF};
 
     uint32_t  clipPlaneControl_{0};  // 6 planes × 2 bits each
+
+    bool      sRGBWrite_{false};   // gamma encode on FB write
 
     bool      stencilTest_{false};
     StencilFunc stencilFunc_{StencilFunc::Always};
