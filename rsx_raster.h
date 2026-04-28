@@ -224,6 +224,9 @@ public:
     void setTextureMinFilter(uint32_t unit, uint8_t min) {
         if (unit < MAX_TEX_UNITS) minFilter_[unit] = min;
     }
+    void setTextureLodBias(uint32_t unit, float bias) {
+        if (unit < MAX_TEX_UNITS) texLodBias_[unit] = bias;
+    }
     void setTextureWrap(uint32_t unit, uint8_t wrapS, uint8_t wrapT) {
         if (unit < MAX_TEX_UNITS) { wrapS_[unit] = wrapS; wrapT_[unit] = wrapT; }
     }
@@ -436,6 +439,7 @@ private:
     uint32_t  texDepth_[MAX_TEX_UNITS]{1,1,1,1,1,1,1,1};   // 3D texture depth
     uint8_t   texDimension_[MAX_TEX_UNITS]{2,2,2,2,2,2,2,2}; // default 2D
     uint16_t  texRemap_[MAX_TEX_UNITS]{};  // 0 or 0xAAE4 = identity
+    float     texLodBias_[MAX_TEX_UNITS]{};  // per-unit LOD bias from TEXTURE_FILTER
     uint32_t  texMipLevels_[MAX_TEX_UNITS]{1,1,1,1,1,1,1,1}; // mip chain levels
     bool      texBilinear_{true};
     CullMode  cullMode_{CullMode::None};

@@ -195,6 +195,7 @@ struct TexBank {
     uint8_t dimension[8];        // 1=1D, 2=2D, 3=3D, 6=CUBE
     uint8_t mipLevels[8];        // number of mip levels stored (1=base only)
     uint8_t minFilter[8];        // RSX min filter: 1=NEAREST, 2=LINEAR, 3-6=mipmap modes
+    float   lodBias[8];          // per-unit LOD bias from TEXTURE_FILTER register
 };
 
 // Read a source operand with swizzle and negate
@@ -419,9 +420,10 @@ __device__ bool fpExecute(
                                 texBank.wrapS[texUnit], texBank.wrapT[texUnit],
                                 texBank.wrapR[texUnit], texBank.borderColor[texUnit]);
                 } else if (texLod && texBank.mipLevels[texUnit] > 1) {
+                    float biasedLod = fmaxf(texLod[texUnit] + texBank.lodBias[texUnit], 0.0f);
                     sampleTexLod(texBank.tex[texUnit], texBank.w[texUnit],
                                  texBank.h[texUnit], s0.x, s0.y,
-                                 texLod[texUnit], texBank.mipLevels[texUnit],
+                                 biasedLod, texBank.mipLevels[texUnit],
                                  texBank.minFilter[texUnit],
                                  tr, tg, tb, ta,
                                  texBank.wrapS[texUnit], texBank.wrapT[texUnit],
@@ -568,9 +570,10 @@ __device__ bool fpExecute(
                                 texBank.wrapS[texUnit], texBank.wrapT[texUnit],
                                 texBank.wrapR[texUnit], texBank.borderColor[texUnit]);
                 } else if (texLod && texBank.mipLevels[texUnit] > 1) {
+                    float biasedLod = fmaxf(texLod[texUnit] + texBank.lodBias[texUnit], 0.0f);
                     sampleTexLod(texBank.tex[texUnit], texBank.w[texUnit],
                                  texBank.h[texUnit], pu, pv,
-                                 texLod[texUnit], texBank.mipLevels[texUnit],
+                                 biasedLod, texBank.mipLevels[texUnit],
                                  texBank.minFilter[texUnit],
                                  tr, tg, tb, ta,
                                  texBank.wrapS[texUnit], texBank.wrapT[texUnit],
@@ -611,7 +614,7 @@ __device__ bool fpExecute(
                                 texBank.wrapS[texUnit], texBank.wrapT[texUnit],
                                 texBank.wrapR[texUnit], texBank.borderColor[texUnit]);
                 } else if (texLod && texBank.mipLevels[texUnit] > 1) {
-                    float biasedLod = fmaxf(texLod[texUnit] + s0.w, 0.0f);
+                    float biasedLod = fmaxf(texLod[texUnit] + s0.w + texBank.lodBias[texUnit], 0.0f);
                     sampleTexLod(texBank.tex[texUnit], texBank.w[texUnit],
                                  texBank.h[texUnit], s0.x, s0.y,
                                  biasedLod, texBank.mipLevels[texUnit],
@@ -681,13 +684,14 @@ __device__ bool fpExecute(
             float tr, tg, tb, ta;
             if (texUnit < 8 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
-                // Compute LOD: TXL uses s0.w directly, TXD uses auto LOD
+                // Compute LOD: TXL uses s0.w directly, TXD uses auto LOD + bias
                 float lodVal = 0.0f;
                 if (texBank.mipLevels[texUnit] > 1) {
                     if (opcode == FP_OP_TXL) {
                         lodVal = fmaxf(s0.w, 0.0f);
                     } else {
-                        lodVal = texLod ? texLod[texUnit] : 0.0f;
+                        lodVal = texLod ? texLod[texUnit] + texBank.lodBias[texUnit] : texBank.lodBias[texUnit];
+                        lodVal = fmaxf(lodVal, 0.0f);
                     }
                 }
                 if (texBank.dimension[texUnit] == 6) {
@@ -1749,6 +1753,7 @@ __global__ void k_rasterLines(uint32_t* __restrict__ dst,
                               uint32_t width, uint32_t height,
                               const RasterVertex* __restrict__ verts,
                               uint32_t segmentCount,
+                              float lineWidth,
                               int blendEnable,
                               int depthTest,
                               int depthWrite,
@@ -1784,15 +1789,14 @@ __global__ void k_rasterLines(uint32_t* __restrict__ dst,
         float len2 = dx*dx + dy*dy;
         if (len2 < 1e-6f) continue;
         float t = ((px - v0.x) * dx + (py - v0.y) * dy) / len2;
-        // Extend by 0.5 / length at each end so the endpoint pixels are
-        // inside the covered segment.
-        float extend = 0.5f / sqrtf(len2);
+        float halfW = lineWidth * 0.5f;
+        float extend = halfW / sqrtf(len2);
         if (t < -extend || t > 1.0f + extend) continue;
         float tc = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
         float qx = v0.x + tc * dx;
         float qy = v0.y + tc * dy;
         float ex = px - qx, ey = py - qy;
-        if (ex*ex + ey*ey > 0.25f) continue;  // > 0.5 px perpendicular
+        if (ex*ex + ey*ey > halfW * halfW) continue;
 
         float z = v0.z + tc * (v1.z - v0.z);
         if (depthClip && (z < 0.0f || z > 1.0f)) continue;
@@ -2277,6 +2281,7 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
         tb.dimension[i] = texDimension_[i];
         tb.mipLevels[i] = (uint8_t)texMipLevels_[i];
         tb.minFilter[i] = minFilter_[i];
+        tb.lodBias[i] = texLodBias_[i];
     }
     k_rasterTriangles<<<gs, bs>>>(fb_.d_color, fb_.d_depth, fb_.d_stencil,
                                   fb_.width, fb_.height,
@@ -2402,6 +2407,7 @@ uint32_t CudaRasterizer::drawLines(const RasterVertex* verts, uint32_t count) {
     k_rasterLines<<<gs, bs>>>(fb_.d_color, fb_.d_depth,
                               fb_.width, fb_.height,
                               d_v, segs,
+                              lineWidth_,
                               blendEnable_ ? 1 : 0,
                               depthTest_ ? 1 : 0,
                               depthWrite_ ? 1 : 0,

@@ -824,9 +824,13 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         // RSX: 1=NEAREST, 2=LINEAR
         uint8_t mag = (t.filter >> 24) & 0xF;
         rast_->setTextureMagFilter(tu, (mag == 1) ? 0 : 1);  // 0=NEAREST, 1=LINEAR
-        // Min filter: bits [19:16]. RSX: 1=NEAREST, 2=LINEAR, 5=NEAREST_MIPMAP_NEAREST, etc.
+        // Min filter: bits [19:16]. RSX: 1=NEAREST, 2=LINEAR, 3=NEAREST_MIPMAP_NEAREST,
+        // 4=LINEAR_MIPMAP_NEAREST, 5=NEAREST_MIPMAP_LINEAR, 6=LINEAR_MIPMAP_LINEAR
         uint8_t minF = (t.filter >> 16) & 0xF;
-        rast_->setTextureMinFilter(tu, (minF == 1 || minF == 4 || minF == 5) ? 0 : 1);
+        rast_->setTextureMinFilter(tu, minF);
+        // LOD bias: TEXTURE_FILTER bits [12:0], signed 13-bit fixed-point (scale /256)
+        int16_t rawBias = (int16_t)((t.filter & 0x1FFF) << 3) >> 3; // sign-extend 13-bit
+        rast_->setTextureLodBias(tu, (float)rawBias / 256.0f);
         // Border color
         rast_->setTextureBorderColor(tu, t.borderColor);
         // Texture dimension (1D, 2D, 3D, cubemap)
