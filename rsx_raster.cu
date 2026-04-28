@@ -59,6 +59,10 @@ __device__ void sampleTex(const uint32_t* tex,
     float u, float v, int bilinear,
     float& outR, float& outG, float& outB, float& outA,
     uint8_t wrapS, uint8_t wrapT, uint32_t borderColor);
+__device__ void sampleTexCube(const uint32_t* tex,
+    uint32_t faceW, uint32_t totalH,
+    float dirX, float dirY, float dirZ, int bilinear,
+    float& r, float& g, float& b, float& a);
 
 #define FP_PACK_W0(op, mx, my, mz, mw, tu, ia, sat, end) \
     (((op)&0x7F) | (((mx)&1)<<7) | (((my)&1)<<8) | (((mz)&1)<<9) | \
@@ -362,11 +366,19 @@ __device__ bool fpExecute(
             float tr, tg, tb, ta;
             if (texUnit < 8 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
-                sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
-                          texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
-                          tr, tg, tb, ta,
-                          texBank.wrapS[texUnit], texBank.wrapT[texUnit],
-                          texBank.borderColor[texUnit]);
+                if (texBank.dimension[texUnit] == 6) {
+                    // Cubemap: s0.xyz is direction vector
+                    sampleTexCube(texBank.tex[texUnit], texBank.w[texUnit],
+                                  texBank.h[texUnit], s0.x, s0.y, s0.z,
+                                  (int)texBank.magFilter[texUnit],
+                                  tr, tg, tb, ta);
+                } else {
+                    sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
+                              texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
+                              tr, tg, tb, ta,
+                              texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                              texBank.borderColor[texUnit]);
+                }
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
@@ -486,11 +498,18 @@ __device__ bool fpExecute(
             float tr, tg, tb, ta;
             if (texUnit < 8 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
-                sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
-                          texBank.h[texUnit], pu, pv, (int)texBank.magFilter[texUnit],
-                          tr, tg, tb, ta,
-                          texBank.wrapS[texUnit], texBank.wrapT[texUnit],
-                          texBank.borderColor[texUnit]);
+                if (texBank.dimension[texUnit] == 6) {
+                    sampleTexCube(texBank.tex[texUnit], texBank.w[texUnit],
+                                  texBank.h[texUnit], pu, pv, s0.z / w,
+                                  (int)texBank.magFilter[texUnit],
+                                  tr, tg, tb, ta);
+                } else {
+                    sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
+                              texBank.h[texUnit], pu, pv, (int)texBank.magFilter[texUnit],
+                              tr, tg, tb, ta,
+                              texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                              texBank.borderColor[texUnit]);
+                }
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
@@ -503,11 +522,18 @@ __device__ bool fpExecute(
             float tr, tg, tb, ta;
             if (texUnit < 8 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
-                sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
-                          texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
-                          tr, tg, tb, ta,
-                          texBank.wrapS[texUnit], texBank.wrapT[texUnit],
-                          texBank.borderColor[texUnit]);
+                if (texBank.dimension[texUnit] == 6) {
+                    sampleTexCube(texBank.tex[texUnit], texBank.w[texUnit],
+                                  texBank.h[texUnit], s0.x, s0.y, s0.z,
+                                  (int)texBank.magFilter[texUnit],
+                                  tr, tg, tb, ta);
+                } else {
+                    sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
+                              texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
+                              tr, tg, tb, ta,
+                              texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                              texBank.borderColor[texUnit]);
+                }
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
@@ -562,11 +588,18 @@ __device__ bool fpExecute(
             float tr, tg, tb, ta;
             if (texUnit < 8 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
-                sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
-                          texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
-                          tr, tg, tb, ta,
-                          texBank.wrapS[texUnit], texBank.wrapT[texUnit],
-                          texBank.borderColor[texUnit]);
+                if (texBank.dimension[texUnit] == 6) {
+                    sampleTexCube(texBank.tex[texUnit], texBank.w[texUnit],
+                                  texBank.h[texUnit], s0.x, s0.y, s0.z,
+                                  (int)texBank.magFilter[texUnit],
+                                  tr, tg, tb, ta);
+                } else {
+                    sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
+                              texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
+                              tr, tg, tb, ta,
+                              texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                              texBank.borderColor[texUnit]);
+                }
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
@@ -837,6 +870,75 @@ __device__ __forceinline__ uint32_t texFetch(const uint32_t* tex,
     ty = texWrap(ty, (int)th, wrapT);
     if (tx < 0 || ty < 0) return borderColor;
     return tex[ty * tw + tx];
+}
+
+// Cubemap face selection: converts 3D direction → face + 2D UV
+// Returns face index (0-5): +X, -X, +Y, -Y, +Z, -Z
+__device__ __forceinline__ int cubeMapFaceSelect(float x, float y, float z,
+                                                  float& uc, float& vc) {
+    float ax = fabsf(x), ay = fabsf(y), az = fabsf(z);
+    int face;
+    float ma, sc, tc;
+    if (ax >= ay && ax >= az) {
+        ma = ax; face = (x > 0) ? 0 : 1;
+        sc = (x > 0) ? -z : z;
+        tc = -y;
+    } else if (ay >= ax && ay >= az) {
+        ma = ay; face = (y > 0) ? 2 : 3;
+        sc = x;
+        tc = (y > 0) ? z : -z;
+    } else {
+        ma = az; face = (z > 0) ? 4 : 5;
+        sc = (z > 0) ? x : -x;
+        tc = -y;
+    }
+    if (ma < 1e-10f) ma = 1e-10f;
+    uc = 0.5f * (sc / ma + 1.0f);
+    vc = 0.5f * (tc / ma + 1.0f);
+    return face;
+}
+
+// Sample a cubemap texture: 6 faces stored vertically (each face = faceH pixels tall)
+// Total texture is w × (h=faceH*6). Face 0 at row 0, face 1 at row faceH, etc.
+__device__ __forceinline__ void sampleTexCube(const uint32_t* tex,
+                                              uint32_t faceW, uint32_t totalH,
+                                              float dirX, float dirY, float dirZ,
+                                              int bilinear,
+                                              float& r, float& g, float& b, float& a) {
+    float uc, vc;
+    int face = cubeMapFaceSelect(dirX, dirY, dirZ, uc, vc);
+    uint32_t faceH = totalH / 6;
+    if (faceH == 0) { r = g = b = a = 0; return; }
+    // Offset V into the face's vertical slice
+    float fx = uc * (float)faceW - 0.5f;
+    float fy = vc * (float)faceH - 0.5f;
+    int ix = (int)floorf(fx);
+    int iy = (int)floorf(fy);
+    // Clamp to face edges (no wrapping across faces)
+    auto clp = [](int c, int d) { return (c < 0) ? 0 : (c >= d) ? d - 1 : c; };
+    int fOff = face * (int)faceH;
+    if (!bilinear) {
+        uint32_t c = tex[(clp(iy, faceH) + fOff) * faceW + clp(ix, faceW)];
+        r = ((c >> 16) & 0xFF) / 255.0f;
+        g = ((c >>  8) & 0xFF) / 255.0f;
+        b = ((c >>  0) & 0xFF) / 255.0f;
+        a = ((c >> 24) & 0xFF) / 255.0f;
+        return;
+    }
+    float sx = fx - ix, sy = fy - iy;
+    uint32_t c00 = tex[(clp(iy,   faceH) + fOff) * faceW + clp(ix,   (int)faceW)];
+    uint32_t c10 = tex[(clp(iy,   faceH) + fOff) * faceW + clp(ix+1, (int)faceW)];
+    uint32_t c01 = tex[(clp(iy+1, faceH) + fOff) * faceW + clp(ix,   (int)faceW)];
+    uint32_t c11 = tex[(clp(iy+1, faceH) + fOff) * faceW + clp(ix+1, (int)faceW)];
+    auto lerp2 = [] __device__ (float a, float b, float t) { return a + (b - a) * t; };
+    auto ch2 = [&](int shift) {
+        float v00 = ((c00>>shift)&0xFF)/255.0f;
+        float v10 = ((c10>>shift)&0xFF)/255.0f;
+        float v01 = ((c01>>shift)&0xFF)/255.0f;
+        float v11 = ((c11>>shift)&0xFF)/255.0f;
+        return lerp2(lerp2(v00, v10, sx), lerp2(v01, v11, sx), sy);
+    };
+    r = ch2(16); g = ch2(8); b = ch2(0); a = ch2(24);
 }
 
 __device__ __forceinline__ void sampleTex(const uint32_t* tex,
