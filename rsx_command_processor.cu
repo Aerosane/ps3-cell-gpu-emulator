@@ -617,12 +617,17 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
                 break;
             case 0x04: // TEXTURE_FORMAT
                 state->textures[unit].format = data;
+                // Extract dimension from format: bits 4-7 → 1=1D, 2=2D, 3=3D, 6=CUBE
+                state->textures[unit].dimension = (uint8_t)((data >> 4) & 0xF);
                 break;
             case 0x0C: // TEXTURE_CONTROL0
                 state->textures[unit].control0 = data;
                 break;
             case 0x08: // TEXTURE_ADDRESS (wrap modes)
                 state->textures[unit].address = data;
+                break;
+            case 0x10: // TEXTURE_BORDER_COLOR
+                state->textures[unit].borderColor = data;
                 break;
             case 0x14: // TEXTURE_FILTER (min/mag)
                 state->textures[unit].filter = data;
@@ -634,6 +639,18 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
             default:
                 break;
             }
+        }
+        return;
+    }
+
+    // ── Texture control3 (depth/pitch per texture unit) ────────
+    if (method >= NV4097_SET_TEXTURE_CONTROL3 &&
+        method <  NV4097_SET_TEXTURE_CONTROL3 + 16 * 4) {
+        uint32_t unit = (method - NV4097_SET_TEXTURE_CONTROL3) / 4;
+        if (unit < 16) {
+            state->textures[unit].depth = (data >> 20) & 0xFFF;
+            if (state->textures[unit].depth == 0)
+                state->textures[unit].depth = 1;
         }
         return;
     }

@@ -182,6 +182,8 @@ static constexpr uint32_t NV4097_SET_TEXTURE_CONTROL0         = 0x00001A0C;
 static constexpr uint32_t NV4097_SET_TEXTURE_ADDRESS          = 0x00001A08;
 static constexpr uint32_t NV4097_SET_TEXTURE_FILTER           = 0x00001A14;
 static constexpr uint32_t NV4097_SET_TEXTURE_IMAGE_RECT       = 0x00001A18;
+static constexpr uint32_t NV4097_SET_TEXTURE_BORDER_COLOR     = 0x00001A10;
+static constexpr uint32_t NV4097_SET_TEXTURE_CONTROL3         = 0x00000B00; // depth/pitch per unit
 
 // Clear / present
 static constexpr uint32_t NV4097_SET_SHADER_WINDOW           = 0x00001D88;
@@ -423,10 +425,12 @@ struct RSXState {
     struct TextureUnit {
         uint32_t offset;
         uint32_t format;
-        uint32_t width, height;
+        uint32_t width, height, depth;
         uint32_t control0;
         uint32_t address;   // wrap modes: wrapS(4)@0 | wrapT(4)@8 | wrapR(4)@16
         uint32_t filter;    // min/mag filter: min(16)@0 | mag(16)@16
+        uint32_t borderColor;
+        uint8_t  dimension; // 1=1D, 2=2D, 3=3D, 6=cubemap
         bool     enabled;
     } textures[16];
 

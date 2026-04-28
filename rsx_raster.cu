@@ -53,12 +53,12 @@ __global__ void k_clearDepth(float* __restrict__ dst,
 __device__ int texWrap(int coord, int dim, uint8_t mode);
 __device__ uint32_t texFetch(const uint32_t* tex,
     uint32_t tw, uint32_t th, int tx, int ty,
-    uint8_t wrapS, uint8_t wrapT);
+    uint8_t wrapS, uint8_t wrapT, uint32_t borderColor);
 __device__ void sampleTex(const uint32_t* tex,
     uint32_t tw, uint32_t th,
     float u, float v, int bilinear,
     float& outR, float& outG, float& outB, float& outA,
-    uint8_t wrapS, uint8_t wrapT);
+    uint8_t wrapS, uint8_t wrapT, uint32_t borderColor);
 
 #define FP_PACK_W0(op, mx, my, mz, mw, tu, ia, sat, end) \
     (((op)&0x7F) | (((mx)&1)<<7) | (((my)&1)<<8) | (((mz)&1)<<9) | \
@@ -154,6 +154,8 @@ struct TexBank {
     uint32_t w[8], h[8];
     uint8_t wrapS[8], wrapT[8];  // RSX wrap: 1=REPEAT, 2=MIRROR, 3=CLAMP_EDGE
     uint8_t magFilter[8];        // 0=NEAREST, 1=LINEAR (per unit)
+    uint32_t borderColor[8];     // ARGB32 border color for CLAMP_TO_BORDER
+    uint8_t dimension[8];        // 1=1D, 2=2D, 3=3D, 6=CUBE
 };
 
 // Read a source operand with swizzle and negate
@@ -363,7 +365,8 @@ __device__ bool fpExecute(
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                           texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
                           tr, tg, tb, ta,
-                          texBank.wrapS[texUnit], texBank.wrapT[texUnit]);
+                          texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                          texBank.borderColor[texUnit]);
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
@@ -486,7 +489,8 @@ __device__ bool fpExecute(
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                           texBank.h[texUnit], pu, pv, (int)texBank.magFilter[texUnit],
                           tr, tg, tb, ta,
-                          texBank.wrapS[texUnit], texBank.wrapT[texUnit]);
+                          texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                          texBank.borderColor[texUnit]);
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
@@ -502,7 +506,8 @@ __device__ bool fpExecute(
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                           texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
                           tr, tg, tb, ta,
-                          texBank.wrapS[texUnit], texBank.wrapT[texUnit]);
+                          texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                          texBank.borderColor[texUnit]);
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
@@ -560,7 +565,8 @@ __device__ bool fpExecute(
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                           texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
                           tr, tg, tb, ta,
-                          texBank.wrapS[texUnit], texBank.wrapT[texUnit]);
+                          texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                          texBank.borderColor[texUnit]);
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
@@ -811,9 +817,10 @@ __device__ __forceinline__ int texWrap(int coord, int dim, uint8_t mode) {
         return coord;
     }
     case 3: // CLAMP_TO_EDGE
-    case 5: // CLAMP (same for us — no border color)
-    case 4: // BORDER (treat as clamp)
+    case 5: // CLAMP
         return (coord < 0) ? 0 : (coord >= dim) ? dim - 1 : coord;
+    case 4: // BORDER — return -1 sentinel when outside [0, dim)
+        return (coord < 0 || coord >= dim) ? -1 : coord;
     default: // 1 = REPEAT (and fallback)
         coord = coord % dim;
         if (coord < 0) coord += dim;
@@ -824,9 +831,11 @@ __device__ __forceinline__ int texWrap(int coord, int dim, uint8_t mode) {
 __device__ __forceinline__ uint32_t texFetch(const uint32_t* tex,
                                              uint32_t tw, uint32_t th,
                                              int tx, int ty,
-                                             uint8_t wrapS = 1, uint8_t wrapT = 1) {
+                                             uint8_t wrapS = 1, uint8_t wrapT = 1,
+                                             uint32_t borderColor = 0) {
     tx = texWrap(tx, (int)tw, wrapS);
     ty = texWrap(ty, (int)th, wrapT);
+    if (tx < 0 || ty < 0) return borderColor;
     return tex[ty * tw + tx];
 }
 
@@ -834,13 +843,14 @@ __device__ __forceinline__ void sampleTex(const uint32_t* tex,
                                           uint32_t tw, uint32_t th,
                                           float u, float v, int bilinear,
                                           float& r, float& g, float& b, float& a,
-                                          uint8_t wrapS = 1, uint8_t wrapT = 1) {
+                                          uint8_t wrapS = 1, uint8_t wrapT = 1,
+                                          uint32_t borderColor = 0) {
     float fx = u * (float)tw - 0.5f;
     float fy = v * (float)th - 0.5f;
     int ix = (int)floorf(fx);
     int iy = (int)floorf(fy);
     if (!bilinear) {
-        uint32_t c = texFetch(tex, tw, th, ix, iy, wrapS, wrapT);
+        uint32_t c = texFetch(tex, tw, th, ix, iy, wrapS, wrapT, borderColor);
         r = ((c >> 16) & 0xFF) / 255.0f;
         g = ((c >>  8) & 0xFF) / 255.0f;
         b = ((c >>  0) & 0xFF) / 255.0f;
@@ -848,10 +858,10 @@ __device__ __forceinline__ void sampleTex(const uint32_t* tex,
         return;
     }
     float sx = fx - ix, sy = fy - iy;
-    uint32_t c00 = texFetch(tex, tw, th, ix,   iy,   wrapS, wrapT);
-    uint32_t c10 = texFetch(tex, tw, th, ix+1, iy,   wrapS, wrapT);
-    uint32_t c01 = texFetch(tex, tw, th, ix,   iy+1, wrapS, wrapT);
-    uint32_t c11 = texFetch(tex, tw, th, ix+1, iy+1, wrapS, wrapT);
+    uint32_t c00 = texFetch(tex, tw, th, ix,   iy,   wrapS, wrapT, borderColor);
+    uint32_t c10 = texFetch(tex, tw, th, ix+1, iy,   wrapS, wrapT, borderColor);
+    uint32_t c01 = texFetch(tex, tw, th, ix,   iy+1, wrapS, wrapT, borderColor);
+    uint32_t c11 = texFetch(tex, tw, th, ix+1, iy+1, wrapS, wrapT, borderColor);
     auto lerp = [] __device__ (float a, float b, float t) { return a + (b - a) * t; };
     auto ch = [&](int shift) {
         float v00 = ((c00>>shift)&0xFF)/255.0f;
@@ -1130,7 +1140,8 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             float tr, tg, tb, ta;
             sampleTex(texBank.tex[0], texBank.w[0], texBank.h[0],
                       u, vv, (int)texBank.magFilter[0], tr, tg, tb, ta,
-                      texBank.wrapS[0], texBank.wrapT[0]);
+                      texBank.wrapS[0], texBank.wrapT[0],
+                      texBank.borderColor[0]);
             // Fallback: texture replaces vertex color when no FP
             r = tr; g = tg; b = tb; a = ta;
         }
@@ -1733,6 +1744,8 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
         tb.tex[i] = d_tex_[i]; tb.w[i] = texW_[i]; tb.h[i] = texH_[i];
         tb.wrapS[i] = wrapS_[i]; tb.wrapT[i] = wrapT_[i];
         tb.magFilter[i] = magFilter_[i];
+        tb.borderColor[i] = borderColor_[i];
+        tb.dimension[i] = texDimension_[i];
     }
     k_rasterTriangles<<<gs, bs>>>(fb_.d_color, fb_.d_depth, fb_.d_stencil,
                                   fb_.width, fb_.height,

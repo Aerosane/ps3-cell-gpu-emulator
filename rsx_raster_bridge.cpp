@@ -795,6 +795,10 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         // Min filter: bits [19:16]. RSX: 1=NEAREST, 2=LINEAR, 5=NEAREST_MIPMAP_NEAREST, etc.
         uint8_t minF = (t.filter >> 16) & 0xF;
         rast_->setTextureMinFilter(tu, (minF == 1 || minF == 4 || minF == 5) ? 0 : 1);
+        // Border color
+        rast_->setTextureBorderColor(tu, t.borderColor);
+        // Texture dimension (1D, 2D, 3D, cubemap)
+        rast_->setTextureDimension(tu, t.dimension);
         if (tu == 0) {
             cachedTexOff_ = t.offset;
             cachedTexW_ = W;
