@@ -532,6 +532,9 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         state->fpOffset  = data & 0xFFFFFFF0;  // bits [31:4] = offset
         state->fpControl = data & 0x0F;
         return;
+    case NV4097_SET_SHADER_WINDOW:
+        state->shaderWindow = data;
+        return;
 
     // ── Draw ───────────────────────────────────────────────────
     case NV4097_SET_BEGIN_END:

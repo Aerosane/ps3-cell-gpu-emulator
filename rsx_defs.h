@@ -416,6 +416,7 @@ struct RSXState {
     // Fragment program
     uint32_t fpOffset;   // VRAM offset of fragment program
     uint32_t fpControl;
+    uint32_t shaderWindow;  // bits [15:0]=height, [16]=origin(0=top,1=bottom), [17]=pixCenter
 
     // Transform constants (up to 468 × vec4 on NV47; round up to 512)
     float    vpConstants[512][4];
