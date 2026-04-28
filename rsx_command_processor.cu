@@ -114,6 +114,8 @@ int rsx_init(RSXState* state) {
 
     // Two-sided stencil defaults
     state->twoSidedStencilEnable = false;
+    // Two-sided color defaults
+    state->twoSidedColorEnable = false;
     state->backStencilFunc       = 0x0207; // ALWAYS
     state->backStencilFuncRef    = 0;
     state->backStencilFuncMask   = 0xFF;
@@ -433,6 +435,10 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     // ── Two-sided stencil ────────────────────────────────────────
     case NV4097_SET_TWO_SIDED_STENCIL_TEST_ENABLE:
         state->twoSidedStencilEnable = (data != 0);
+        return;
+    // ── Two-sided color (back-face lighting) ─────────────────────
+    case NV4097_SET_TWO_SIDE_LIGHT_EN:
+        state->twoSidedColorEnable = (data != 0);
         return;
     case NV4097_SET_BACK_STENCIL_FUNC:
         state->backStencilFunc = data;

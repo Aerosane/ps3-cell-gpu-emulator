@@ -928,7 +928,8 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   float fogParam1,
                                   int depthBoundsTest,
                                   float depthBoundsMin,
-                                  float depthBoundsMax) {
+                                  float depthBoundsMax,
+                                  int twoSidedColor) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -1054,6 +1055,29 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             a = p0 * v0.a + p1 * v1.a + p2 * v2.a;
         }
 
+        // Two-sided color: swap COL0/COL1 with BFC0/BFC1 for back faces
+        float col1R, col1G, col1B, col1A;
+        if (twoSidedColor && !isFrontFace) {
+            if (flatShade) {
+                r = v2.backCol0[0]; g = v2.backCol0[1]; b = v2.backCol0[2]; a = v2.backCol0[3];
+                col1R = v2.backCol1[0]; col1G = v2.backCol1[1]; col1B = v2.backCol1[2]; col1A = v2.backCol1[3];
+            } else {
+                #define INTERP_BFC(fld, idx) (p0*v0.fld[idx]+p1*v1.fld[idx]+p2*v2.fld[idx])
+                r = INTERP_BFC(backCol0,0); g = INTERP_BFC(backCol0,1); b = INTERP_BFC(backCol0,2); a = INTERP_BFC(backCol0,3);
+                col1R = INTERP_BFC(backCol1,0); col1G = INTERP_BFC(backCol1,1); col1B = INTERP_BFC(backCol1,2); col1A = INTERP_BFC(backCol1,3);
+                #undef INTERP_BFC
+            }
+        } else {
+            if (flatShade) {
+                col1R = v2.col1[0]; col1G = v2.col1[1]; col1B = v2.col1[2]; col1A = v2.col1[3];
+            } else {
+                col1R = p0*v0.col1[0]+p1*v1.col1[0]+p2*v2.col1[0];
+                col1G = p0*v0.col1[1]+p1*v1.col1[1]+p2*v2.col1[1];
+                col1B = p0*v0.col1[2]+p1*v1.col1[2]+p2*v2.col1[2];
+                col1A = p0*v0.col1[3]+p1*v1.col1[3]+p2*v2.col1[3];
+            }
+        }
+
         // Texcoords always interpolated with perspective correction
         float u = p0 * v0.u + p1 * v1.u + p2 * v2.u;
         float vv = p0 * v0.v + p1 * v1.v + p2 * v2.v;
@@ -1064,15 +1088,11 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             // 4-13=TEX0-TEX9, 14=SSA
             FPVec4 fpIn[15];
             fpIn[0] = {(float)x + 0.5f, (float)y + 0.5f, z, 1.0f};  // WPOS
-            fpIn[1] = {r, g, b, a};  // COL0
+            fpIn[1] = {r, g, b, a};  // COL0 (or BFC0 for back faces)
+            fpIn[2] = {col1R, col1G, col1B, col1A};  // COL1 (or BFC1 for back faces)
             if (flatShade) {
-                fpIn[2] = {v2.col1[0], v2.col1[1], v2.col1[2], v2.col1[3]};
                 fpIn[3] = {v2.fog, 0, 0, 1};
             } else {
-                fpIn[2] = {p0*v0.col1[0]+p1*v1.col1[0]+p2*v2.col1[0],
-                           p0*v0.col1[1]+p1*v1.col1[1]+p2*v2.col1[1],
-                           p0*v0.col1[2]+p1*v1.col1[2]+p2*v2.col1[2],
-                           p0*v0.col1[3]+p1*v1.col1[3]+p2*v2.col1[3]};
                 fpIn[3] = {p0*v0.fog+p1*v1.fog+p2*v2.fog, 0, 0, 1};
             }
             // TEX0 with full 4 components (r,q from tex0q)
@@ -1278,6 +1298,7 @@ __global__ void k_rasterLines(uint32_t* __restrict__ dst,
                               uint32_t depthFunc,
                               int scX, int scY, uint32_t scW, uint32_t scH,
                               int alphaTest, uint32_t alphaRef,
+                              uint32_t alphaFunc,
                               int depthClip,
                               uint32_t bfSrcRGB, uint32_t bfDstRGB,
                               uint32_t bfSrcA,   uint32_t bfDstA,
@@ -1329,7 +1350,18 @@ __global__ void k_rasterLines(uint32_t* __restrict__ dst,
 
         if (alphaTest) {
             uint32_t af = (uint32_t)(a * 255.0f + 0.5f);
-            if (af <= alphaRef) continue;
+            bool pass = false;
+            switch (alphaFunc) {
+            case 0x0200: break;                              // NEVER
+            case 0x0201: pass = af <  alphaRef; break;
+            case 0x0202: pass = af == alphaRef; break;
+            case 0x0203: pass = af <= alphaRef; break;
+            case 0x0204: pass = af >  alphaRef; break;
+            case 0x0205: pass = af != alphaRef; break;
+            case 0x0206: pass = af >= alphaRef; break;
+            case 0x0207: pass = true; break;                 // ALWAYS
+            }
+            if (!pass) continue;
         }
 
         if (blendEnable) {
@@ -1378,6 +1410,7 @@ __global__ void k_rasterPoints(uint32_t* __restrict__ dst,
                                uint32_t depthFunc,
                                int scX, int scY, uint32_t scW, uint32_t scH,
                                int alphaTest, uint32_t alphaRef,
+                               uint32_t alphaFunc,
                                int depthClip,
                                uint32_t bfSrcRGB, uint32_t bfDstRGB,
                                uint32_t bfSrcA,   uint32_t bfDstA,
@@ -1402,7 +1435,18 @@ __global__ void k_rasterPoints(uint32_t* __restrict__ dst,
     float r = v.r, g = v.g, b = v.b, a = v.a;
     if (alphaTest) {
         uint32_t af = (uint32_t)(a * 255.0f + 0.5f);
-        if (af <= alphaRef) return;
+        bool pass = false;
+        switch (alphaFunc) {
+        case 0x0200: break;                              // NEVER
+        case 0x0201: pass = af <  alphaRef; break;
+        case 0x0202: pass = af == alphaRef; break;
+        case 0x0203: pass = af <= alphaRef; break;
+        case 0x0204: pass = af >  alphaRef; break;
+        case 0x0205: pass = af != alphaRef; break;
+        case 0x0206: pass = af >= alphaRef; break;
+        case 0x0207: pass = true; break;                 // ALWAYS
+        }
+        if (!pass) return;
     }
     if (blendEnable) {
         uint32_t dc = dst[base];
@@ -1737,7 +1781,8 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   fogMode_,
                                   fogParam0_, fogParam1_,
                                   depthBoundsTestEnable_ ? 1 : 0,
-                                  depthBoundsMin_, depthBoundsMax_);
+                                  depthBoundsMin_, depthBoundsMax_,
+                                  twoSidedColor_ ? 1 : 0);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;
@@ -1815,6 +1860,7 @@ uint32_t CudaRasterizer::drawLines(const RasterVertex* verts, uint32_t count) {
                               scX_, scY_, scW_, scH_,
                               alphaTestEnable_ ? 1 : 0,
                               uint32_t(alphaRef_),
+                              uint32_t(alphaFunc_),
                               depthClip_ ? 1 : 0,
                               uint32_t(bfSrcRGB_), uint32_t(bfDstRGB_),
                               uint32_t(bfSrcA_),   uint32_t(bfDstA_),
@@ -1855,6 +1901,7 @@ uint32_t CudaRasterizer::drawPoints(const RasterVertex* verts, uint32_t count) {
                                scX_, scY_, scW_, scH_,
                                alphaTestEnable_ ? 1 : 0,
                                uint32_t(alphaRef_),
+                               uint32_t(alphaFunc_),
                                depthClip_ ? 1 : 0,
                                uint32_t(bfSrcRGB_), uint32_t(bfDstRGB_),
                                uint32_t(bfSrcA_),   uint32_t(bfDstA_),

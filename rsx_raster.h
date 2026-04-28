@@ -166,6 +166,7 @@ public:
     void setStencilWriteMask(uint8_t mask) { stencilWriteMask_ = mask; }
 
     void setTwoSidedStencil(bool enable) { twoSidedStencil_ = enable; }
+    void setTwoSidedColor(bool enable) { twoSidedColor_ = enable; }
     void setBackStencilFunc(StencilFunc f, uint8_t ref, uint8_t mask = 0xFF) {
         backStencilFunc_ = f; backStencilRef_ = ref; backStencilMask_ = mask;
     }
@@ -433,6 +434,7 @@ private:
     StencilOp stencilZPass_{StencilOp::Keep};
 
     bool      twoSidedStencil_{false};
+    bool      twoSidedColor_{false};
     StencilFunc backStencilFunc_{StencilFunc::Always};
     uint8_t   backStencilRef_{0};
     uint8_t   backStencilMask_{0xFF};

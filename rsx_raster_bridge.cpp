@@ -492,6 +492,9 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
         rast_->setBackStencilWriteMask((uint8_t)(s.backStencilWriteMask & 0xFF));
     }
 
+    // Two-sided color (back-face lighting)
+    rast_->setTwoSidedColor(s.twoSidedColorEnable);
+
     // Fog
     rast_->setFogParams(s.fogMode, s.fogParam0, s.fogParam1);
 

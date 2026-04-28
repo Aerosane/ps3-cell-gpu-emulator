@@ -104,6 +104,8 @@ static constexpr uint32_t NV4097_SET_LOGIC_OP                 = 0x00000D08;
 
 // Two-sided stencil
 static constexpr uint32_t NV4097_SET_TWO_SIDED_STENCIL_TEST_ENABLE = 0x00000D54;
+// Two-sided color (back-face colors)
+static constexpr uint32_t NV4097_SET_TWO_SIDE_LIGHT_EN             = 0x00000294;
 static constexpr uint32_t NV4097_SET_BACK_STENCIL_FUNC        = 0x00000D58;
 static constexpr uint32_t NV4097_SET_BACK_STENCIL_FUNC_REF    = 0x00000D5C;
 static constexpr uint32_t NV4097_SET_BACK_STENCIL_FUNC_MASK   = 0x00000D60;
@@ -369,6 +371,8 @@ struct RSXState {
 
     // Two-sided stencil (back face)
     bool     twoSidedStencilEnable;
+    // Two-sided color (back-face BFC0/BFC1)
+    bool     twoSidedColorEnable;
     uint32_t backStencilFunc;
     uint32_t backStencilFuncRef;
     uint32_t backStencilFuncMask;
