@@ -63,6 +63,11 @@ __device__ void sampleTexCube(const uint32_t* tex,
     uint32_t faceW, uint32_t totalH,
     float dirX, float dirY, float dirZ, int bilinear,
     float& r, float& g, float& b, float& a);
+__device__ void sampleTex3D(const uint32_t* tex,
+    uint32_t tw, uint32_t sliceH, uint32_t texDepth,
+    float u, float v, float w, int bilinear,
+    float& ro, float& go, float& bo, float& ao,
+    uint8_t wrapS, uint8_t wrapT, uint8_t wrapR, uint32_t borderColor);
 
 #define FP_PACK_W0(op, mx, my, mz, mw, tu, ia, sat, end) \
     (((op)&0x7F) | (((mx)&1)<<7) | (((my)&1)<<8) | (((mz)&1)<<9) | \
@@ -156,7 +161,8 @@ struct FPVec4 { float x, y, z, w; };
 struct TexBank {
     const uint32_t* tex[8];
     uint32_t w[8], h[8];
-    uint8_t wrapS[8], wrapT[8];  // RSX wrap: 1=REPEAT, 2=MIRROR, 3=CLAMP_EDGE
+    uint32_t depth[8];           // 3D texture depth (slices)
+    uint8_t wrapS[8], wrapT[8], wrapR[8];  // RSX wrap: 1=REPEAT, 2=MIRROR, 3=CLAMP_EDGE
     uint8_t magFilter[8];        // 0=NEAREST, 1=LINEAR (per unit)
     uint32_t borderColor[8];     // ARGB32 border color for CLAMP_TO_BORDER
     uint8_t dimension[8];        // 1=1D, 2=2D, 3=3D, 6=CUBE
@@ -373,6 +379,17 @@ __device__ bool fpExecute(
                                   texBank.h[texUnit], s0.x, s0.y, s0.z,
                                   (int)texBank.magFilter[texUnit],
                                   tr, tg, tb, ta);
+                } else if (texBank.dimension[texUnit] == 3) {
+                    // 3D texture: s0.xyz = UVW
+                    uint32_t sliceH = texBank.h[texUnit] / texBank.depth[texUnit];
+                    if (sliceH == 0) sliceH = texBank.h[texUnit];
+                    sampleTex3D(texBank.tex[texUnit], texBank.w[texUnit],
+                                sliceH, texBank.depth[texUnit],
+                                s0.x, s0.y, s0.z,
+                                (int)texBank.magFilter[texUnit],
+                                tr, tg, tb, ta,
+                                texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                                texBank.wrapR[texUnit], texBank.borderColor[texUnit]);
                 } else {
                     sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                               texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
@@ -504,6 +521,16 @@ __device__ bool fpExecute(
                                   texBank.h[texUnit], pu, pv, s0.z / w,
                                   (int)texBank.magFilter[texUnit],
                                   tr, tg, tb, ta);
+                } else if (texBank.dimension[texUnit] == 3) {
+                    uint32_t sliceH = texBank.h[texUnit] / texBank.depth[texUnit];
+                    if (sliceH == 0) sliceH = texBank.h[texUnit];
+                    sampleTex3D(texBank.tex[texUnit], texBank.w[texUnit],
+                                sliceH, texBank.depth[texUnit],
+                                pu, pv, s0.z / w,
+                                (int)texBank.magFilter[texUnit],
+                                tr, tg, tb, ta,
+                                texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                                texBank.wrapR[texUnit], texBank.borderColor[texUnit]);
                 } else {
                     sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                               texBank.h[texUnit], pu, pv, (int)texBank.magFilter[texUnit],
@@ -528,6 +555,16 @@ __device__ bool fpExecute(
                                   texBank.h[texUnit], s0.x, s0.y, s0.z,
                                   (int)texBank.magFilter[texUnit],
                                   tr, tg, tb, ta);
+                } else if (texBank.dimension[texUnit] == 3) {
+                    uint32_t sliceH = texBank.h[texUnit] / texBank.depth[texUnit];
+                    if (sliceH == 0) sliceH = texBank.h[texUnit];
+                    sampleTex3D(texBank.tex[texUnit], texBank.w[texUnit],
+                                sliceH, texBank.depth[texUnit],
+                                s0.x, s0.y, s0.z,
+                                (int)texBank.magFilter[texUnit],
+                                tr, tg, tb, ta,
+                                texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                                texBank.wrapR[texUnit], texBank.borderColor[texUnit]);
                 } else {
                     sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                               texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
@@ -594,6 +631,16 @@ __device__ bool fpExecute(
                                   texBank.h[texUnit], s0.x, s0.y, s0.z,
                                   (int)texBank.magFilter[texUnit],
                                   tr, tg, tb, ta);
+                } else if (texBank.dimension[texUnit] == 3) {
+                    uint32_t sliceH = texBank.h[texUnit] / texBank.depth[texUnit];
+                    if (sliceH == 0) sliceH = texBank.h[texUnit];
+                    sampleTex3D(texBank.tex[texUnit], texBank.w[texUnit],
+                                sliceH, texBank.depth[texUnit],
+                                s0.x, s0.y, s0.z,
+                                (int)texBank.magFilter[texUnit],
+                                tr, tg, tb, ta,
+                                texBank.wrapS[texUnit], texBank.wrapT[texUnit],
+                                texBank.wrapR[texUnit], texBank.borderColor[texUnit]);
                 } else {
                     sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                               texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
@@ -944,6 +991,95 @@ __device__ __forceinline__ void sampleTexCube(const uint32_t* tex,
         return lerp2(lerp2(v00, v10, sx), lerp2(v01, v11, sx), sy);
     };
     r = ch2(16); g = ch2(8); b = ch2(0); a = ch2(24);
+}
+
+// Sample a 3D texture: depth slices stacked vertically.
+// Total texture height = sliceH * depth. Each slice is w × sliceH.
+__device__ __forceinline__ void sampleTex3D(const uint32_t* tex,
+                                            uint32_t tw, uint32_t sliceH,
+                                            uint32_t texDepth,
+                                            float u, float v, float w,
+                                            int bilinear,
+                                            float& ro, float& go, float& bo, float& ao,
+                                            uint8_t wrapS = 1, uint8_t wrapT = 1,
+                                            uint8_t wrapR = 1,
+                                            uint32_t borderColor = 0) {
+    // W coordinate selects depth slice
+    float fz = w * (float)texDepth - 0.5f;
+    int iz0 = (int)floorf(fz);
+    int iz1 = iz0 + 1;
+    float tz = fz - iz0;
+
+    // Wrap depth slices
+    iz0 = texWrap(iz0, (int)texDepth, wrapR);
+    iz1 = texWrap(iz1, (int)texDepth, wrapR);
+    if (iz0 < 0) iz0 = 0;
+    if (iz1 < 0) iz1 = 0;
+
+    // Sample two adjacent slices as 2D textures
+    uint32_t totalH = sliceH * texDepth;
+    float r0, g0, b0, a0, r1, g1, b1, a1;
+
+    // Slice 0: offset into the vertical stack
+    const uint32_t* slice0 = tex + iz0 * sliceH * tw;
+    const uint32_t* slice1 = tex + iz1 * sliceH * tw;
+
+    // Use 2D sampleTex on each slice (pass sliceH as height)
+    float fx = u * (float)tw - 0.5f;
+    float fy = v * (float)sliceH - 0.5f;
+    int ix = (int)floorf(fx);
+    int iy = (int)floorf(fy);
+
+    auto fetchSlice = [&](const uint32_t* s, float& sr, float& sg, float& sb, float& sa) {
+        if (!bilinear) {
+            int cx = texWrap(ix, (int)tw, wrapS);
+            int cy = texWrap(iy, (int)sliceH, wrapT);
+            if (cx < 0 || cy < 0) {
+                sr = ((borderColor >> 16) & 0xFF) / 255.0f;
+                sg = ((borderColor >>  8) & 0xFF) / 255.0f;
+                sb = ((borderColor >>  0) & 0xFF) / 255.0f;
+                sa = ((borderColor >> 24) & 0xFF) / 255.0f;
+                return;
+            }
+            uint32_t c = s[cy * tw + cx];
+            sr = ((c >> 16) & 0xFF) / 255.0f;
+            sg = ((c >>  8) & 0xFF) / 255.0f;
+            sb = ((c >>  0) & 0xFF) / 255.0f;
+            sa = ((c >> 24) & 0xFF) / 255.0f;
+            return;
+        }
+        float sx = fx - ix, sy = fy - iy;
+        auto fetch2 = [&](int x, int y) -> uint32_t {
+            int cx = texWrap(x, (int)tw, wrapS);
+            int cy = texWrap(y, (int)sliceH, wrapT);
+            if (cx < 0 || cy < 0) return borderColor;
+            return s[cy * tw + cx];
+        };
+        uint32_t c00 = fetch2(ix, iy), c10 = fetch2(ix+1, iy);
+        uint32_t c01 = fetch2(ix, iy+1), c11 = fetch2(ix+1, iy+1);
+        auto lerp3 = [] __device__ (float a, float b, float t) { return a + (b - a) * t; };
+        auto ch3 = [&](int shift) {
+            float v00 = ((c00>>shift)&0xFF)/255.0f;
+            float v10 = ((c10>>shift)&0xFF)/255.0f;
+            float v01 = ((c01>>shift)&0xFF)/255.0f;
+            float v11 = ((c11>>shift)&0xFF)/255.0f;
+            return lerp3(lerp3(v00, v10, sx), lerp3(v01, v11, sx), sy);
+        };
+        sr = ch3(16); sg = ch3(8); sb = ch3(0); sa = ch3(24);
+    };
+
+    fetchSlice(slice0, r0, g0, b0, a0);
+    fetchSlice(slice1, r1, g1, b1, a1);
+
+    // Trilinear interpolation between slices
+    if (bilinear && texDepth > 1) {
+        ro = r0 + (r1 - r0) * tz;
+        go = g0 + (g1 - g0) * tz;
+        bo = b0 + (b1 - b0) * tz;
+        ao = a0 + (a1 - a0) * tz;
+    } else {
+        ro = r0; go = g0; bo = b0; ao = a0;
+    }
 }
 
 __device__ __forceinline__ void sampleTex(const uint32_t* tex,
@@ -1895,7 +2031,8 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     memset(&tb, 0, sizeof(tb));
     for (int i = 0; i < MAX_TEX_UNITS; ++i) {
         tb.tex[i] = d_tex_[i]; tb.w[i] = texW_[i]; tb.h[i] = texH_[i];
-        tb.wrapS[i] = wrapS_[i]; tb.wrapT[i] = wrapT_[i];
+        tb.depth[i] = texDepth_[i];
+        tb.wrapS[i] = wrapS_[i]; tb.wrapT[i] = wrapT_[i]; tb.wrapR[i] = wrapR_[i];
         tb.magFilter[i] = magFilter_[i];
         tb.borderColor[i] = borderColor_[i];
         tb.dimension[i] = texDimension_[i];

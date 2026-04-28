@@ -825,6 +825,11 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         rast_->setTextureBorderColor(tu, t.borderColor);
         // Texture dimension (1D, 2D, 3D, cubemap)
         rast_->setTextureDimension(tu, t.dimension);
+        rast_->setTextureDepth(tu, t.depth);
+        // WrapR (bits [19:16] of address register): for 3D textures
+        uint8_t wrapR = (t.address >> 16) & 0xF;
+        if (wrapR == 0) wrapR = 1; // default REPEAT
+        rast_->setTextureWrapR(tu, wrapR);
         if (tu == 0) {
             cachedTexOff_ = t.offset;
             cachedTexW_ = W;
