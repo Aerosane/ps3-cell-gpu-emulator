@@ -471,6 +471,34 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         return;
     }
 
+    // ── Depth bounds ────────────────────────────────────────────
+    case NV4097_SET_DEPTH_BOUNDS_TEST_ENABLE:
+        state->depthBoundsTestEnable = (data != 0);
+        return;
+    case NV4097_SET_DEPTH_BOUNDS_MIN: {
+        float f; memcpy(&f, &data, 4);
+        state->depthBoundsMin = f;
+        return;
+    }
+    case NV4097_SET_DEPTH_BOUNDS_MAX: {
+        float f; memcpy(&f, &data, 4);
+        state->depthBoundsMax = f;
+        return;
+    }
+
+    // ── Primitive restart ───────────────────────────────────────
+    case NV4097_SET_RESTART_INDEX_ENABLE:
+        state->restartIndexEnable = (data != 0);
+        return;
+    case NV4097_SET_RESTART_INDEX:
+        state->restartIndex = data;
+        return;
+
+    // ── User clip planes ────────────────────────────────────────
+    case NV4097_SET_USER_CLIP_PLANE_CONTROL:
+        state->userClipPlaneControl = data;
+        return;
+
     // ── Clear ──────────────────────────────────────────────────
     case NV4097_SET_COLOR_CLEAR_VALUE:
         state->colorClearValue = data;

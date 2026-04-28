@@ -118,6 +118,15 @@ static constexpr uint32_t NV4097_SET_FOG_PARAMS               = 0x000008A8; // 2
 
 // Depth bounds
 static constexpr uint32_t NV4097_SET_DEPTH_BOUNDS_TEST_ENABLE = 0x00000380;
+static constexpr uint32_t NV4097_SET_DEPTH_BOUNDS_MIN         = 0x00000384;
+static constexpr uint32_t NV4097_SET_DEPTH_BOUNDS_MAX         = 0x00000388;
+
+// Primitive restart
+static constexpr uint32_t NV4097_SET_RESTART_INDEX_ENABLE     = 0x000006B4;
+static constexpr uint32_t NV4097_SET_RESTART_INDEX            = 0x000006B8;
+
+// User clip planes (6 planes, packed 2 bits each in one register)
+static constexpr uint32_t NV4097_SET_USER_CLIP_PLANE_CONTROL  = 0x00001478;
 
 // Scissor
 static constexpr uint32_t NV4097_SET_SCISSOR_HORIZONTAL       = 0x000008C0;
@@ -372,6 +381,18 @@ struct RSXState {
     uint32_t fogMode;             // 0x2601=LINEAR, 0x0800=EXP, 0x0801=EXP2
     float    fogParam0;           // start (linear), density (exp/exp2)
     float    fogParam1;           // end (linear), unused (exp)
+
+    // Depth bounds test
+    bool     depthBoundsTestEnable;
+    float    depthBoundsMin;
+    float    depthBoundsMax;
+
+    // Primitive restart
+    bool     restartIndexEnable;
+    uint32_t restartIndex;
+
+    // User clip plane control (6 planes, 2 bits each: 0=disable, 1=LT, 2=GE)
+    uint32_t userClipPlaneControl;
 
     // Vertex arrays (16 slots)
     struct VertexArray {

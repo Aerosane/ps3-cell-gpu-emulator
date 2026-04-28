@@ -495,6 +495,9 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
     // Fog
     rast_->setFogParams(s.fogMode, s.fogParam0, s.fogParam1);
 
+    // Depth bounds
+    rast_->setDepthBoundsTest(s.depthBoundsTestEnable, s.depthBoundsMin, s.depthBoundsMax);
+
     // Cull
     rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
 

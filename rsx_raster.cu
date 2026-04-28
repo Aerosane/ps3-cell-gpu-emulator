@@ -925,7 +925,10 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   int frontFaceCCW,
                                   uint32_t fogMode,
                                   float fogParam0,
-                                  float fogParam1) {
+                                  float fogParam1,
+                                  int depthBoundsTest,
+                                  float depthBoundsMin,
+                                  float depthBoundsMax) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -1001,6 +1004,9 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         // plane). Matches default RSX/GL behaviour — games can keep
         // relying on depth clamping by not enabling NV4097 depth-clamp.
         if (depthClip && (z < 0.0f || z > 1.0f)) continue;
+
+        // Depth bounds test: reject fragments outside [min,max] range
+        if (depthBoundsTest && (z < depthBoundsMin || z > depthBoundsMax)) continue;
 
         // Two-sided stencil: select front/back params based on winding
         bool isFrontFace = frontFaceCCW ? (area > 0.0f) : (area < 0.0f);
@@ -1726,7 +1732,9 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   uint32_t(backStencilZPass_),
                                   (frontFace_ == FrontFace::CCW) ? 1 : 0,
                                   fogMode_,
-                                  fogParam0_, fogParam1_);
+                                  fogParam0_, fogParam1_,
+                                  depthBoundsTestEnable_ ? 1 : 0,
+                                  depthBoundsMin_, depthBoundsMax_);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;

@@ -271,6 +271,13 @@ public:
         fogMode_ = mode; fogParam0_ = param0; fogParam1_ = param1;
     }
 
+    // Depth bounds test: reject fragments whose depth is outside [min,max].
+    void setDepthBoundsTest(bool enable, float minZ = 0.0f, float maxZ = 1.0f) {
+        depthBoundsTestEnable_ = enable;
+        depthBoundsMin_ = minZ;
+        depthBoundsMax_ = maxZ;
+    }
+
     // Near/far depth clip. When enabled (default), fragments whose
     // interpolated depth falls outside [0,1] are rejected. Disable for
     // RSX depth-clamp mode (NV4097_SET_DEPTH_CLAMP_CONTROL).
@@ -404,6 +411,9 @@ private:
     uint32_t  fogMode_{0x2601};       // LINEAR
     float     fogParam0_{0.0f};
     float     fogParam1_{1.0f};
+    bool      depthBoundsTestEnable_{false};
+    float     depthBoundsMin_{0.0f};
+    float     depthBoundsMax_{1.0f};
 
     // Fragment program state — pre-decoded microcode uploaded to device.
     // When set (fpInsnCount_ > 0), the rasterizer executes the FP per-pixel
