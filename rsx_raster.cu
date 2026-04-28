@@ -1543,65 +1543,93 @@ __global__ void k_rasterPoints(uint32_t* __restrict__ dst,
                                uint32_t bfSrcRGB, uint32_t bfDstRGB,
                                uint32_t bfSrcA,   uint32_t bfDstA,
                                uint32_t beRGB,    uint32_t beA,
-                               float ccR, float ccG, float ccB, float ccA) {
+                               float ccR, float ccG, float ccB, float ccA,
+                               float globalPointSize,
+                               int pointSpriteEnable) {
     uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= pointCount) return;
     const RasterVertex v = verts[i];
-    int px = (int)(v.x);  // truncation — ok for "1 px dot at floor(x)".
-    int py = (int)(v.y);
-    if (px < 0 || py < 0 || px >= (int)width || py >= (int)height) return;
-    if (scW > 0 && scH > 0) {
-        if (px < scX || px >= scX + (int)scW ||
-            py < scY || py >= scY + (int)scH) return;
-    }
-    uint32_t base = py * width + px;
+
+    // Point size: per-vertex PSIZ (VP output 6) or global fallback
+    float ps = (v.pointSize > 0.0f) ? v.pointSize : globalPointSize;
+    if (ps < 1.0f) ps = 1.0f;
+    int halfPx = (int)(ps * 0.5f);
+    int cx = (int)(v.x), cy = (int)(v.y);
+    int x0 = cx - halfPx, y0 = cy - halfPx;
+    int x1 = x0 + (int)ps, y1 = y0 + (int)ps;
+
+    // Clamp to framebuffer
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int)width)  x1 = (int)width;
+    if (y1 > (int)height) y1 = (int)height;
+
     float z = v.z;
     if (depthClip && (z < 0.0f || z > 1.0f)) return;
-    if (depthTest && depth) {
-        if (!depthCompare(depthFunc, z, depth[base])) return;
-    }
-    float r = v.r, g = v.g, b = v.b, a = v.a;
-    if (alphaTest) {
-        uint32_t af = (uint32_t)(a * 255.0f + 0.5f);
-        bool pass = false;
-        switch (alphaFunc) {
-        case 0x0200: break;                              // NEVER
-        case 0x0201: pass = af <  alphaRef; break;
-        case 0x0202: pass = af == alphaRef; break;
-        case 0x0203: pass = af <= alphaRef; break;
-        case 0x0204: pass = af >  alphaRef; break;
-        case 0x0205: pass = af != alphaRef; break;
-        case 0x0206: pass = af >= alphaRef; break;
-        case 0x0207: pass = true; break;                 // ALWAYS
+
+    for (int py = y0; py < y1; ++py) {
+        for (int px = x0; px < x1; ++px) {
+            if (scW > 0 && scH > 0) {
+                if (px < scX || px >= scX + (int)scW ||
+                    py < scY || py >= scY + (int)scH) continue;
+            }
+            uint32_t base = py * width + px;
+            if (depthTest && depth) {
+                if (!depthCompare(depthFunc, z, depth[base])) continue;
+            }
+            float r = v.r, g = v.g, b = v.b, a = v.a;
+
+            // Point sprites: generate UV coords as interpolated [0,1]
+            // across the point quad. Writes to TEX0 via col override.
+            if (pointSpriteEnable && ps > 1.0f) {
+                float u = (float)(px - x0 + 0.5f) / ps;
+                float vv = (float)(py - y0 + 0.5f) / ps;
+                (void)u; (void)vv; // TODO: pass to FP as tex coord
+            }
+
+            if (alphaTest) {
+                uint32_t af = (uint32_t)(a * 255.0f + 0.5f);
+                bool pass = false;
+                switch (alphaFunc) {
+                case 0x0200: break;
+                case 0x0201: pass = af <  alphaRef; break;
+                case 0x0202: pass = af == alphaRef; break;
+                case 0x0203: pass = af <= alphaRef; break;
+                case 0x0204: pass = af >  alphaRef; break;
+                case 0x0205: pass = af != alphaRef; break;
+                case 0x0206: pass = af >= alphaRef; break;
+                case 0x0207: pass = true; break;
+                }
+                if (!pass) continue;
+            }
+            if (blendEnable) {
+                uint32_t dc = dst[base];
+                float dr = ((dc >> 16) & 0xFF) / 255.0f;
+                float dg = ((dc >>  8) & 0xFF) / 255.0f;
+                float db = ((dc >>  0) & 0xFF) / 255.0f;
+                float da = ((dc >> 24) & 0xFF) / 255.0f;
+                float fSr = blendFactor(bfSrcRGB, r, dr, a, da, ccR, ccA, 0);
+                float fSg = blendFactor(bfSrcRGB, g, dg, a, da, ccG, ccA, 0);
+                float fSb = blendFactor(bfSrcRGB, b, db, a, da, ccB, ccA, 0);
+                float fSa = blendFactor(bfSrcA,   a, da, a, da, ccA, ccA, 1);
+                float fDr = blendFactor(bfDstRGB, r, dr, a, da, ccR, ccA, 0);
+                float fDg = blendFactor(bfDstRGB, g, dg, a, da, ccG, ccA, 0);
+                float fDb = blendFactor(bfDstRGB, b, db, a, da, ccB, ccA, 0);
+                float fDa = blendFactor(bfDstA,   a, da, a, da, ccA, ccA, 1);
+                r = blendEquation(beRGB, r * fSr, dr * fDr);
+                g = blendEquation(beRGB, g * fSg, dg * fDg);
+                b = blendEquation(beRGB, b * fSb, db * fDb);
+                a = blendEquation(beA,   a * fSa, da * fDa);
+            }
+            auto sat = [](float v) -> uint32_t {
+                int i = (int)(v * 255.0f + 0.5f);
+                if (i < 0) i = 0; else if (i > 255) i = 255;
+                return (uint32_t)i;
+            };
+            dst[base] = (sat(a) << 24) | (sat(r) << 16) | (sat(g) << 8) | sat(b);
+            if (depth && depthWrite) depth[base] = z;
         }
-        if (!pass) return;
     }
-    if (blendEnable) {
-        uint32_t dc = dst[base];
-        float dr = ((dc >> 16) & 0xFF) / 255.0f;
-        float dg = ((dc >>  8) & 0xFF) / 255.0f;
-        float db = ((dc >>  0) & 0xFF) / 255.0f;
-        float da = ((dc >> 24) & 0xFF) / 255.0f;
-        float fSr = blendFactor(bfSrcRGB, r, dr, a, da, ccR, ccA, 0);
-        float fSg = blendFactor(bfSrcRGB, g, dg, a, da, ccG, ccA, 0);
-        float fSb = blendFactor(bfSrcRGB, b, db, a, da, ccB, ccA, 0);
-        float fSa = blendFactor(bfSrcA,   a, da, a, da, ccA, ccA, 1);
-        float fDr = blendFactor(bfDstRGB, r, dr, a, da, ccR, ccA, 0);
-        float fDg = blendFactor(bfDstRGB, g, dg, a, da, ccG, ccA, 0);
-        float fDb = blendFactor(bfDstRGB, b, db, a, da, ccB, ccA, 0);
-        float fDa = blendFactor(bfDstA,   a, da, a, da, ccA, ccA, 1);
-        r = blendEquation(beRGB, r * fSr, dr * fDr);
-        g = blendEquation(beRGB, g * fSg, dg * fDg);
-        b = blendEquation(beRGB, b * fSb, db * fDb);
-        a = blendEquation(beA,   a * fSa, da * fDa);
-    }
-    auto sat = [](float v) -> uint32_t {
-        int i = (int)(v * 255.0f + 0.5f);
-        if (i < 0) i = 0; else if (i > 255) i = 255;
-        return (uint32_t)i;
-    };
-    dst[base] = (sat(a) << 24) | (sat(r) << 16) | (sat(g) << 8) | sat(b);
-    if (depth && depthWrite) depth[base] = z;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1774,6 +1802,14 @@ uint32_t CudaRasterizer::drawIndexed(const RasterVertex* verts,
         uint32_t idx = indexIs32
             ? static_cast<const uint32_t*>(indices)[i]
             : static_cast<const uint16_t*>(indices)[i];
+        // Primitive restart: skip the restart index and any incomplete
+        // triangle at the boundary — the next index starts a new strip.
+        if (restartIndexEnable_ && idx == restartIndex_) {
+            // Trim to complete-triangle boundary
+            uint32_t rem = expanded.size() % 3;
+            if (rem) expanded.resize(expanded.size() - rem);
+            continue;
+        }
         if (idx >= vertexCount) return 0;
         expanded.push_back(verts[idx]);
     }
@@ -2040,7 +2076,9 @@ uint32_t CudaRasterizer::drawPoints(const RasterVertex* verts, uint32_t count) {
                                uint32_t(bfSrcA_),   uint32_t(bfDstA_),
                                uint32_t(beRGB_),    uint32_t(beA_),
                                blendConstR_, blendConstG_,
-                               blendConstB_, blendConstA_);
+                               blendConstB_, blendConstA_,
+                               pointSize_,
+                               pointSpriteEnable_ ? 1 : 0);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     return count;

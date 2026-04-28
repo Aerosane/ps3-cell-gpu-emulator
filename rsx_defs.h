@@ -134,6 +134,11 @@ static constexpr uint32_t NV4097_SET_USER_CLIP_PLANE_CONTROL  = 0x00001478;
 static constexpr uint32_t NV4097_SET_SCISSOR_HORIZONTAL       = 0x000008C0;
 static constexpr uint32_t NV4097_SET_SCISSOR_VERTICAL         = 0x000008C4;
 
+// Line / Point rendering
+static constexpr uint32_t NV4097_SET_LINE_WIDTH               = 0x000003B8;
+static constexpr uint32_t NV4097_SET_POINT_SIZE               = 0x00001EE0;
+static constexpr uint32_t NV4097_SET_POINT_SPRITE_CONTROL     = 0x00001EE8;
+
 // Shader programs
 static constexpr uint32_t NV4097_SET_SHADER_PROGRAM          = 0x000008E4;
 
@@ -423,6 +428,11 @@ struct RSXState {
     uint32_t fpOffset;   // VRAM offset of fragment program
     uint32_t fpControl;
     uint32_t shaderWindow;  // bits [15:0]=height, [16]=origin(0=top,1=bottom), [17]=pixCenter
+
+    // Line / point rendering state
+    float    pointSize;         // default 1.0 (float register)
+    uint32_t lineWidth;         // fixed 8.3 format → actual = lineWidth / 8.0
+    uint32_t pointSpriteCtrl;   // bit 0 = enable, bits [8:15] = tex coord mask
 
     // Transform constants (up to 468 × vec4 on NV47; round up to 512)
     float    vpConstants[512][4];

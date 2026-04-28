@@ -295,6 +295,17 @@ public:
         shaderWindowHeight_ = height;
     }
 
+    // Point / line rendering state
+    void setPointSize(float sz) { pointSize_ = (sz > 0.0f) ? sz : 1.0f; }
+    void setLineWidth(float w)  { lineWidth_ = (w > 0.0f) ? w : 1.0f; }
+    void setPointSpriteEnable(bool e) { pointSpriteEnable_ = e; }
+
+    // Primitive restart: when enabled, an index matching restartIndex
+    // breaks the current primitive strip, starting a new one.
+    void setPrimitiveRestart(bool enable, uint32_t idx = 0xFFFFFFFF) {
+        restartIndexEnable_ = enable; restartIndex_ = idx;
+    }
+
     // Fragment program — pre-decoded micro-instructions for GPU execution.
     // Each insn is 8 uint32_t packed: [opcode|masks|texUnit|inputAttr,
     //  dstReg, src0Type|idx|swz, src1Type|idx|swz, src2Type|idx|swz,
@@ -439,6 +450,13 @@ private:
     bool      fpDepthReplace_{false};
     int       shaderWindowOrigin_{0};   // 0=top, 1=bottom
     float     shaderWindowHeight_{720}; // default 720p
+
+    float     pointSize_{1.0f};
+    float     lineWidth_{1.0f};
+    bool      pointSpriteEnable_{false};
+
+    bool      restartIndexEnable_{false};
+    uint32_t  restartIndex_{0xFFFFFFFF};
 
     bool      stencilTest_{false};
     StencilFunc stencilFunc_{StencilFunc::Always};

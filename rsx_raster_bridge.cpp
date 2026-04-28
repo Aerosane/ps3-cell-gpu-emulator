@@ -512,6 +512,14 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
         rast_->setShaderWindow(swOrigin, (float)swH);
     }
 
+    // Point size / line width / point sprites
+    rast_->setPointSize(s.pointSize > 0.0f ? s.pointSize : 1.0f);
+    rast_->setLineWidth(s.lineWidth > 0 ? (float)s.lineWidth / 8.0f : 1.0f);
+    rast_->setPointSpriteEnable((s.pointSpriteCtrl & 1) != 0);
+
+    // Primitive restart
+    rast_->setPrimitiveRestart(s.restartIndexEnable, s.restartIndex);
+
     // Cull
     rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
 

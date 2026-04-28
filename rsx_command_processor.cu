@@ -536,6 +536,20 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         state->shaderWindow = data;
         return;
 
+    case NV4097_SET_POINT_SIZE:
+        {
+            float sz;
+            memcpy(&sz, &data, 4);
+            state->pointSize = sz;
+        }
+        return;
+    case NV4097_SET_LINE_WIDTH:
+        state->lineWidth = data;
+        return;
+    case NV4097_SET_POINT_SPRITE_CONTROL:
+        state->pointSpriteCtrl = data;
+        return;
+
     // ── Draw ───────────────────────────────────────────────────
     case NV4097_SET_BEGIN_END:
         if (data != 0) {
