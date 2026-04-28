@@ -549,6 +549,15 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     case NV4097_SET_POINT_SPRITE_CONTROL:
         state->pointSpriteCtrl = data;
         return;
+    case NV4097_SET_COLOR_MASK_MRT:
+        state->colorMaskMrt = data;
+        return;
+    case NV4097_SET_VERTEX_ATTRIB_OUTPUT_MASK:
+        state->vpAttribOutputMask = data;
+        return;
+    case NV4097_SET_FREQUENCY_DIVIDER_OPERATION:
+        state->freqDividerOp = data;
+        return;
 
     // ── Draw ───────────────────────────────────────────────────
     case NV4097_SET_BEGIN_END:
@@ -668,6 +677,16 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
             state->textures[unit].depth = (data >> 20) & 0xFFF;
             if (state->textures[unit].depth == 0)
                 state->textures[unit].depth = 1;
+        }
+        return;
+    }
+
+    // ── Texture control1 (remap/swizzle per unit) ────────────
+    if (method >= NV4097_SET_TEXTURE_CONTROL1 &&
+        method <  NV4097_SET_TEXTURE_CONTROL1 + 16 * 4) {
+        uint32_t unit = (method - NV4097_SET_TEXTURE_CONTROL1) / 4;
+        if (unit < 16) {
+            state->textures[unit].control1 = data;
         }
         return;
     }

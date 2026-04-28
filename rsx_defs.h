@@ -139,6 +139,18 @@ static constexpr uint32_t NV4097_SET_LINE_WIDTH               = 0x000003B8;
 static constexpr uint32_t NV4097_SET_POINT_SIZE               = 0x00001EE0;
 static constexpr uint32_t NV4097_SET_POINT_SPRITE_CONTROL     = 0x00001EE8;
 
+// Per-MRT color write mask (targets 1-3; target 0 uses SET_COLOR_MASK)
+static constexpr uint32_t NV4097_SET_COLOR_MASK_MRT           = 0x00000370;
+
+// VP attribute output mask (which VP outputs are active)
+static constexpr uint32_t NV4097_SET_VERTEX_ATTRIB_OUTPUT_MASK = 0x00001FF4;
+
+// Vertex attrib instancing dividers (per-attribute frequency)
+static constexpr uint32_t NV4097_SET_FREQUENCY_DIVIDER_OPERATION = 0x00001FC0;
+
+// Texture control1 register (remap/swizzle)
+static constexpr uint32_t NV4097_SET_TEXTURE_CONTROL1         = 0x00000B40;
+
 // Shader programs
 static constexpr uint32_t NV4097_SET_SHADER_PROGRAM          = 0x000008E4;
 
@@ -434,6 +446,11 @@ struct RSXState {
     uint32_t lineWidth;         // fixed 8.3 format → actual = lineWidth / 8.0
     uint32_t pointSpriteCtrl;   // bit 0 = enable, bits [8:15] = tex coord mask
 
+    // Additional mask/config state
+    uint32_t colorMaskMrt;         // per-MRT (1-3) color write masks
+    uint32_t vpAttribOutputMask;   // which VP outputs are active
+    uint32_t freqDividerOp;        // vertex attrib instancing dividers
+
     // Transform constants (up to 468 × vec4 on NV47; round up to 512)
     float    vpConstants[512][4];
     uint32_t vpConstantLoad;    // current constant upload base index (vec4 index)
@@ -447,6 +464,7 @@ struct RSXState {
         uint32_t address;   // wrap modes: wrapS(4)@0 | wrapT(4)@8 | wrapR(4)@16
         uint32_t filter;    // min/mag filter: min(16)@0 | mag(16)@16
         uint32_t borderColor;
+        uint32_t control1;  // remap/swizzle
         uint8_t  dimension; // 1=1D, 2=2D, 3=3D, 6=cubemap
         bool     enabled;
     } textures[16];
