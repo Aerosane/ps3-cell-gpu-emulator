@@ -501,6 +501,9 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
     // Depth bounds
     rast_->setDepthBoundsTest(s.depthBoundsTestEnable, s.depthBoundsMin, s.depthBoundsMax);
 
+    // FP depth replace: fpControl bit 0 enables fragment shader depth write
+    rast_->setFpDepthReplace((s.fpControl & 1) != 0);
+
     // Cull
     rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
 

@@ -289,6 +289,7 @@ public:
     // interpolated depth falls outside [0,1] are rejected. Disable for
     // RSX depth-clamp mode (NV4097_SET_DEPTH_CLAMP_CONTROL).
     void setDepthClip(bool enable) { depthClip_ = enable; }
+    void setFpDepthReplace(bool enable) { fpDepthReplace_ = enable; }
 
     // Fragment program — pre-decoded micro-instructions for GPU execution.
     // Each insn is 8 uint32_t packed: [opcode|masks|texUnit|inputAttr,
@@ -431,6 +432,7 @@ private:
     float*    d_fpConsts_{nullptr}; // device: FP constants (4 floats each)
     uint32_t  fpInsnCount_{0};
     uint32_t  fpConstCount_{0};
+    bool      fpDepthReplace_{false};
 
     bool      stencilTest_{false};
     StencilFunc stencilFunc_{StencilFunc::Always};

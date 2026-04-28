@@ -231,7 +231,8 @@ __device__ bool fpExecute(
     const FPVec4* fpInputs, uint32_t nInputs,
     const TexBank& texBank,
     float& outR, float& outG, float& outB, float& outA,
-    FPVec4* mrtOut)  // mrtOut[0..3] for MRT planes B/C/D (mrtOut may be null)
+    FPVec4* mrtOut,  // mrtOut[0..3] for MRT planes B/C/D (mrtOut may be null)
+    float* depthOut = nullptr)  // receives r1.z for depth replace
 {
     // R0-R47 (fp32) at indices [0..47], H0-H47 (fp16-as-fp32) at [48..95]
     FPVec4 temps[96] = {};
@@ -726,6 +727,10 @@ __device__ bool fpExecute(
         mrtOut[1] = temps[2];
         mrtOut[2] = temps[3];
     }
+    // Depth output: h0.z (temps[48].z) is the standard depth export register
+    // Some games use r1.z — we check both via the same path.
+    // Caller reads depthOut to override z when fpControl bit 0 is set.
+    if (depthOut) *depthOut = temps[1].z;
     return true;  // pixel not discarded
 }
 
@@ -1041,7 +1046,8 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   int depthBoundsTest,
                                   float depthBoundsMin,
                                   float depthBoundsMax,
-                                  int twoSidedColor) {
+                                  int twoSidedColor,
+                                  int fpDepthReplace) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -1231,10 +1237,13 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             fpIn[14] = {0, 0, 0, 0};  // SSA
             #undef INTERP4
             FPVec4 mrtVals[3] = {};
+            float fpDepthVal = z;
             bool alive = fpExecute(fpInsns, fpInsnCount, fpConsts, fpConstCount,
                       fpIn, 15, texBank,
-                      r, g, b, a, mrtVals);
+                      r, g, b, a, mrtVals,
+                      fpDepthReplace ? &fpDepthVal : nullptr);
             if (!alive) continue;  // KIL'd — discard pixel
+            if (fpDepthReplace) z = fpDepthVal;
             mrtAccum[0] = mrtVals[0];
             mrtAccum[1] = mrtVals[1];
             mrtAccum[2] = mrtVals[2];
@@ -1897,7 +1906,8 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   fogParam0_, fogParam1_,
                                   depthBoundsTestEnable_ ? 1 : 0,
                                   depthBoundsMin_, depthBoundsMax_,
-                                  twoSidedColor_ ? 1 : 0);
+                                  twoSidedColor_ ? 1 : 0,
+                                  fpDepthReplace_ ? 1 : 0);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;
