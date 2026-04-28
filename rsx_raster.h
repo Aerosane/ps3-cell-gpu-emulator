@@ -384,13 +384,13 @@ private:
     float vpX_{0}, vpY_{0}, vpW_{0}, vpH_{0};
 
     // Texture state — up to 4 units (RSX supports 16, we handle the common 4)
-    static constexpr uint32_t MAX_TEX_UNITS = 4;
+    static constexpr uint32_t MAX_TEX_UNITS = 8;
     uint32_t* d_tex_[MAX_TEX_UNITS]{};
     uint32_t  texW_[MAX_TEX_UNITS]{}, texH_[MAX_TEX_UNITS]{};
-    uint8_t   wrapS_[MAX_TEX_UNITS]{1,1,1,1};  // default REPEAT
-    uint8_t   wrapT_[MAX_TEX_UNITS]{1,1,1,1};
-    uint8_t   magFilter_[MAX_TEX_UNITS]{1,1,1,1};  // default LINEAR (bilinear)
-    uint8_t   minFilter_[MAX_TEX_UNITS]{1,1,1,1};  // default LINEAR
+    uint8_t   wrapS_[MAX_TEX_UNITS]{1,1,1,1,1,1,1,1};  // default REPEAT
+    uint8_t   wrapT_[MAX_TEX_UNITS]{1,1,1,1,1,1,1,1};
+    uint8_t   magFilter_[MAX_TEX_UNITS]{1,1,1,1,1,1,1,1};  // default LINEAR (bilinear)
+    uint8_t   minFilter_[MAX_TEX_UNITS]{1,1,1,1,1,1,1,1};  // default LINEAR
     bool      texBilinear_{true};
     CullMode  cullMode_{CullMode::None};
     FrontFace frontFace_{FrontFace::CCW};

@@ -636,7 +636,7 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
     // ── Per-pixel texture binding (units 0-3) ─────────────────
     // Upload enabled texture units to the GPU rasterizer at draw time.
     bool texBoundForDraw = false;
-    for (int tu = 0; tu < 4; ++tu) {
+    for (int tu = 0; tu < 8; ++tu) {
         if (!vram_ || !s.textures[tu].enabled ||
             s.textures[tu].width == 0 || s.textures[tu].height == 0) continue;
         const auto& t = s.textures[tu];

@@ -150,10 +150,10 @@ struct FPVec4 { float x, y, z, w; };
 
 // Texture bank passed to kernel — 4 units
 struct TexBank {
-    const uint32_t* tex[4];
-    uint32_t w[4], h[4];
-    uint8_t wrapS[4], wrapT[4];  // RSX wrap: 1=REPEAT, 2=MIRROR, 3=CLAMP_EDGE
-    uint8_t magFilter[4];        // 0=NEAREST, 1=LINEAR (per unit)
+    const uint32_t* tex[8];
+    uint32_t w[8], h[8];
+    uint8_t wrapS[8], wrapT[8];  // RSX wrap: 1=REPEAT, 2=MIRROR, 3=CLAMP_EDGE
+    uint8_t magFilter[8];        // 0=NEAREST, 1=LINEAR (per unit)
 };
 
 // Read a source operand with swizzle and negate
@@ -358,7 +358,7 @@ __device__ bool fpExecute(
             break;
         case FP_OP_TEX: {
             float tr, tg, tb, ta;
-            if (texUnit < 4 && texBank.tex[texUnit] &&
+            if (texUnit < 8 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                           texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
@@ -481,7 +481,7 @@ __device__ bool fpExecute(
             float w = (s0.w != 0.0f) ? s0.w : 1.0f;
             float pu = s0.x / w, pv = s0.y / w;
             float tr, tg, tb, ta;
-            if (texUnit < 4 && texBank.tex[texUnit] &&
+            if (texUnit < 8 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                           texBank.h[texUnit], pu, pv, (int)texBank.magFilter[texUnit],
@@ -497,7 +497,7 @@ __device__ bool fpExecute(
         case FP_OP_TXB: {
             // Biased texture: LOD bias in s0.w; we ignore bias (no mipmaps yet)
             float tr, tg, tb, ta;
-            if (texUnit < 4 && texBank.tex[texUnit] &&
+            if (texUnit < 8 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                           texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
@@ -555,7 +555,7 @@ __device__ bool fpExecute(
         case FP_OP_TXD: // Texture with derivatives — treat as TEX (no mipmap)
         case FP_OP_TXL: { // Texture with explicit LOD — treat as TEX (no mipmap)
             float tr, tg, tb, ta;
-            if (texUnit < 4 && texBank.tex[texUnit] &&
+            if (texUnit < 8 && texBank.tex[texUnit] &&
                 texBank.w[texUnit] > 0 && texBank.h[texUnit] > 0) {
                 sampleTex(texBank.tex[texUnit], texBank.w[texUnit],
                           texBank.h[texUnit], s0.x, s0.y, (int)texBank.magFilter[texUnit],
@@ -1060,9 +1060,9 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
 
         if (fpInsns && fpInsnCount > 0) {
             // Build FP input array from interpolated vertex data
-            // 0=WPOS, 1=COL0, 2=COL1, 3=FOGC, 4=TEX0, 5=TEX1, 6=TEX2, 7=TEX3
-            // 8=TEX4, 9=TEX5, 10=TEX6, 11=TEX7, 12=BFC0, 13=BFC1
-            FPVec4 fpIn[14];
+            // RSX FP input mapping: 0=WPOS, 1=COL0, 2=COL1, 3=FOGC,
+            // 4-13=TEX0-TEX9, 14=SSA
+            FPVec4 fpIn[15];
             fpIn[0] = {(float)x + 0.5f, (float)y + 0.5f, z, 1.0f};  // WPOS
             fpIn[1] = {r, g, b, a};  // COL0
             if (flatShade) {
@@ -1093,12 +1093,14 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
             fpIn[9]  = INTERP4(tex5);
             fpIn[10] = INTERP4(tex6);
             fpIn[11] = INTERP4(tex7);
-            fpIn[12] = INTERP4(backCol0);
-            fpIn[13] = INTERP4(backCol1);
+            // TEX8, TEX9 (rarely used — no VP output, default 0)
+            fpIn[12] = {0, 0, 0, 0};
+            fpIn[13] = {0, 0, 0, 0};
+            fpIn[14] = {0, 0, 0, 0};  // SSA
             #undef INTERP4
             FPVec4 mrtVals[3] = {};
             bool alive = fpExecute(fpInsns, fpInsnCount, fpConsts, fpConstCount,
-                      fpIn, 14, texBank,
+                      fpIn, 15, texBank,
                       r, g, b, a, mrtVals);
             if (!alive) continue;  // KIL'd — discard pixel
             mrtAccum[0] = mrtVals[0];
@@ -1682,7 +1684,8 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     dim3 gs((fb_.width + bs.x - 1) / bs.x,
             (fb_.height + bs.y - 1) / bs.y);
     TexBank tb;
-    for (int i = 0; i < 4; ++i) {
+    memset(&tb, 0, sizeof(tb));
+    for (int i = 0; i < MAX_TEX_UNITS; ++i) {
         tb.tex[i] = d_tex_[i]; tb.w[i] = texW_[i]; tb.h[i] = texH_[i];
         tb.wrapS[i] = wrapS_[i]; tb.wrapT[i] = wrapT_[i];
         tb.magFilter[i] = magFilter_[i];
