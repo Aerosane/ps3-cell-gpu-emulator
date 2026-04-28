@@ -69,6 +69,27 @@ __device__ void sampleTex3D(const uint32_t* tex,
     float& ro, float& go, float& bo, float& ao,
     uint8_t wrapS, uint8_t wrapT, uint8_t wrapR, uint32_t borderColor);
 
+// Apply RSX texture channel remap to sampled RGBA.
+// remap16: bits [7:0] = channel_map (2b × ARGB), bits [15:8] = control (2b × ARGB)
+// Channel source: 0=A, 1=R, 2=G, 3=B. Control: 0=zero, 1=one, 2=remap.
+// Identity = 0xAAE4 (all remap, ARGB→ARGB).
+__device__ __forceinline__ void texRemap(uint16_t remap16,
+                                         float& r, float& g, float& b, float& a) {
+    if (remap16 == 0xAAE4 || remap16 == 0) return;  // identity or unset
+    float src[4] = {a, r, g, b};  // order: A=0, R=1, G=2, B=3
+    float out[4];
+    for (int ch = 0; ch < 4; ++ch) {
+        uint8_t ctrl = (remap16 >> (8 + ch * 2)) & 3;
+        uint8_t from = (remap16 >> (ch * 2)) & 3;
+        switch (ctrl) {
+        case 0: out[ch] = 0.0f; break;
+        case 1: out[ch] = 1.0f; break;
+        default: out[ch] = src[from]; break;
+        }
+    }
+    a = out[0]; r = out[1]; g = out[2]; b = out[3];
+}
+
 #define FP_PACK_W0(op, mx, my, mz, mw, tu, ia, sat, end) \
     (((op)&0x7F) | (((mx)&1)<<7) | (((my)&1)<<8) | (((mz)&1)<<9) | \
      (((mw)&1)<<10) | (((tu)&0xF)<<11) | (((ia)&0xF)<<15) | \
@@ -162,6 +183,7 @@ struct TexBank {
     const uint32_t* tex[8];
     uint32_t w[8], h[8];
     uint32_t depth[8];           // 3D texture depth (slices)
+    uint16_t remap[8];           // channel remap (TEXTURE_CONTROL1 low 16 bits)
     uint8_t wrapS[8], wrapT[8], wrapR[8];  // RSX wrap: 1=REPEAT, 2=MIRROR, 3=CLAMP_EDGE
     uint8_t magFilter[8];        // 0=NEAREST, 1=LINEAR (per unit)
     uint32_t borderColor[8];     // ARGB32 border color for CLAMP_TO_BORDER
@@ -400,6 +422,7 @@ __device__ bool fpExecute(
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
+            texRemap(texBank.remap[texUnit], tr, tg, tb, ta);
             result = {tr, tg, tb, ta};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
@@ -541,6 +564,7 @@ __device__ bool fpExecute(
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
+            texRemap(texBank.remap[texUnit], tr, tg, tb, ta);
             result = {tr, tg, tb, ta};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
@@ -575,6 +599,7 @@ __device__ bool fpExecute(
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
+            texRemap(texBank.remap[texUnit], tr, tg, tb, ta);
             result = {tr, tg, tb, ta};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
@@ -651,6 +676,7 @@ __device__ bool fpExecute(
             } else {
                 tr = tg = tb = ta = 1.0f;
             }
+            texRemap(texBank.remap[texUnit], tr, tg, tb, ta);
             result = {tr, tg, tb, ta};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
@@ -2046,6 +2072,7 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     for (int i = 0; i < MAX_TEX_UNITS; ++i) {
         tb.tex[i] = d_tex_[i]; tb.w[i] = texW_[i]; tb.h[i] = texH_[i];
         tb.depth[i] = texDepth_[i];
+        tb.remap[i] = texRemap_[i];
         tb.wrapS[i] = wrapS_[i]; tb.wrapT[i] = wrapT_[i]; tb.wrapR[i] = wrapR_[i];
         tb.magFilter[i] = magFilter_[i];
         tb.borderColor[i] = borderColor_[i];

@@ -239,6 +239,9 @@ public:
     void setTextureWrapR(uint32_t unit, uint8_t wrapR) {
         if (unit < MAX_TEX_UNITS) wrapR_[unit] = wrapR;
     }
+    void setTextureRemap(uint32_t unit, uint16_t remap) {
+        if (unit < MAX_TEX_UNITS) texRemap_[unit] = remap;
+    }
 
     // Culling: matches RSX NV4097_SET_CULL_FACE_ENABLE + SET_CULL_FACE +
     // SET_FRONT_FACE. Default: no culling.
@@ -429,6 +432,7 @@ private:
     uint32_t  borderColor_[MAX_TEX_UNITS]{};
     uint32_t  texDepth_[MAX_TEX_UNITS]{1,1,1,1,1,1,1,1};   // 3D texture depth
     uint8_t   texDimension_[MAX_TEX_UNITS]{2,2,2,2,2,2,2,2}; // default 2D
+    uint16_t  texRemap_[MAX_TEX_UNITS]{};  // 0 or 0xAAE4 = identity
     bool      texBilinear_{true};
     CullMode  cullMode_{CullMode::None};
     FrontFace frontFace_{FrontFace::CCW};

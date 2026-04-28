@@ -833,6 +833,8 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         uint8_t wrapR = (t.address >> 16) & 0xF;
         if (wrapR == 0) wrapR = 1; // default REPEAT
         rast_->setTextureWrapR(tu, wrapR);
+        // Texture channel remap (control1 low 16 bits)
+        rast_->setTextureRemap(tu, (uint16_t)(t.control1 & 0xFFFF));
         if (tu == 0) {
             cachedTexOff_ = t.offset;
             cachedTexW_ = W;
