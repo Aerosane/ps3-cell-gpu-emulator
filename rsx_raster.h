@@ -43,6 +43,7 @@ struct RasterVertex {
     float pointSize;   // PSIZ: point size (VP output 6)
     float backCol0[4]; // BFC0: back-face color 0 (FP input 12)
     float backCol1[4]; // BFC1: back-face color 1 (FP input 13)
+    float clipDist[6]; // User clip plane distances (VP output 5 BRB0..5)
 };
 
 // Column-major 4x4 matrix, mirroring GL/RSX convention:
@@ -312,6 +313,10 @@ public:
         restartIndexEnable_ = enable; restartIndex_ = idx;
     }
 
+    // User clip planes: 6 planes, each 2 bits in control register.
+    // 0=disabled, 2=enable (clip when distance < 0).
+    void setClipPlaneControl(uint32_t ctrl) { clipPlaneControl_ = ctrl; }
+
     // Fragment program — pre-decoded micro-instructions for GPU execution.
     // Each insn is 8 uint32_t packed: [opcode|masks|texUnit|inputAttr,
     //  dstReg, src0Type|idx|swz, src1Type|idx|swz, src2Type|idx|swz,
@@ -465,6 +470,8 @@ private:
 
     bool      restartIndexEnable_{false};
     uint32_t  restartIndex_{0xFFFFFFFF};
+
+    uint32_t  clipPlaneControl_{0};  // 6 planes × 2 bits each
 
     bool      stencilTest_{false};
     StencilFunc stencilFunc_{StencilFunc::Always};

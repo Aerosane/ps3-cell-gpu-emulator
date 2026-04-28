@@ -1185,7 +1185,8 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
                                   int twoSidedColor,
                                   int fpDepthReplace,
                                   int shaderWindowOrigin,
-                                  float shaderWindowHeight) {
+                                  float shaderWindowHeight,
+                                  uint32_t clipPlaneControl) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -1245,6 +1246,19 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         float p0 = w0 * iw0 * pcW;
         float p1 = w1 * iw1 * pcW;
         float p2 = 1.0f - p0 - p1;
+
+        // User clip planes: reject fragments where interpolated clip
+        // distance is negative. Each 2-bit field: 0=disabled, 2=enabled.
+        if (clipPlaneControl != 0) {
+            bool clipped = false;
+            for (int cp = 0; cp < 6 && !clipped; ++cp) {
+                uint32_t mode = (clipPlaneControl >> (cp * 4)) & 0xF;
+                if (mode == 0) continue;
+                float d = p0 * v0.clipDist[cp] + p1 * v1.clipDist[cp] + p2 * v2.clipDist[cp];
+                if (d < 0.0f) clipped = true;
+            }
+            if (clipped) continue;
+        }
 
         // Polygon offset (depth bias) for decals and shadow maps
         if (polyOffsetFactor != 0.0f || polyOffsetUnits != 0.0f) {
@@ -2088,7 +2102,8 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   twoSidedColor_ ? 1 : 0,
                                   fpDepthReplace_ ? 1 : 0,
                                   shaderWindowOrigin_,
-                                  shaderWindowHeight_);
+                                  shaderWindowHeight_,
+                                  clipPlaneControl_);
     cudaDeviceSynchronize();
     cudaFree(d_v);
     stats.triangles += tris;

@@ -520,6 +520,9 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
     // Primitive restart
     rast_->setPrimitiveRestart(s.restartIndexEnable, s.restartIndex);
 
+    // User clip planes
+    rast_->setClipPlaneControl(s.userClipPlaneControl);
+
     // Cull
     rast_->setCullMode(nv_to_cullMode(s.cullFace, s.cullFaceEnable));
 
