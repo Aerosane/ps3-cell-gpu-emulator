@@ -63,6 +63,9 @@ __device__ void sampleTexCube(const uint32_t* tex,
     uint32_t faceW, uint32_t totalH,
     float dirX, float dirY, float dirZ, int bilinear,
     float& r, float& g, float& b, float& a);
+__device__ int cubeMapFaceSelect(float x, float y, float z, float& uc, float& vc);
+__device__ uint32_t cubeTexelFetch(const uint32_t* tex,
+    uint32_t faceW, uint32_t faceH, int face, int px, int py);
 __device__ void sampleTex3D(const uint32_t* tex,
     uint32_t tw, uint32_t sliceH, uint32_t texDepth,
     float u, float v, float w, int bilinear,
@@ -1027,6 +1030,31 @@ __device__ __forceinline__ int cubeMapFaceSelect(float x, float y, float z,
     return face;
 }
 
+// Fetch one cubemap texel, with seamless cross-face lookup for out-of-bounds
+__device__ __forceinline__ uint32_t cubeTexelFetch(const uint32_t* tex,
+                                                    uint32_t faceW, uint32_t faceH,
+                                                    int face, int px, int py) {
+    if (px >= 0 && px < (int)faceW && py >= 0 && py < (int)faceH)
+        return tex[(face * (int)faceH + py) * (int)faceW + px];
+    // Out of bounds: reverse-project to 3D direction, re-select face
+    float sc = 2.0f * ((float)px + 0.5f) / (float)faceW - 1.0f;
+    float tc = 2.0f * ((float)py + 0.5f) / (float)faceH - 1.0f;
+    float dx, dy, dz;
+    switch (face) {
+    case 0: dx= 1; dy=-tc; dz=-sc; break;
+    case 1: dx=-1; dy=-tc; dz= sc; break;
+    case 2: dx= sc; dy= 1; dz= tc; break;
+    case 3: dx= sc; dy=-1; dz=-tc; break;
+    case 4: dx= sc; dy=-tc; dz= 1; break;
+    default:dx=-sc; dy=-tc; dz=-1; break;
+    }
+    float uc, vc;
+    int f2 = cubeMapFaceSelect(dx, dy, dz, uc, vc);
+    int ix = min(max((int)(uc * (float)faceW), 0), (int)faceW - 1);
+    int iy = min(max((int)(vc * (float)faceH), 0), (int)faceH - 1);
+    return tex[(f2 * (int)faceH + iy) * (int)faceW + ix];
+}
+
 // Sample a cubemap texture: 6 faces stored vertically (each face = faceH pixels tall)
 // Total texture is w × (h=faceH*6). Face 0 at row 0, face 1 at row faceH, etc.
 __device__ __forceinline__ void sampleTexCube(const uint32_t* tex,
@@ -1043,11 +1071,8 @@ __device__ __forceinline__ void sampleTexCube(const uint32_t* tex,
     float fy = vc * (float)faceH - 0.5f;
     int ix = (int)floorf(fx);
     int iy = (int)floorf(fy);
-    // Clamp to face edges (no wrapping across faces)
-    auto clp = [](int c, int d) { return (c < 0) ? 0 : (c >= d) ? d - 1 : c; };
-    int fOff = face * (int)faceH;
     if (!bilinear) {
-        uint32_t c = tex[(clp(iy, faceH) + fOff) * faceW + clp(ix, faceW)];
+        uint32_t c = cubeTexelFetch(tex, faceW, faceH, face, ix, iy);
         r = ((c >> 16) & 0xFF) / 255.0f;
         g = ((c >>  8) & 0xFF) / 255.0f;
         b = ((c >>  0) & 0xFF) / 255.0f;
@@ -1055,10 +1080,10 @@ __device__ __forceinline__ void sampleTexCube(const uint32_t* tex,
         return;
     }
     float sx = fx - ix, sy = fy - iy;
-    uint32_t c00 = tex[(clp(iy,   faceH) + fOff) * faceW + clp(ix,   (int)faceW)];
-    uint32_t c10 = tex[(clp(iy,   faceH) + fOff) * faceW + clp(ix+1, (int)faceW)];
-    uint32_t c01 = tex[(clp(iy+1, faceH) + fOff) * faceW + clp(ix,   (int)faceW)];
-    uint32_t c11 = tex[(clp(iy+1, faceH) + fOff) * faceW + clp(ix+1, (int)faceW)];
+    uint32_t c00 = cubeTexelFetch(tex, faceW, faceH, face, ix,   iy);
+    uint32_t c10 = cubeTexelFetch(tex, faceW, faceH, face, ix+1, iy);
+    uint32_t c01 = cubeTexelFetch(tex, faceW, faceH, face, ix,   iy+1);
+    uint32_t c11 = cubeTexelFetch(tex, faceW, faceH, face, ix+1, iy+1);
     auto lerp2 = [] __device__ (float a, float b, float t) { return a + (b - a) * t; };
     auto ch2 = [&](int shift) {
         float v00 = ((c00>>shift)&0xFF)/255.0f;
