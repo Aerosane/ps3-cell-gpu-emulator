@@ -87,6 +87,7 @@ struct VPDecodedInsn {
     // Constants
     uint32_t constIdx;      // D1.const_src
     uint32_t inputIdx;      // D1.input_src
+    uint32_t texUnit;       // texture unit for TXL (D1 bits [19:17])
 };
 
 // Decode a single 128-bit VP instruction (4 × u32)
@@ -129,6 +130,7 @@ inline VPDecodedInsn vp_decode(const uint32_t d[4]) {
     // D2 fields
     uint32_t d2 = d[2];
     uint32_t src2h    = d2 & 0x3F;            // src2h: 6 bits
+    insn.texUnit      = d2 & 0x3;             // tex_num: bits [1:0] for VP TXL
     uint32_t src1raw  = (d2 >> 6) & 0x1FFFF;  // src1: 17 bits
     uint32_t src0l    = (d2 >> 23) & 0x1FF;   // src0l: 9 bits
 
@@ -188,8 +190,9 @@ struct VPEmitter {
     int tempRegsUsed;    // track highest temp reg
     int outputsUsed;     // bitmask of outputs written
     int instrCount;
+    bool usesVtxTex;     // true if VP uses TXL (vertex texture fetch)
 
-    VPEmitter() : tempRegsUsed(0), outputsUsed(0), instrCount(0) {}
+    VPEmitter() : tempRegsUsed(0), outputsUsed(0), instrCount(0), usesVtxTex(false) {}
 
     // Emit source register reference with swizzle
     std::string emitSrc(const VPDecodedInsn& insn, int srcIdx, uint32_t inputIdx, uint32_t constIdx) {
@@ -302,6 +305,13 @@ struct VPEmitter {
         case VP_VEC_FRC: expr = "f4frc(" + s0 + ")"; break;
         case VP_VEC_FLR: expr = "f4flr(" + s0 + ")"; break;
         case VP_VEC_SSG: expr = "f4ssg(" + s0 + ")"; break;
+        case VP_VEC_TXL: {
+            // Vertex texture fetch: sample tex[unit] at s0.xy with LOD = s0.w
+            std::string unit = std::to_string(insn.texUnit);
+            expr = "vp_tex_fetch(vtex_data, vtex_w, vtex_h, " + unit + ", " + s0 + ")";
+            usesVtxTex = true;
+            break;
+        }
         case VP_VEC_ARL:
             code += "  arl = (int)floorf((" + s0 + ").x);\n";
             return;
@@ -437,6 +447,28 @@ __device__ float4 f4sle(float4 a, float4 b) { return make_float4(a.x<=b.x?1.f:0.
 __device__ float4 f4sne(float4 a, float4 b) { return make_float4(a.x!=b.x?1.f:0.f,a.y!=b.y?1.f:0.f,a.z!=b.z?1.f:0.f,a.w!=b.w?1.f:0.f); }
 )";
 
+    // Add vertex texture fetch helper if needed
+    if (emit.usesVtxTex) {
+        src += R"(
+// Vertex texture fetch — simple bilinear sample from RGBA32 texture
+__device__ float4 vp_tex_fetch(const unsigned int* const* tex_data,
+                               const unsigned int* tex_w, const unsigned int* tex_h,
+                               int unit, float4 coord) {
+    if (!tex_data[unit] || tex_w[unit] == 0 || tex_h[unit] == 0)
+        return make_float4(0,0,0,0);
+    unsigned int w = tex_w[unit], h = tex_h[unit];
+    float u = coord.x - floorf(coord.x);  // wrap REPEAT
+    float v = coord.y - floorf(coord.y);
+    int ix = (int)(u * (float)w) % (int)w;
+    int iy = (int)(v * (float)h) % (int)h;
+    if (ix < 0) ix += w; if (iy < 0) iy += h;
+    unsigned int c = tex_data[unit][iy * w + ix];
+    return make_float4(((c>>16)&0xFF)/255.0f, ((c>>8)&0xFF)/255.0f,
+                       (c&0xFF)/255.0f, ((c>>24)&0xFF)/255.0f);
+}
+)";
+    }
+
     // Kernel signature
     src += "\nextern \"C\" __global__\n";
     src += "void rsx_vp_kernel(\n";
@@ -444,7 +476,15 @@ __device__ float4 f4sne(float4 a, float4 b) { return make_float4(a.x!=b.x?1.f:0.
     src += "    float4* __restrict__ output,           // output: N vertices × 17 output slots\n";
     src += "    const float4* __restrict__ c,          // VP constants (256 vec4s)\n";
     src += "    int numVertices,\n";
-    src += "    int numInputAttribs                    // active input attributes per vertex\n";
+    src += "    int numInputAttribs";
+    if (emit.usesVtxTex) {
+        src += ",\n";
+        src += "    const unsigned int* const* vtex_data,  // vertex textures (4 units)\n";
+        src += "    const unsigned int* vtex_w,\n";
+        src += "    const unsigned int* vtex_h\n";
+    } else {
+        src += "                    // active input attributes per vertex\n";
+    }
     src += ") {\n";
     src += "  int vid = blockIdx.x * blockDim.x + threadIdx.x;\n";
     src += "  if (vid >= numVertices) return;\n\n";
