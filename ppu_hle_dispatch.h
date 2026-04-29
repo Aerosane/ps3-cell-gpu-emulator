@@ -352,6 +352,33 @@ struct PpuHleDispatcher {
                    e.name == "cellGcmBindZcull" ||
                    e.name == "cellGcmUnbindZcull") {
             retval = 0;
+        } else if (e.name == "cellGcmGetDefaultCommandWordSize") {
+            // Returns default command buffer size in words (0x400 = 1024 words = 4KB)
+            retval = 0x400;
+        } else if (e.name == "cellGcmGetDefaultSegmentWordSize") {
+            // Returns default segment size in words (0x100 = 256 words = 1KB)
+            retval = 0x100;
+        } else if (e.name == "cellGcmSetDefaultFifoSize") {
+            // r3 = cmdSize, r4 = ioSize — informational, we ignore
+            retval = 0;
+        } else if (e.name == "_cellGcmFunc15") {
+            // Internal init helper (sets up context default state). No-op.
+            retval = 0;
+        } else if (e.name == "cellGcmSetWaitFlip") {
+            // Inserts a wait-for-flip-complete into FIFO. Since we process
+            // FIFO synchronously, this is a no-op.
+            retval = 0;
+        } else if (e.name == "cellGcmSetPrepareFlip") {
+            // Same as SetFlipCommand — queue a flip request.
+            gcmLastFlipBuffer = (uint32_t)st.gpr[4];
+            gcmFlipRequests++;
+            retval = 0;
+        } else if (e.name == "cellGcmSetFlipHandler") {
+            // r3 = callback function pointer. We don't invoke it; store for future use.
+            retval = 0;
+        } else if (e.name == "cellGcmGetCurrentField") {
+            // Returns 0 (progressive scan — no interlaced field).
+            retval = 0;
         } else if (e.name == "cellGcmGetConfiguration") {
             // r3 = *CellGcmConfig { u32 localAddr, ioAddr, localSize, ioSize, memFreq, coreFreq }
             uint32_t outp = (uint32_t)st.gpr[3];
@@ -500,6 +527,31 @@ struct PpuHleDispatcher {
                    e.name == "cellSysutilUnregisterCallback" ||
                    e.name == "cellSysutilCheckCallback") {
             retval = 0;
+        } else if (e.name == "cellSysutilGetSystemParamInt") {
+            // r3 = paramId, r4 = *value_out
+            // Key params: LANG=0x0111(English=1), ENTER_BUTTON=0x0105(Circle=0,Cross=1)
+            uint32_t paramId = (uint32_t)st.gpr[3];
+            uint32_t outp    = (uint32_t)st.gpr[4];
+            uint32_t val = 0;
+            switch (paramId) {
+            case 0x0111: val = 1; break;  // CELL_SYSUTIL_SYSTEMPARAM_ID_LANG → English
+            case 0x0105: val = 1; break;  // ENTER_BUTTON_ASSIGN → Cross (western)
+            default: val = 0; break;
+            }
+            if (outp + 4 <= memSize) {
+                uint8_t be[4] = {
+                    (uint8_t)(val >> 24), (uint8_t)(val >> 16),
+                    (uint8_t)(val >> 8),  (uint8_t)val
+                };
+                std::memcpy(mem + outp, be, 4);
+                megakernel_write_mem((uint64_t)outp, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellVideoOutGetResolutionAvailability") {
+            // r3 = videoOut, r4 = resolutionId, r5 = aspect, r6 = option
+            // Return 1 (available) for 1080p (resId=2) and 720p (resId=4)
+            uint32_t resId = (uint32_t)st.gpr[4];
+            retval = (resId == 2 || resId == 4 || resId == 1) ? 1 : 0;
         } else if (e.name == "cellFsOpen") {
             // r3=path, r4=flags, r5=fd_out, ...
             uint32_t fdOut = (uint32_t)st.gpr[5];
