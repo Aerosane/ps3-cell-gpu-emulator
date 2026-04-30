@@ -2068,6 +2068,8 @@ int CudaRasterizer::init(uint32_t width, uint32_t height) {
 }
 
 void CudaRasterizer::shutdown() {
+    flush();  // drain any pending async work
+    if (stream_) { cudaStreamDestroy(stream_); stream_ = nullptr; }
     if (fb_.d_color) { cudaFree(fb_.d_color); fb_.d_color = nullptr; }
     if (fb_.d_depth) { cudaFree(fb_.d_depth); fb_.d_depth = nullptr; }
     if (fb_.d_stencil) { cudaFree(fb_.d_stencil); fb_.d_stencil = nullptr; }
@@ -2085,6 +2087,18 @@ void CudaRasterizer::shutdown() {
     if (d_fpConsts_) { cudaFree(d_fpConsts_); d_fpConsts_ = nullptr; }
     fpInsnCount_ = 0; fpConstCount_ = 0;
     fb_.width = fb_.height = 0;
+    asyncFifo_ = false;
+}
+
+void CudaRasterizer::setAsyncFifo(bool enable) {
+    if (enable && !stream_) {
+        cudaStreamCreate(&stream_);
+    }
+    asyncFifo_ = enable;
+}
+
+void CudaRasterizer::flush() {
+    if (stream_) cudaStreamSynchronize(stream_);
 }
 
 int CudaRasterizer::setMRTCount(uint32_t count) {
@@ -2389,8 +2403,14 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     }
 
     RasterVertex* d_v = nullptr;
-    if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
-    cudaMemcpy(d_v, d_src, bytes, cudaMemcpyHostToDevice);
+    if (asyncFifo_ && stream_) {
+        // Async path: allocate + upload + launch on stream — no CPU block.
+        if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
+        cudaMemcpyAsync(d_v, d_src, bytes, cudaMemcpyHostToDevice, stream_);
+    } else {
+        if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
+        cudaMemcpy(d_v, d_src, bytes, cudaMemcpyHostToDevice);
+    }
 
     // ── Tile optimization: compute bounding box of all triangles and
     // restrict kernel launch to that screen region. This avoids launching
@@ -2460,7 +2480,8 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
         tb.minFilter[i] = minFilter_[i];
         tb.lodBias[i] = texLodBias_[i];
     }
-    k_rasterTriangles<<<gs, bs>>>(fb_.d_color, fb_.d_depth, fb_.d_stencil,
+    cudaStream_t launchStream = (asyncFifo_ && stream_) ? stream_ : nullptr;
+    k_rasterTriangles<<<gs, bs, 0, launchStream>>>(fb_.d_color, fb_.d_depth, fb_.d_stencil,
                                   fb_.width, fb_.height,
                                   d_v, tris,
                                   blendEnable_ ? 1 : 0,
@@ -2514,8 +2535,14 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   shaderWindowHeight_,
                                   clipPlaneControl_,
                                   sRGBWrite_ ? 1 : 0);
-    cudaDeviceSynchronize();
-    cudaFree(d_v);
+    if (asyncFifo_ && stream_) {
+        // Non-blocking: free d_v after kernel completes on the stream.
+        // cudaFreeAsync is CUDA 11.2+ — fall back to event-based free.
+        cudaFreeAsync(d_v, stream_);
+    } else {
+        cudaDeviceSynchronize();
+        cudaFree(d_v);
+    }
 
     // Restore original scissor if we narrowed it for tile optimization
     if (useTileScissor) {
@@ -2529,12 +2556,15 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
 
 void CudaRasterizer::readback(uint32_t* out) const {
     if (!fb_.d_color || !out) return;
+    // Flush any pending async draws before reading back
+    if (stream_) cudaStreamSynchronize(stream_);
     size_t bytes = size_t(fb_.width) * size_t(fb_.height) * sizeof(uint32_t);
     cudaMemcpy(out, fb_.d_color, bytes, cudaMemcpyDeviceToHost);
 }
 
 void CudaRasterizer::readbackDepth(float* out) const {
     if (!fb_.d_depth || !out) return;
+    if (stream_) cudaStreamSynchronize(stream_);
     size_t bytes = size_t(fb_.width) * size_t(fb_.height) * sizeof(float);
     cudaMemcpy(out, fb_.d_depth, bytes, cudaMemcpyDeviceToHost);
 }

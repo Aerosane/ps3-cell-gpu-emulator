@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cuda_runtime.h>
 
 namespace rsx {
 
@@ -422,6 +423,14 @@ public:
     // Save current buffer to binary PPM (P6). Returns false on I/O error.
     bool savePPM(const char* path) const;
 
+    // Async FIFO mode: when enabled, draw kernels are enqueued on a
+    // dedicated CUDA stream without blocking the CPU. Multiple draws can
+    // be queued before the GPU finishes. Sync happens implicitly on
+    // readback(), resolveAA(), or explicit flush().
+    void setAsyncFifo(bool enable);
+    bool asyncFifo() const { return asyncFifo_; }
+    void flush();  // Block until all queued draws complete
+
     // Diagnostic counters.
     struct Stats {
         uint32_t triangles{0};
@@ -505,6 +514,11 @@ private:
 
     bool      sRGBWrite_{false};   // gamma encode on FB write
     uint32_t  aaMode_{0};          // 0=none, 4=2x, 12=4x
+
+    // Async FIFO: when enabled, draw kernels launch on a dedicated CUDA
+    // stream without blocking the CPU. Sync happens only on readback/flip.
+    cudaStream_t stream_{nullptr};
+    bool asyncFifo_{false};
 
     bool      stencilTest_{false};
     StencilFunc stencilFunc_{StencilFunc::Always};
