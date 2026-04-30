@@ -2325,6 +2325,57 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
     cudaMemcpy(d_v, d_src, bytes, cudaMemcpyHostToDevice);
 
+    // ── Tile optimization: compute bounding box of all triangles and
+    // restrict kernel launch to that screen region. This avoids launching
+    // threads for pixels that can't possibly be covered.
+    float bboxMinX = (float)fb_.width, bboxMinY = (float)fb_.height;
+    float bboxMaxX = 0.0f, bboxMaxY = 0.0f;
+    for (uint32_t i = 0; i < tris * 3; ++i) {
+        float vx = d_src[i].x, vy = d_src[i].y;
+        if (vx < bboxMinX) bboxMinX = vx;
+        if (vx > bboxMaxX) bboxMaxX = vx;
+        if (vy < bboxMinY) bboxMinY = vy;
+        if (vy > bboxMaxY) bboxMaxY = vy;
+    }
+    // Clamp to framebuffer bounds and align to tile boundaries (16px)
+    uint32_t tileX0 = (bboxMinX > 0) ? ((uint32_t)bboxMinX & ~15u) : 0;
+    uint32_t tileY0 = (bboxMinY > 0) ? ((uint32_t)bboxMinY & ~15u) : 0;
+    uint32_t tileX1 = ((uint32_t)bboxMaxX + 16u) & ~15u;
+    uint32_t tileY1 = ((uint32_t)bboxMaxY + 16u) & ~15u;
+    if (tileX1 > fb_.width)  tileX1 = fb_.width;
+    if (tileY1 > fb_.height) tileY1 = fb_.height;
+    uint32_t regionW = tileX1 - tileX0;
+    uint32_t regionH = tileY1 - tileY0;
+    if (regionW == 0 || regionH == 0) { cudaFree(d_v); return 0; }
+
+    // If region covers most of the screen, just launch full grid
+    // (avoids pixel offset computation in kernel). Otherwise, apply
+    // scissor to restrict the kernel to the bounding region.
+    int origScX = scX_, origScY = scY_;
+    uint32_t origScW = scW_, origScH = scH_;
+    bool useTileScissor = (regionW < fb_.width || regionH < fb_.height);
+    if (useTileScissor) {
+        // Intersect with existing scissor if active
+        int newScX = (int)tileX0, newScY = (int)tileY0;
+        uint32_t newScW = regionW, newScH = regionH;
+        if (scW_ > 0 && scH_ > 0) {
+            int x0 = (newScX > scX_) ? newScX : scX_;
+            int y0 = (newScY > scY_) ? newScY : scY_;
+            int x1a = newScX + (int)newScW;
+            int x1b = scX_ + (int)scW_;
+            int y1a = newScY + (int)newScH;
+            int y1b = scY_ + (int)scH_;
+            int x1 = (x1a < x1b) ? x1a : x1b;
+            int y1 = (y1a < y1b) ? y1a : y1b;
+            if (x1 <= x0 || y1 <= y0) { cudaFree(d_v); return 0; }
+            newScX = x0; newScY = y0;
+            newScW = (uint32_t)(x1 - x0);
+            newScH = (uint32_t)(y1 - y0);
+        }
+        scX_ = newScX; scY_ = newScY;
+        scW_ = newScW; scH_ = newScH;
+    }
+
     dim3 bs(16, 16);
     dim3 gs((fb_.width + bs.x - 1) / bs.x,
             (fb_.height + bs.y - 1) / bs.y);
@@ -2398,6 +2449,13 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                   sRGBWrite_ ? 1 : 0);
     cudaDeviceSynchronize();
     cudaFree(d_v);
+
+    // Restore original scissor if we narrowed it for tile optimization
+    if (useTileScissor) {
+        scX_ = origScX; scY_ = origScY;
+        scW_ = origScW; scH_ = origScH;
+    }
+
     stats.triangles += tris;
     return tris;
 }
