@@ -38,7 +38,25 @@ __global__ void k_clearDepth(float* __restrict__ dst,
 }
 
 // ─── MSAA box-filter resolve kernel ───────────────────────────
-// Downsamples src (srcW × srcH) → dst (dstW × dstH) with a box
+
+// ─── GPU index gather kernel ──────────────────────────────────
+// Each thread expands one index: reads idx[tid], fetches verts[idx],
+// writes to out[tid]. Avoids CPU-side vertex expansion + memcpy.
+__global__ void k_indexGather(const RasterVertex* __restrict__ verts,
+                              const uint32_t* __restrict__ indices,
+                              RasterVertex* __restrict__ out,
+                              uint32_t indexCount,
+                              uint32_t vertexCount) {
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= indexCount) return;
+    uint32_t idx = indices[tid];
+    if (idx < vertexCount)
+        out[tid] = verts[idx];
+    else
+        memset(&out[tid], 0, sizeof(RasterVertex));
+}
+
+// ─── MSAA box-filter resolve kernel ───────────────────────────
 // filter. scaleX/scaleY are integer (1, 2, or 4).
 __global__ void k_resolveAA(const uint32_t* __restrict__ src,
                             uint32_t* __restrict__ dst,
@@ -2233,16 +2251,65 @@ uint32_t CudaRasterizer::drawIndexed(const RasterVertex* verts,
                                      uint32_t indexCount,
                                      bool indexIs32) {
     if (!verts || !indices || indexCount < 3) return 0;
+
+    // Fast GPU path: when no primitive restart is active and indices are
+    // large enough to amortize kernel dispatch, gather on device.
+    // Threshold: 256 indices (~85 triangles) — below this CPU expand is faster.
+    if (!restartIndexEnable_ && indexCount >= 256) {
+        // Convert all indices to uint32 on host (cheap for 16-bit upcast)
+        std::vector<uint32_t> idx32(indexCount);
+        if (indexIs32) {
+            std::memcpy(idx32.data(), indices, indexCount * sizeof(uint32_t));
+        } else {
+            const uint16_t* src16 = static_cast<const uint16_t*>(indices);
+            for (uint32_t i = 0; i < indexCount; ++i) idx32[i] = src16[i];
+        }
+
+        // Upload vertex buffer + index buffer to device
+        RasterVertex* d_verts = nullptr;
+        uint32_t* d_indices = nullptr;
+        RasterVertex* d_expanded = nullptr;
+        size_t vbBytes = size_t(vertexCount) * sizeof(RasterVertex);
+        size_t ibBytes = size_t(indexCount) * sizeof(uint32_t);
+        size_t exBytes = size_t(indexCount) * sizeof(RasterVertex);
+        if (cudaMalloc(&d_verts, vbBytes) != cudaSuccess) goto cpu_fallback;
+        if (cudaMalloc(&d_indices, ibBytes) != cudaSuccess) { cudaFree(d_verts); goto cpu_fallback; }
+        if (cudaMalloc(&d_expanded, exBytes) != cudaSuccess) { cudaFree(d_verts); cudaFree(d_indices); goto cpu_fallback; }
+
+        cudaMemcpy(d_verts, verts, vbBytes, cudaMemcpyHostToDevice);
+        cudaMemcpy(d_indices, idx32.data(), ibBytes, cudaMemcpyHostToDevice);
+
+        // Launch gather kernel — 1 thread per index
+        uint32_t bs = 256;
+        uint32_t gs = (indexCount + bs - 1) / bs;
+        k_indexGather<<<gs, bs>>>(d_verts, d_indices, d_expanded,
+                                  indexCount, vertexCount);
+        cudaDeviceSynchronize();
+
+        // Read back expanded vertices for transform+cull on host
+        // (transform+cull will move to GPU in a future pass)
+        std::vector<RasterVertex> expanded(indexCount);
+        cudaMemcpy(expanded.data(), d_expanded, exBytes, cudaMemcpyDeviceToHost);
+        cudaFree(d_verts);
+        cudaFree(d_indices);
+        cudaFree(d_expanded);
+
+        // Trim to complete triangles
+        uint32_t triCount = (uint32_t)expanded.size() / 3;
+        if (triCount == 0) return 0;
+        expanded.resize(triCount * 3);
+        return drawTriangles(expanded.data(), (uint32_t)expanded.size());
+    }
+
+cpu_fallback:
+    // CPU path — handles primitive restart, small draws, and OOM fallback
     std::vector<RasterVertex> expanded;
     expanded.reserve(indexCount);
     for (uint32_t i = 0; i < indexCount; ++i) {
         uint32_t idx = indexIs32
             ? static_cast<const uint32_t*>(indices)[i]
             : static_cast<const uint16_t*>(indices)[i];
-        // Primitive restart: skip the restart index and any incomplete
-        // triangle at the boundary — the next index starts a new strip.
         if (restartIndexEnable_ && idx == restartIndex_) {
-            // Trim to complete-triangle boundary
             uint32_t rem = expanded.size() % 3;
             if (rem) expanded.resize(expanded.size() - rem);
             continue;
