@@ -688,6 +688,213 @@ struct PpuHleDispatcher {
                 megakernel_write_mem(infoPtr, mem + infoPtr, 0x40);
             }
             retval = 0;
+
+        // ── cellGame — game boot/content management ─────────────
+        } else if (e.name == "cellGameBootCheck") {
+            // r3 = CellGameContentSize* size (out), r4 = dirName (out)
+            // Return CELL_GAME_RET_OK (=0), set type=CELL_GAME_GAMETYPE_DISC(1)
+            retval = 0;
+        } else if (e.name == "cellGameContentPermit") {
+            // r3 = char* contentInfoPath (out), r4 = char* usrdirPath (out)
+            // Write dummy paths
+            uint32_t p1 = (uint32_t)st.gpr[3];
+            uint32_t p2 = (uint32_t)st.gpr[4];
+            const char* ci = "/dev_hdd0/game/TESTGAME";
+            const char* ud = "/dev_hdd0/game/TESTGAME/USRDIR";
+            if (p1 && p1 + 64 <= memSize) {
+                std::memcpy(mem + p1, ci, strlen(ci) + 1);
+                megakernel_write_mem(p1, mem + p1, strlen(ci) + 1);
+            }
+            if (p2 && p2 + 64 <= memSize) {
+                std::memcpy(mem + p2, ud, strlen(ud) + 1);
+                megakernel_write_mem(p2, mem + p2, strlen(ud) + 1);
+            }
+            retval = 0;
+        } else if (e.name == "cellGamePatchCheck" ||
+                   e.name == "cellGameDataCheck" ||
+                   e.name == "cellGameCreateGameData" ||
+                   e.name == "cellGameDeleteGameData" ||
+                   e.name == "cellGameSetParamString") {
+            retval = 0;
+        } else if (e.name == "cellGameGetParamInt") {
+            // r3 = int id, r4 = int* value (out)
+            uint32_t outPtr = (uint32_t)st.gpr[4];
+            if (outPtr && outPtr + 4 <= memSize) {
+                uint32_t val = 0;  // default value
+                uint8_t be[4] = { (uint8_t)(val>>24), (uint8_t)(val>>16),
+                                  (uint8_t)(val>>8),  (uint8_t)val };
+                std::memcpy(mem + outPtr, be, 4);
+                megakernel_write_mem(outPtr, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellGameGetParamString") {
+            // r3 = int id, r4 = char* buf, r5 = int bufsize
+            uint32_t bufPtr = (uint32_t)st.gpr[4];
+            uint32_t bufSz = (uint32_t)st.gpr[5];
+            if (bufPtr && bufSz > 0 && bufPtr + bufSz <= memSize) {
+                std::memset(mem + bufPtr, 0, bufSz);
+                const char* s = "TESTGAME";
+                size_t len = strlen(s);
+                if (len >= bufSz) len = bufSz - 1;
+                std::memcpy(mem + bufPtr, s, len);
+                megakernel_write_mem(bufPtr, mem + bufPtr, bufSz);
+            }
+            retval = 0;
+        } else if (e.name == "cellGameGetSizeKB") {
+            // r3 = CellGameContentSize* size (out)
+            uint32_t outPtr = (uint32_t)st.gpr[3];
+            if (outPtr && outPtr + 12 <= memSize) {
+                std::memset(mem + outPtr, 0, 12);
+                megakernel_write_mem(outPtr, mem + outPtr, 12);
+            }
+            retval = 0;
+
+        // ── cellSaveData — save/load stubs ──────────────────────
+        } else if (e.name == "cellSaveDataAutoSave2" ||
+                   e.name == "cellSaveDataAutoLoad2" ||
+                   e.name == "cellSaveDataListSave2" ||
+                   e.name == "cellSaveDataListLoad2" ||
+                   e.name == "cellSaveDataFixedSave2" ||
+                   e.name == "cellSaveDataFixedLoad2" ||
+                   e.name == "cellSaveDataDelete2") {
+            // Return CELL_SAVEDATA_RET_OK (0) — pretend save succeeded
+            retval = 0;
+
+        // ── cellAudio — audio port stubs ────────────────────────
+        } else if (e.name == "cellAudioInit" ||
+                   e.name == "cellAudioQuit") {
+            retval = 0;
+        } else if (e.name == "cellAudioPortOpen") {
+            // r3 = CellAudioPortParam*, r4 = uint32_t* portNum (out)
+            uint32_t outPtr = (uint32_t)st.gpr[4];
+            if (outPtr && outPtr + 4 <= memSize) {
+                uint8_t be[4] = { 0, 0, 0, 0 };  // port 0
+                std::memcpy(mem + outPtr, be, 4);
+                megakernel_write_mem(outPtr, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellAudioPortClose" ||
+                   e.name == "cellAudioPortStart" ||
+                   e.name == "cellAudioPortStop" ||
+                   e.name == "cellAudioSetNotifyEventQueue" ||
+                   e.name == "cellAudioRemoveNotifyEventQueue") {
+            retval = 0;
+        } else if (e.name == "cellAudioGetPortConfig") {
+            // r3 = portNum, r4 = CellAudioPortConfig* config (out)
+            // Struct: { uint64_t readIndexAddr; uint32_t status; uint64_t nChannel;
+            //           uint64_t nBlock; uint32_t portSize; uint64_t portAddr; }
+            uint32_t cfgPtr = (uint32_t)st.gpr[4];
+            if (cfgPtr && cfgPtr + 48 <= memSize) {
+                std::memset(mem + cfgPtr, 0, 48);
+                // status = CELL_AUDIO_STATUS_READY (1), nChannel = 2, nBlock = 8
+                mem[cfgPtr + 11] = 1;  // status (offset 8, BE u32)
+                mem[cfgPtr + 19] = 2;  // nChannel (offset 12, BE u64 low byte)
+                mem[cfgPtr + 27] = 8;  // nBlock (offset 20, BE u64 low byte)
+                megakernel_write_mem(cfgPtr, mem + cfgPtr, 48);
+            }
+            retval = 0;
+        } else if (e.name == "cellAudioGetPortTimestamp") {
+            // r3 = portNum, r4 = tag, r5 = uint64_t* stamp (out)
+            uint32_t outPtr = (uint32_t)st.gpr[5];
+            if (outPtr && outPtr + 8 <= memSize) {
+                std::memset(mem + outPtr, 0, 8);
+                megakernel_write_mem(outPtr, mem + outPtr, 8);
+            }
+            retval = 0;
+
+        // ── cellFont — font rendering stubs ─────────────────────
+        } else if (e.name == "cellFontInit" ||
+                   e.name == "cellFontEnd" ||
+                   e.name == "cellFontOpenFontFile" ||
+                   e.name == "cellFontOpenFontMemory" ||
+                   e.name == "cellFontCreateRenderer" ||
+                   e.name == "cellFontSetupRenderScalePixel" ||
+                   e.name == "cellFontSetScalePixel" ||
+                   e.name == "cellFontBindRenderer" ||
+                   e.name == "cellFontGetFontIdCode") {
+            retval = 0;
+        } else if (e.name == "cellFontRenderCharGlyphImage") {
+            // Zero-fill the output glyph image (blank glyph)
+            retval = 0;
+        } else if (e.name == "cellFontGetHorizontalLayout") {
+            // r3 = font*, r4 = CellFontHorizontalLayout* (out)
+            // Struct has baselineY, lineHeight, effectHeight as floats
+            uint32_t outPtr = (uint32_t)st.gpr[4];
+            if (outPtr && outPtr + 12 <= memSize) {
+                std::memset(mem + outPtr, 0, 12);
+                // Default: 16px lineHeight
+                float lh = 16.0f;
+                uint32_t f;
+                std::memcpy(&f, &lh, 4);
+                f = __builtin_bswap32(f);
+                std::memcpy(mem + outPtr + 4, &f, 4);  // lineHeight at offset 4
+                megakernel_write_mem(outPtr, mem + outPtr, 12);
+            }
+            retval = 0;
+        } else if (e.name == "cellFontGetRenderCharGlyphMetrics") {
+            // r3 = font*, r4 = code, r5 = CellFontGlyphMetrics* (out)
+            uint32_t outPtr = (uint32_t)st.gpr[5];
+            if (outPtr && outPtr + 32 <= memSize) {
+                std::memset(mem + outPtr, 0, 32);
+                megakernel_write_mem(outPtr, mem + outPtr, 32);
+            }
+            retval = 0;
+
+        // ── sceNpTrophy — trophy system stubs ───────────────────
+        } else if (e.name == "sceNpTrophyInit" ||
+                   e.name == "sceNpTrophyTerm" ||
+                   e.name == "sceNpTrophyDestroyContext" ||
+                   e.name == "sceNpTrophyDestroyHandle") {
+            retval = 0;
+        } else if (e.name == "sceNpTrophyCreateContext") {
+            // r3 = SceNpTrophyContext* ctx (out), ...
+            uint32_t outPtr = (uint32_t)st.gpr[3];
+            if (outPtr && outPtr + 4 <= memSize) {
+                uint32_t ctx = 1;  // dummy context ID
+                uint8_t be[4] = { (uint8_t)(ctx>>24), (uint8_t)(ctx>>16),
+                                  (uint8_t)(ctx>>8),  (uint8_t)ctx };
+                std::memcpy(mem + outPtr, be, 4);
+                megakernel_write_mem(outPtr, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sceNpTrophyCreateHandle") {
+            // r3 = SceNpTrophyHandle* handle (out)
+            uint32_t outPtr = (uint32_t)st.gpr[3];
+            if (outPtr && outPtr + 4 <= memSize) {
+                uint32_t h = 1;  // dummy handle
+                uint8_t be[4] = { (uint8_t)(h>>24), (uint8_t)(h>>16),
+                                  (uint8_t)(h>>8),  (uint8_t)h };
+                std::memcpy(mem + outPtr, be, 4);
+                megakernel_write_mem(outPtr, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sceNpTrophyRegisterContext" ||
+                   e.name == "sceNpTrophyUnlockTrophy") {
+            retval = 0;
+        } else if (e.name == "sceNpTrophyGetGameProgress") {
+            // r3 = ctx, r4 = handle, r5 = int32_t* percentage (out)
+            uint32_t outPtr = (uint32_t)st.gpr[5];
+            if (outPtr && outPtr + 4 <= memSize) {
+                uint8_t be[4] = { 0, 0, 0, 0 };
+                std::memcpy(mem + outPtr, be, 4);
+                megakernel_write_mem(outPtr, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sceNpTrophyGetGameInfo") {
+            // r3 = ctx, r4 = handle, r5 = SceNpTrophyGameDetails* (out),
+            // r6 = SceNpTrophyGameData* (out)
+            uint32_t detPtr = (uint32_t)st.gpr[5];
+            uint32_t datPtr = (uint32_t)st.gpr[6];
+            if (detPtr && detPtr + 64 <= memSize) {
+                std::memset(mem + detPtr, 0, 64);
+                megakernel_write_mem(detPtr, mem + detPtr, 64);
+            }
+            if (datPtr && datPtr + 32 <= memSize) {
+                std::memset(mem + datPtr, 0, 32);
+                megakernel_write_mem(datPtr, mem + datPtr, 32);
+            }
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

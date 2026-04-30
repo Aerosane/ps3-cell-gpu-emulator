@@ -123,6 +123,65 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0x144d8656, "cellSpurs", "cellSpursGetInfo" },
     { 0xc41beb33, "cellSpurs", "cellSpursSetGlobalExceptionEventHandler" },
     { 0x47b25489, "cellSpurs", "cellSpursAttributeInitialize" },
+
+    // cellGame — game boot/content management
+    { 0x188beb05, "cellGame", "cellGameBootCheck" },
+    { 0xd0536716, "cellGame", "cellGameContentPermit" },
+    { 0x4cbca5b6, "cellGame", "cellGamePatchCheck" },
+    { 0x405e5cba, "cellGame", "cellGameDataCheck" },
+    { 0x0fa06f6d, "cellGame", "cellGameGetParamInt" },
+    { 0xde9c0881, "cellGame", "cellGameGetParamString" },
+    { 0xd1a90b31, "cellGame", "cellGameGetSizeKB" },
+    { 0xc707e826, "cellGame", "cellGameSetParamString" },
+    { 0xfadd9ad8, "cellGame", "cellGameCreateGameData" },
+    { 0xf2364153, "cellGame", "cellGameDeleteGameData" },
+
+    // cellSaveData — save/load management
+    { 0xf0f530b7, "cellSaveData", "cellSaveDataAutoSave2" },
+    { 0x590e6d0b, "cellSaveData", "cellSaveDataAutoLoad2" },
+    { 0x3604d4f4, "cellSaveData", "cellSaveDataListSave2" },
+    { 0xd739cc4b, "cellSaveData", "cellSaveDataListLoad2" },
+    { 0x38a0f7d2, "cellSaveData", "cellSaveDataFixedSave2" },
+    { 0x7b5e041a, "cellSaveData", "cellSaveDataFixedLoad2" },
+    { 0x1c8b05e2, "cellSaveData", "cellSaveDataDelete2" },
+
+    // cellAudio — audio output
+    { 0x980f750b, "cellAudio", "cellAudioInit" },
+    { 0x81df6d86, "cellAudio", "cellAudioQuit" },
+    { 0x708017e5, "cellAudio", "cellAudioPortOpen" },
+    { 0xebb73ea7, "cellAudio", "cellAudioPortClose" },
+    { 0x8a8c0417, "cellAudio", "cellAudioPortStart" },
+    { 0x3ba2ba64, "cellAudio", "cellAudioPortStop" },
+    { 0xffd2b376, "cellAudio", "cellAudioGetPortConfig" },
+    { 0x69792b3b, "cellAudio", "cellAudioGetPortTimestamp" },
+    { 0x20e88c87, "cellAudio", "cellAudioSetNotifyEventQueue" },
+    { 0x83afa9b3, "cellAudio", "cellAudioRemoveNotifyEventQueue" },
+
+    // cellFont — font rendering
+    { 0x4b734c8c, "cellFont", "cellFontInit" },
+    { 0x3e3712ed, "cellFont", "cellFontEnd" },
+    { 0x62f4f193, "cellFont", "cellFontOpenFontFile" },
+    { 0x21ef94ac, "cellFont", "cellFontOpenFontMemory" },
+    { 0x36149928, "cellFont", "cellFontCreateRenderer" },
+    { 0x4b02499c, "cellFont", "cellFontRenderCharGlyphImage" },
+    { 0xb61f6678, "cellFont", "cellFontGetHorizontalLayout" },
+    { 0xa19dbfba, "cellFont", "cellFontSetupRenderScalePixel" },
+    { 0x61717f26, "cellFont", "cellFontGetRenderCharGlyphMetrics" },
+    { 0x881e825b, "cellFont", "cellFontSetScalePixel" },
+    { 0x6dc15d05, "cellFont", "cellFontBindRenderer" },
+    { 0x3085a953, "cellFont", "cellFontGetFontIdCode" },
+
+    // sceNpTrophy — trophy system
+    { 0xdd74bdae, "sceNpTrophy", "sceNpTrophyInit" },
+    { 0xd972691b, "sceNpTrophy", "sceNpTrophyTerm" },
+    { 0x7aa2fcff, "sceNpTrophy", "sceNpTrophyCreateContext" },
+    { 0xc10b8fce, "sceNpTrophy", "sceNpTrophyCreateHandle" },
+    { 0x287f6018, "sceNpTrophy", "sceNpTrophyRegisterContext" },
+    { 0x0cde7100, "sceNpTrophy", "sceNpTrophyDestroyContext" },
+    { 0x7775c461, "sceNpTrophy", "sceNpTrophyDestroyHandle" },
+    { 0x7a3ceb91, "sceNpTrophy", "sceNpTrophyUnlockTrophy" },
+    { 0xc868dea5, "sceNpTrophy", "sceNpTrophyGetGameProgress" },
+    { 0x3fbae39e, "sceNpTrophy", "sceNpTrophyGetGameInfo" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {
