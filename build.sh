@@ -7,7 +7,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 NVCC=/usr/local/cuda-12.9/bin/nvcc
 NVCC_FLAGS="-O3 -arch=sm_70 --compiler-options=-fPIC -Wno-deprecated-gpu-targets --extended-lambda"
-LDFLAGS_EXTRA="-lz"
+LDFLAGS_EXTRA="-lz -lnvrtc -lcuda"
 
 echo "╔══════════════════════════════════════════╗"
 echo "║  🎮 Project Megakernel — PS3 Emulator   ║"
@@ -77,7 +77,7 @@ $NVCC $NVCC_FLAGS --extended-lambda \
 echo "[10/10] Building RSX → bridge → rasterizer end-to-end test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_rsx_bridge.cu rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o rsx_bridge_test
+  $LDFLAGS_EXTRA -o rsx_bridge_test
 
 echo "[11/11] Building ELF loader → PPC warp-JIT bringup test..."
 $NVCC $NVCC_FLAGS \
@@ -88,7 +88,7 @@ $NVCC $NVCC_FLAGS \
 echo "[12/34] Building cellGcm HLE shim test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_hle.cu rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o gcm_hle_test
+  $LDFLAGS_EXTRA -o gcm_hle_test
 
 echo "[13/34] Building MFC DMA engine test..."
 $NVCC $NVCC_FLAGS \
@@ -115,80 +115,80 @@ echo "[17/34] Building PPC-driven FULL FRAME render test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_frame.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o gcm_frame_test
+  $LDFLAGS_EXTRA -o gcm_frame_test
 
 echo "[18/34] Building PPC-driven multi-primitive test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_prims.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o gcm_prims_test
+  $LDFLAGS_EXTRA -o gcm_prims_test
 
 echo "[19/34] Building PPC-driven depth-test scene..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_depth.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o gcm_depth_test
+  $LDFLAGS_EXTRA -o gcm_depth_test
 
 echo "[20/34] Building PPC-driven alpha-blend test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_blend.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o gcm_blend_test
+  $LDFLAGS_EXTRA -o gcm_blend_test
 
 echo "[21/34] Building PPC-driven scissor test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_scissor.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o gcm_scissor_test
+  $LDFLAGS_EXTRA -o gcm_scissor_test
 
 echo "[22/34] Building PPC-driven back-face cull test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_cull.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o gcm_cull_test
+  $LDFLAGS_EXTRA -o gcm_cull_test
 
 echo "[23/34] Building PS3 ELF → PPC → RSX end-to-end test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_elf.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
   $LDFLAGS_EXTRA \
-  -o gcm_elf_test
+  $LDFLAGS_EXTRA -o gcm_elf_test
 
 echo "[24/34] Building PPC-driven two-pass stencil masking test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_stencil.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o gcm_stencil_test
+  $LDFLAGS_EXTRA -o gcm_stencil_test
 
 echo "[25/34] Building PPC-driven indexed draw test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_indexed.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o gcm_indexed_test
+  $LDFLAGS_EXTRA -o gcm_indexed_test
 
 echo "[26/34] Building PPC-driven vertex-program upload test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_vp.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o gcm_vp_test
+  $LDFLAGS_EXTRA -o gcm_vp_test
 
 echo "[27/34] Building PPC-driven FP + multi-texture-unit test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_fp_tex.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o gcm_fp_tex_test
+  $LDFLAGS_EXTRA -o gcm_fp_tex_test
 
 echo "[28/34] Building PPC-driven MRT surface setup test..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_mrt.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o gcm_mrt_test
+  $LDFLAGS_EXTRA -o gcm_mrt_test
 
 echo "[29/34] Building PPC-driven VP execution test (real microcode)..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_gcm_vp_exec.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
-  -o gcm_vp_exec_test
+  $LDFLAGS_EXTRA -o gcm_vp_exec_test
 
 echo "[30/34] Building real PS3 SELF loader test..."
 $NVCC $NVCC_FLAGS \
@@ -201,7 +201,7 @@ $NVCC $NVCC_FLAGS --extended-lambda \
   test_real_self_exec.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
   $LDFLAGS_EXTRA \
-  -o real_self_exec_test
+  $LDFLAGS_EXTRA -o real_self_exec_test
 
 echo "[32/34] Building real PS3 SELF disassembly validator..."
 $NVCC $NVCC_FLAGS \
@@ -226,14 +226,14 @@ $NVCC $NVCC_FLAGS \
   test_triangle_boot.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
   $LDFLAGS_EXTRA \
-  -o triangle_boot_test
+  $LDFLAGS_EXTRA -o triangle_boot_test
 
 echo "[36/36] Building real SDK cube-ELF boot attempt..."
 $NVCC $NVCC_FLAGS --extended-lambda \
   test_cube_boot.cu ppc_interpreter.o \
   rsx_command_processor.cu rsx_raster.cu rsx_raster_bridge.cpp \
   $LDFLAGS_EXTRA \
-  -o cube_boot_test
+  $LDFLAGS_EXTRA -o cube_boot_test
 
 echo ""
 echo "═══════════════════════════════════════════"

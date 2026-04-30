@@ -11,6 +11,108 @@
 #include <vector>
 #include <algorithm>
 #include <unordered_map>
+#include <cuda.h>
+#include <nvrtc.h>
+
+// ─────────────────────────────────────────────────────────────────
+// GPU Vertex Program JIT cache — compile VP microcode to CUDA kernel
+// ─────────────────────────────────────────────────────────────────
+namespace {
+
+struct GPUVPCache {
+    CUmodule   module{nullptr};
+    CUfunction func{nullptr};
+    uint64_t   hash{0};           // FNV-1a of VP microcode
+    bool       usesVtxTex{false};
+
+    // GPU buffers (reused across draws, grown as needed)
+    CUdeviceptr d_input{0};
+    CUdeviceptr d_output{0};
+    CUdeviceptr d_constants{0};
+    size_t      inputCapacity{0};  // in bytes
+    size_t      outputCapacity{0};
+    bool        constantsAllocated{false};
+};
+
+static GPUVPCache g_vpCache;
+
+static uint64_t fnv1a_hash(const uint32_t* data, size_t count) {
+    uint64_t h = 14695981039346656037ULL;
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < count * 4; ++i) {
+        h ^= p[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+static bool compileVPKernel(const rsx::RSXState& s, GPUVPCache& cache) {
+    // Generate CUDA source for this VP
+    std::string src = rsx::vp_translate_to_cuda(s.vpData, 512 * 4, s.vpStart);
+    if (src.empty()) return false;
+
+    // Check if VP uses vertex texture fetch
+    cache.usesVtxTex = (src.find("vp_tex_fetch") != std::string::npos);
+
+    // Compile with NVRTC
+    nvrtcProgram prog;
+    nvrtcResult res = nvrtcCreateProgram(&prog, src.c_str(), "rsx_vp.cu", 0, nullptr, nullptr);
+    if (res != NVRTC_SUCCESS) return false;
+
+    const char* opts[] = {"--gpu-architecture=compute_70", "-default-device"};
+    res = nvrtcCompileProgram(prog, 2, opts);
+    if (res != NVRTC_SUCCESS) {
+        size_t logSize;
+        nvrtcGetProgramLogSize(prog, &logSize);
+        if (logSize > 1) {
+            std::vector<char> log(logSize);
+            nvrtcGetProgramLog(prog, log.data());
+            fprintf(stderr, "[GPU-VP] NVRTC compile error:\n%s\n", log.data());
+        }
+        nvrtcDestroyProgram(&prog);
+        return false;
+    }
+
+    size_t ptxSize;
+    nvrtcGetPTXSize(prog, &ptxSize);
+    std::vector<char> ptx(ptxSize);
+    nvrtcGetPTX(prog, ptx.data());
+    nvrtcDestroyProgram(&prog);
+
+    // Unload previous module
+    if (cache.module) { cuModuleUnload(cache.module); cache.module = nullptr; }
+
+    CUresult cr = cuModuleLoadData(&cache.module, ptx.data());
+    if (cr != CUDA_SUCCESS) {
+        fprintf(stderr, "[GPU-VP] cuModuleLoadData failed: %d\n", (int)cr);
+        return false;
+    }
+
+    cr = cuModuleGetFunction(&cache.func, cache.module, "rsx_vp_kernel");
+    if (cr != CUDA_SUCCESS) {
+        fprintf(stderr, "[GPU-VP] cuModuleGetFunction failed: %d\n", (int)cr);
+        cuModuleUnload(cache.module); cache.module = nullptr;
+        return false;
+    }
+
+    return true;
+}
+
+// Ensure GPU VP kernel is compiled and up-to-date for current microcode
+static bool ensureGPUVP(const rsx::RSXState& s, GPUVPCache& cache) {
+    uint64_t h = fnv1a_hash(s.vpData, 512 * 4);
+    if (h == cache.hash && cache.func != nullptr) return true;
+
+    if (!compileVPKernel(s, cache)) {
+        cache.hash = 0;
+        cache.func = nullptr;
+        return false;
+    }
+    cache.hash = h;
+    return true;
+}
+
+} // anonymous namespace
 
 // ─────────────────────────────────────────────────────────────────
 // DXT (S3TC) block-compression helpers — decode 4×4 blocks to RGBA8
@@ -577,92 +679,204 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
     if (s.vpValid) {
         if (base == nullptr) return;
         transformed.resize(count);
-        for (uint32_t i = 0; i < count; ++i) {
-            VPFloat4 inputs[16] = {};
-            // Populate VP inputs from each enabled VA → input[va_idx]
-            // Disabled attributes fall back to vertexData4f (inline constants)
+
+        // ── GPU VP path: JIT compile and launch on CUDA ──
+        bool gpuVPDone = false;
+        // GPU VP JIT path — opt-in via RSX_GPU_VP=1 (still validating correctness)
+        static int gpuVPEnabled = -1;
+        if (gpuVPEnabled < 0) gpuVPEnabled = (getenv("RSX_GPU_VP") && atoi(getenv("RSX_GPU_VP")) > 0) ? 1 : 0;
+        if (gpuVPEnabled && count >= 3 && ensureGPUVP(s, g_vpCache)) {
+            // Count active input attributes
+            int numAttribs = 0;
             for (int va = 0; va < 16; ++va) {
-                if (!s.vertexArrays[va].enabled) {
-                    inputs[va].v[0] = s.vertexData4f[va][0];
-                    inputs[va].v[1] = s.vertexData4f[va][1];
-                    inputs[va].v[2] = s.vertexData4f[va][2];
-                    inputs[va].v[3] = s.vertexData4f[va][3];
-                    continue;
+                if (s.vertexArrays[va].enabled) numAttribs = va + 1;
+            }
+            if (numAttribs < 1) numAttribs = 1;
+
+            // Prepare input vertex data as flat float4 array: count × numAttribs
+            size_t inputSize = count * numAttribs * sizeof(float) * 4;
+            size_t outputSize = count * 17 * sizeof(float) * 4;
+            size_t constSize = 256 * sizeof(float) * 4;
+
+            // Grow GPU buffers if needed
+            if (inputSize > g_vpCache.inputCapacity) {
+                if (g_vpCache.d_input) cuMemFree(g_vpCache.d_input);
+                cuMemAlloc(&g_vpCache.d_input, inputSize);
+                g_vpCache.inputCapacity = inputSize;
+            }
+            if (outputSize > g_vpCache.outputCapacity) {
+                if (g_vpCache.d_output) cuMemFree(g_vpCache.d_output);
+                cuMemAlloc(&g_vpCache.d_output, outputSize);
+                g_vpCache.outputCapacity = outputSize;
+            }
+            if (!g_vpCache.constantsAllocated) {
+                cuMemAlloc(&g_vpCache.d_constants, constSize);
+                g_vpCache.constantsAllocated = true;
+            }
+
+            // Pack input attributes on host
+            std::vector<float> inputBuf(count * numAttribs * 4);
+            for (uint32_t i = 0; i < count; ++i) {
+                for (int va = 0; va < numAttribs; ++va) {
+                    float* dst = &inputBuf[(i * numAttribs + va) * 4];
+                    if (!s.vertexArrays[va].enabled) {
+                        dst[0] = s.vertexData4f[va][0];
+                        dst[1] = s.vertexData4f[va][1];
+                        dst[2] = s.vertexData4f[va][2];
+                        dst[3] = s.vertexData4f[va][3];
+                    } else {
+                        float attr[4] = {0, 0, 0, 1};
+                        decode_attr(vram_, vramSize_, s.vertexArrays[va],
+                                    first + i, 4, attr);
+                        dst[0] = attr[0]; dst[1] = attr[1];
+                        dst[2] = attr[2]; dst[3] = attr[3];
+                        if (va == 0) {
+                            uint32_t sz = (s.vertexArrays[0].format >> 4) & 0xF;
+                            if (sz < 4) dst[3] = 1.0f;
+                        }
+                    }
                 }
-                float attr[4] = {0, 0, 0, 1};
-                decode_attr(vram_, vramSize_, s.vertexArrays[va],
-                            first + i, 4, attr);
-                inputs[va].v[0] = attr[0]; inputs[va].v[1] = attr[1];
-                inputs[va].v[2] = attr[2]; inputs[va].v[3] = attr[3];
-                // Position VA: ensure w=1 for homogeneous coords when
-                // the attribute has fewer than 4 components.
-                if (va == 0) {
-                    uint32_t sz = (s.vertexArrays[0].format >> 4) & 0xF;
-                    if (sz < 4) inputs[0].v[3] = 1.0f;
+            }
+
+            // Upload to GPU
+            cuMemcpyHtoD(g_vpCache.d_input, inputBuf.data(), inputSize);
+            cuMemcpyHtoD(g_vpCache.d_constants, s.vpConstants, constSize);
+
+            // Launch kernel
+            int numVerts = (int)count;
+            void* args[] = {
+                &g_vpCache.d_input,
+                &g_vpCache.d_output,
+                &g_vpCache.d_constants,
+                &numVerts,
+                &numAttribs
+            };
+            int blockSize = 256;
+            int gridSize = (numVerts + blockSize - 1) / blockSize;
+            CUresult cr = cuLaunchKernel(g_vpCache.func,
+                gridSize, 1, 1, blockSize, 1, 1,
+                0, 0, args, nullptr);
+            if (cr == CUDA_SUCCESS) {
+                // Read back output (17 float4 per vertex)
+                std::vector<float> outputBuf(count * 17 * 4);
+                cuMemcpyDtoH(outputBuf.data(), g_vpCache.d_output, outputSize);
+
+                // Unpack VP outputs → RasterVertex
+                for (uint32_t i = 0; i < count; ++i) {
+                    const float* out = &outputBuf[i * 17 * 4];
+                    RasterVertex& v = transformed[i];
+                    memset(&v, 0, sizeof(v));
+
+                    float ox = out[0], oy = out[1], oz = out[2], ow = out[3];
+                    if (ow == 0.0f) ow = 1.0f;
+                    float nx = ox / ow, ny = oy / ow, nz = oz / ow;
+                    if (s.vpOffsetScaleSet) {
+                        v.x = s.vpScale[0] * nx + s.vpOffset[0];
+                        v.y = s.vpScale[1] * ny + s.vpOffset[1];
+                        v.z = s.vpScale[2] * nz + s.vpOffset[2];
+                    } else {
+                        float W = (float)(s.surfaceWidth  ? s.surfaceWidth  : 1280);
+                        float H = (float)(s.surfaceHeight ? s.surfaceHeight : 720);
+                        v.x = (nx * 0.5f + 0.5f) * W;
+                        v.y = (1.0f - (ny * 0.5f + 0.5f)) * H;
+                        v.z = nz * 0.5f + 0.5f;
+                    }
+                    v.w = ow;
+                    // COL0 (output[1])
+                    v.r = out[4*1+0]; v.g = out[4*1+1]; v.b = out[4*1+2]; v.a = out[4*1+3];
+                    // TEX0 (output[7])
+                    v.u = out[4*7+0]; v.v = out[4*7+1];
+                    v.tex0q[0] = out[4*7+2]; v.tex0q[1] = out[4*7+3];
+                    // COL1 (output[2])
+                    v.col1[0] = out[4*2+0]; v.col1[1] = out[4*2+1];
+                    v.col1[2] = out[4*2+2]; v.col1[3] = out[4*2+3];
+                    // BFC0 (output[3]), BFC1 (output[4])
+                    v.backCol0[0] = out[4*3+0]; v.backCol0[1] = out[4*3+1];
+                    v.backCol0[2] = out[4*3+2]; v.backCol0[3] = out[4*3+3];
+                    v.backCol1[0] = out[4*4+0]; v.backCol1[1] = out[4*4+1];
+                    v.backCol1[2] = out[4*4+2]; v.backCol1[3] = out[4*4+3];
+                    v.fog = out[4*5+0];
+                    v.pointSize = out[4*6+0];
+                    // TEX1-TEX7
+                    for (int ti = 0; ti < 4; ++ti) {
+                        v.tex1[ti] = out[4*8+ti];  v.tex2[ti] = out[4*9+ti];
+                        v.tex3[ti] = out[4*10+ti]; v.tex4[ti] = out[4*11+ti];
+                        v.tex5[ti] = out[4*12+ti]; v.tex6[ti] = out[4*13+ti];
+                        v.tex7[ti] = out[4*14+ti];
+                    }
                 }
+                gpuVPDone = true;
             }
-            // Fallback: if no VAs enabled, use pool vertex data
-            if (!vram_) {
-                inputs[0].v[0] = base[i].x; inputs[0].v[1] = base[i].y;
-                inputs[0].v[2] = base[i].z; inputs[0].v[3] = 1.0f;
-            }
+        }
 
-            const VPFloat4* consts = reinterpret_cast<const VPFloat4*>(s.vpConstants);
-            VPFloat4 outputs[16] = {};
+        // ── CPU fallback: interpret VP per-vertex ──
+        if (!gpuVPDone) {
+            for (uint32_t i = 0; i < count; ++i) {
+                VPFloat4 inputs[16] = {};
+                for (int va = 0; va < 16; ++va) {
+                    if (!s.vertexArrays[va].enabled) {
+                        inputs[va].v[0] = s.vertexData4f[va][0];
+                        inputs[va].v[1] = s.vertexData4f[va][1];
+                        inputs[va].v[2] = s.vertexData4f[va][2];
+                        inputs[va].v[3] = s.vertexData4f[va][3];
+                        continue;
+                    }
+                    float attr[4] = {0, 0, 0, 1};
+                    decode_attr(vram_, vramSize_, s.vertexArrays[va],
+                                first + i, 4, attr);
+                    inputs[va].v[0] = attr[0]; inputs[va].v[1] = attr[1];
+                    inputs[va].v[2] = attr[2]; inputs[va].v[3] = attr[3];
+                    if (va == 0) {
+                        uint32_t sz = (s.vertexArrays[0].format >> 4) & 0xF;
+                        if (sz < 4) inputs[0].v[3] = 1.0f;
+                    }
+                }
+                if (!vram_) {
+                    inputs[0].v[0] = base[i].x; inputs[0].v[1] = base[i].y;
+                    inputs[0].v[2] = base[i].z; inputs[0].v[3] = 1.0f;
+                }
 
-            vp_execute(s.vpData, 512u * 4u, s.vpStart,
-                       inputs, consts, outputs);
+                const VPFloat4* consts = reinterpret_cast<const VPFloat4*>(s.vpConstants);
+                VPFloat4 outputs[16] = {};
+                vp_execute(s.vpData, 512u * 4u, s.vpStart,
+                           inputs, consts, outputs);
 
-            RasterVertex& v = transformed[i];
-            memset(&v, 0, sizeof(v));
-            // VP outputs HPOS in clip/NDC space; perform perspective
-            // divide (w) and map NDC [-1,1] → pixel space using the
-            // current surface dimensions. Y is flipped for screen-down.
-            float ox = outputs[0].v[0];
-            float oy = outputs[0].v[1];
-            float oz = outputs[0].v[2];
-            float ow = outputs[0].v[3];
-            if (ow == 0.0f) ow = 1.0f;
-            float nx = ox / ow;
-            float ny = oy / ow;
-            float nz = oz / ow;
-            // Use viewport offset/scale if explicitly set by game
-            if (s.vpOffsetScaleSet) {
-                v.x = s.vpScale[0] * nx + s.vpOffset[0];
-                v.y = s.vpScale[1] * ny + s.vpOffset[1];
-                v.z = s.vpScale[2] * nz + s.vpOffset[2];
-            } else {
-                float W = (float)(s.surfaceWidth  ? s.surfaceWidth  : 1280);
-                float H = (float)(s.surfaceHeight ? s.surfaceHeight : 720);
-                v.x = (nx * 0.5f + 0.5f) * W;
-                v.y = (1.0f - (ny * 0.5f + 0.5f)) * H;
-                v.z = nz * 0.5f + 0.5f;
-            }
-            v.w = ow;  // preserve clip-space W for perspective-correct interpolation
-            // Color from o[1] (COL0), UV from o[7] (TEX0)
-            v.r = outputs[1].v[0]; v.g = outputs[1].v[1];
-            v.b = outputs[1].v[2]; v.a = outputs[1].v[3];
-            v.u = outputs[7].v[0]; v.v = outputs[7].v[1];
-            v.tex0q[0] = outputs[7].v[2]; v.tex0q[1] = outputs[7].v[3];
-            // Extended VP outputs → FP inputs
-            v.col1[0] = outputs[2].v[0]; v.col1[1] = outputs[2].v[1];
-            v.col1[2] = outputs[2].v[2]; v.col1[3] = outputs[2].v[3];
-            // Back-face colors from o[3] (BFC0), o[4] (BFC1)
-            v.backCol0[0] = outputs[3].v[0]; v.backCol0[1] = outputs[3].v[1];
-            v.backCol0[2] = outputs[3].v[2]; v.backCol0[3] = outputs[3].v[3];
-            v.backCol1[0] = outputs[4].v[0]; v.backCol1[1] = outputs[4].v[1];
-            v.backCol1[2] = outputs[4].v[2]; v.backCol1[3] = outputs[4].v[3];
-            v.fog = outputs[5].v[0];
-            v.pointSize = outputs[6].v[0];  // PSIZ
-            // TEX1-TEX7: full 4-component texture coordinates
-            for (int ti = 0; ti < 4; ++ti) {
-                v.tex1[ti] = outputs[8].v[ti];
-                v.tex2[ti] = outputs[9].v[ti];
-                v.tex3[ti] = outputs[10].v[ti];
-                v.tex4[ti] = outputs[11].v[ti];
-                v.tex5[ti] = outputs[12].v[ti];
-                v.tex6[ti] = outputs[13].v[ti];
-                v.tex7[ti] = outputs[14].v[ti];
+                RasterVertex& v = transformed[i];
+                memset(&v, 0, sizeof(v));
+                float ox = outputs[0].v[0], oy = outputs[0].v[1];
+                float oz = outputs[0].v[2], ow = outputs[0].v[3];
+                if (ow == 0.0f) ow = 1.0f;
+                float nx = ox / ow, ny = oy / ow, nz = oz / ow;
+                if (s.vpOffsetScaleSet) {
+                    v.x = s.vpScale[0] * nx + s.vpOffset[0];
+                    v.y = s.vpScale[1] * ny + s.vpOffset[1];
+                    v.z = s.vpScale[2] * nz + s.vpOffset[2];
+                } else {
+                    float W = (float)(s.surfaceWidth  ? s.surfaceWidth  : 1280);
+                    float H = (float)(s.surfaceHeight ? s.surfaceHeight : 720);
+                    v.x = (nx * 0.5f + 0.5f) * W;
+                    v.y = (1.0f - (ny * 0.5f + 0.5f)) * H;
+                    v.z = nz * 0.5f + 0.5f;
+                }
+                v.w = ow;
+                v.r = outputs[1].v[0]; v.g = outputs[1].v[1];
+                v.b = outputs[1].v[2]; v.a = outputs[1].v[3];
+                v.u = outputs[7].v[0]; v.v = outputs[7].v[1];
+                v.tex0q[0] = outputs[7].v[2]; v.tex0q[1] = outputs[7].v[3];
+                v.col1[0] = outputs[2].v[0]; v.col1[1] = outputs[2].v[1];
+                v.col1[2] = outputs[2].v[2]; v.col1[3] = outputs[2].v[3];
+                v.backCol0[0] = outputs[3].v[0]; v.backCol0[1] = outputs[3].v[1];
+                v.backCol0[2] = outputs[3].v[2]; v.backCol0[3] = outputs[3].v[3];
+                v.backCol1[0] = outputs[4].v[0]; v.backCol1[1] = outputs[4].v[1];
+                v.backCol1[2] = outputs[4].v[2]; v.backCol1[3] = outputs[4].v[3];
+                v.fog = outputs[5].v[0];
+                v.pointSize = outputs[6].v[0];
+                for (int ti = 0; ti < 4; ++ti) {
+                    v.tex1[ti] = outputs[8].v[ti];  v.tex2[ti] = outputs[9].v[ti];
+                    v.tex3[ti] = outputs[10].v[ti]; v.tex4[ti] = outputs[11].v[ti];
+                    v.tex5[ti] = outputs[12].v[ti]; v.tex6[ti] = outputs[13].v[ti];
+                    v.tex7[ti] = outputs[14].v[ti];
+                }
             }
         }
         base = transformed.data();
