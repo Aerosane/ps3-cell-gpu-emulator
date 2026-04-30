@@ -72,14 +72,19 @@ private:
     const uint8_t* vram_{nullptr};
     uint32_t vramSize_{0};
 
-    // Cache for the texture we last uploaded to the rasterizer's
-    // device-side sampler. Avoids decoding + re-uploading the same
-    // VRAM region on every draw of a textured object.
-    uint32_t cachedTexOff_{0xFFFFFFFFu};
-    uint32_t cachedTexW_{0};
-    uint32_t cachedTexH_{0};
-    uint32_t cachedTexFmt_{0xFFFFFFFFu};
-    bool     cachedTexValid_{false};
+    // Per-unit texture cache: avoids decoding + re-uploading unchanged
+    // VRAM textures on every draw. Keyed by offset/width/height/format
+    // plus a content hash (FNV-1a of first 4KB of texture data) to detect
+    // in-place VRAM writes.
+    static constexpr int TEX_CACHE_UNITS = 8;
+    struct TexCacheEntry {
+        uint32_t offset{0xFFFFFFFFu};
+        uint32_t width{0};
+        uint32_t height{0};
+        uint32_t format{0xFFFFFFFFu};
+        uint64_t contentHash{0};
+        bool     valid{false};
+    } texCache_[TEX_CACHE_UNITS];
 };
 
 } // namespace rsx

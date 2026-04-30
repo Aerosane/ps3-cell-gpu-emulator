@@ -46,6 +46,17 @@ static uint64_t fnv1a_hash(const uint32_t* data, size_t count) {
     return h;
 }
 
+// Hash the first N bytes of a texture for change detection
+static uint64_t fnv1a_bytes(const uint8_t* data, size_t len) {
+    uint64_t h = 14695981039346656037ULL;
+    size_t n = (len > 4096) ? 4096 : len;  // sample first 4KB
+    for (size_t i = 0; i < n; ++i) {
+        h ^= data[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
 static bool compileVPKernel(const rsx::RSXState& s, GPUVPCache& cache) {
     // Generate CUDA source for this VP
     std::string src = rsx::vp_translate_to_cuda(s.vpData, 512 * 4, s.vpStart);
@@ -890,14 +901,8 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         if (!vram_ || !s.textures[tu].enabled ||
             s.textures[tu].width == 0 || s.textures[tu].height == 0) continue;
         const auto& t = s.textures[tu];
-        // For unit 0, use cache; units 1-3 always upload (simple for now)
-        if (tu == 0) {
-            bool stale =
-                !cachedTexValid_ ||
-                t.offset != cachedTexOff_ || t.width != cachedTexW_ ||
-                t.height != cachedTexH_   || t.format != cachedTexFmt_;
-            if (!stale) { texBoundForDraw = true; continue; }
-        }
+
+        // Per-unit texture cache: check metadata + content hash
         uint8_t fmt = ((t.format >> 8) & 0xFF) & 0x9F;
         uint32_t W = t.width, H = t.height;
         uint32_t bpp;
@@ -918,7 +923,6 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         }
         uint64_t need;
         if (bpp == 0) {
-            // DXT block compressed: 4×4 blocks
             uint32_t bw = (W + 3) / 4, bh = (H + 3) / 4;
             uint32_t blockSize = (fmt == 0x86) ? 8 : 16;
             need = (uint64_t)bw * bh * blockSize;
@@ -927,6 +931,16 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         }
         if ((uint64_t)t.offset + need > vramSize_) continue;
         const uint8_t* src = vram_ + t.offset;
+
+        // Check per-unit cache
+        auto& ce = texCache_[tu];
+        uint64_t cHash = fnv1a_bytes(src, (size_t)need);
+        bool stale = !ce.valid ||
+            t.offset != ce.offset || W != ce.width ||
+            H != ce.height || t.format != ce.format ||
+            cHash != ce.contentHash;
+        if (!stale) { texBoundForDraw = true; continue; }
+
         std::vector<uint32_t> rgba8(W * H);
         if (fmt == 0x85) {
             // A8R8G8B8 — big-endian
@@ -1057,13 +1071,13 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         rast_->setTextureWrapR(tu, wrapR);
         // Texture channel remap (control1 low 16 bits)
         rast_->setTextureRemap(tu, (uint16_t)(t.control1 & 0xFFFF));
-        if (tu == 0) {
-            cachedTexOff_ = t.offset;
-            cachedTexW_ = W;
-            cachedTexH_ = H;
-            cachedTexFmt_ = t.format;
-            cachedTexValid_ = true;
-        }
+        // Update per-unit cache entry
+        ce.offset = t.offset;
+        ce.width = W;
+        ce.height = H;
+        ce.format = t.format;
+        ce.contentHash = cHash;
+        ce.valid = true;
         texBoundForDraw = true;
     }
 
