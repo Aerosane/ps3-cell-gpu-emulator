@@ -584,6 +584,110 @@ struct PpuHleDispatcher {
         } else if (e.name == "cellFsClose" ||
                    e.name == "cellFsLseek") {
             retval = 0;
+
+        // ── cellSpurs — SPURS task scheduler stubs ──────────────
+        // These return CELL_OK (0) to let games that initialize SPURS
+        // proceed past boot. Actual SPU task dispatch is handled by
+        // the SPU JIT turbo/hyper multi-instance engine.
+        } else if (e.name == "cellSpursInitialize" ||
+                   e.name == "cellSpursInitializeWithAttribute" ||
+                   e.name == "cellSpursInitializeWithAttribute2") {
+            // r3 = CellSpurs* spurs, r4 = numSpu / CellSpursAttribute*
+            // Zero-fill the SPURS structure so games see initialized state
+            uint32_t spursPtr = (uint32_t)st.gpr[3];
+            if (spursPtr && spursPtr + 0x80 <= memSize) {
+                std::memset(mem + spursPtr, 0, 0x80);
+                megakernel_write_mem(spursPtr, mem + spursPtr, 0x80);
+            }
+            retval = 0;
+        } else if (e.name == "cellSpursFinalize") {
+            retval = 0;
+        } else if (e.name == "cellSpursAttributeInitialize") {
+            // r3 = CellSpursAttribute* attr, r4 = revision, r5 = sdkVersion,
+            // r6 = nSpus, r7 = spuPriority, r8 = ppuPriority
+            uint32_t attrPtr = (uint32_t)st.gpr[3];
+            if (attrPtr && attrPtr + 0x80 <= memSize) {
+                std::memset(mem + attrPtr, 0, 0x80);
+                megakernel_write_mem(attrPtr, mem + attrPtr, 0x80);
+            }
+            retval = 0;
+        } else if (e.name == "cellSpursAttributeSetNamePrefix" ||
+                   e.name == "cellSpursAttributeSetSpuThreadGroupType" ||
+                   e.name == "cellSpursAttributeEnableSpuPrintfIfAvailable" ||
+                   e.name == "cellSpursSetMaxContention" ||
+                   e.name == "cellSpursSetPriorities" ||
+                   e.name == "cellSpursSetGlobalExceptionEventHandler") {
+            retval = 0;
+        } else if (e.name == "cellSpursGetNumSpuThread") {
+            // r3 = CellSpurs*, r4 = uint32_t* numSpu
+            uint32_t outPtr = (uint32_t)st.gpr[4];
+            if (outPtr && outPtr + 4 <= memSize) {
+                uint32_t n = 6;  // report 6 SPUs (standard PS3 config)
+                uint8_t be[4] = { (uint8_t)(n>>24), (uint8_t)(n>>16),
+                                  (uint8_t)(n>>8),  (uint8_t)n };
+                std::memcpy(mem + outPtr, be, 4);
+                megakernel_write_mem(outPtr, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellSpursGetSpuThreadGroupId") {
+            // r3 = CellSpurs*, r4 = sys_spu_thread_group_t* id
+            uint32_t outPtr = (uint32_t)st.gpr[4];
+            if (outPtr && outPtr + 4 <= memSize) {
+                uint32_t id = 1;  // dummy group ID
+                uint8_t be[4] = { (uint8_t)(id>>24), (uint8_t)(id>>16),
+                                  (uint8_t)(id>>8),  (uint8_t)id };
+                std::memcpy(mem + outPtr, be, 4);
+                megakernel_write_mem(outPtr, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellSpursAttachLv2EventQueue" ||
+                   e.name == "cellSpursDetachLv2EventQueue") {
+            retval = 0;
+        } else if (e.name == "cellSpursCreateTaskset" ||
+                   e.name == "cellSpursCreateTasksetWithAttribute") {
+            // r3 = CellSpurs*, r4 = CellSpursTaskset*, ...
+            uint32_t tsPtr = (uint32_t)st.gpr[4];
+            if (tsPtr && tsPtr + 0x80 <= memSize) {
+                std::memset(mem + tsPtr, 0, 0x80);
+                megakernel_write_mem(tsPtr, mem + tsPtr, 0x80);
+            }
+            retval = 0;
+        } else if (e.name == "cellSpursCreateTask") {
+            retval = 0;
+        } else if (e.name == "cellSpursJoinTaskset") {
+            // Blocking wait — return immediately (tasks "completed")
+            retval = 0;
+        } else if (e.name == "cellSpursShutdownTaskset") {
+            retval = 0;
+        } else if (e.name == "cellSpursTasksetAttributeSetName") {
+            retval = 0;
+        } else if (e.name == "cellSpursEventFlagInitialize") {
+            // r3 = CellSpurs*, r4 = CellSpursEventFlag*, ...
+            uint32_t efPtr = (uint32_t)st.gpr[4];
+            if (efPtr && efPtr + 0x40 <= memSize) {
+                std::memset(mem + efPtr, 0, 0x40);
+                megakernel_write_mem(efPtr, mem + efPtr, 0x40);
+            }
+            retval = 0;
+        } else if (e.name == "cellSpursEventFlagSet" ||
+                   e.name == "cellSpursEventFlagClear") {
+            retval = 0;
+        } else if (e.name == "cellSpursEventFlagWait") {
+            // Blocking wait — return immediately (flag "set")
+            retval = 0;
+        } else if (e.name == "cellSpursGetInfo") {
+            // r3 = CellSpurs*, r4 = CellSpursInfo*
+            uint32_t infoPtr = (uint32_t)st.gpr[4];
+            if (infoPtr && infoPtr + 0x40 <= memSize) {
+                std::memset(mem + infoPtr, 0, 0x40);
+                // Write nSpus = 6 at offset 0
+                uint32_t n = 6;
+                uint8_t be[4] = { (uint8_t)(n>>24), (uint8_t)(n>>16),
+                                  (uint8_t)(n>>8),  (uint8_t)n };
+                std::memcpy(mem + infoPtr, be, 4);
+                megakernel_write_mem(infoPtr, mem + infoPtr, 0x40);
+            }
+            retval = 0;
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;
