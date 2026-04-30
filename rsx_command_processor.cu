@@ -213,7 +213,10 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     // ── Surface setup ──────────────────────────────────────────
     switch (method) {
     case NV4097_SET_SURFACE_FORMAT:
-        if (data) state->surfaceFormat = data & 0x1F;
+        if (data) {
+            state->surfaceFormat = data & 0x1F;
+            state->surfaceAntialias = (data >> 12) & 0xF;  // AA mode: 0=none, 4=2x, 12=4x
+        }
         RSX_EMIT(onSurfaceSetup, state);
         return;
     case NV4097_SET_SURFACE_CLIP_HORIZONTAL: {

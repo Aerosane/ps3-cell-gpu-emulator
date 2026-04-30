@@ -401,6 +401,24 @@ public:
     uint32_t width()  const { return fb_.width; }
     uint32_t height() const { return fb_.height; }
 
+    // ─── Anti-aliasing (MSAA resolve) ───────────────────────────
+    // RSX SURFACE_FORMAT bits 12-15 encode the AA mode:
+    //   0 = CENTER_1 (no AA)
+    //   4 = DIAGONAL_CENTERED_2 (2× MSAA)
+    //  12 = SQUARE_CENTERED_4 / SQUARE_ROTATED_4 (4× MSAA)
+    // In our software rasterizer we don't do per-sample coverage,
+    // but we track the mode so games that set it don't break. When
+    // AA is active, resolveAA() does a box-filter downsample from
+    // the internal (super-sampled) buffer to a display-resolution
+    // output.  If AA is off, resolveAA() is a plain readback.
+    void     setAntialias(uint32_t mode);  // 0, 4, or 12
+    uint32_t antialias() const { return aaMode_; }
+
+    // Resolve to host buffer. When AA > 0 and the internal buffer
+    // was allocated at super-sampled size, this downsamples.
+    // `out` must hold (displayW × displayH) uint32_t pixels.
+    void resolveAA(uint32_t* out, uint32_t displayW, uint32_t displayH) const;
+
     // Save current buffer to binary PPM (P6). Returns false on I/O error.
     bool savePPM(const char* path) const;
 
@@ -486,6 +504,7 @@ private:
     uint32_t  clipPlaneControl_{0};  // 6 planes × 2 bits each
 
     bool      sRGBWrite_{false};   // gamma encode on FB write
+    uint32_t  aaMode_{0};          // 0=none, 4=2x, 12=4x
 
     bool      stencilTest_{false};
     StencilFunc stencilFunc_{StencilFunc::Always};

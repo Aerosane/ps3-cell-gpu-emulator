@@ -37,6 +37,40 @@ __global__ void k_clearDepth(float* __restrict__ dst,
     dst[y * width + x] = value;
 }
 
+// ─── MSAA box-filter resolve kernel ───────────────────────────
+// Downsamples src (srcW × srcH) → dst (dstW × dstH) with a box
+// filter. scaleX/scaleY are integer (1, 2, or 4).
+__global__ void k_resolveAA(const uint32_t* __restrict__ src,
+                            uint32_t* __restrict__ dst,
+                            uint32_t srcW, uint32_t srcH,
+                            uint32_t dstW, uint32_t dstH,
+                            uint32_t scaleX, uint32_t scaleY) {
+    uint32_t dx = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t dy = blockIdx.y * blockDim.y + threadIdx.y;
+    if (dx >= dstW || dy >= dstH) return;
+
+    uint32_t rSum = 0, gSum = 0, bSum = 0, aSum = 0;
+    uint32_t count = 0;
+    for (uint32_t sy = 0; sy < scaleY; ++sy) {
+        uint32_t srcY = dy * scaleY + sy;
+        if (srcY >= srcH) continue;
+        for (uint32_t sx = 0; sx < scaleX; ++sx) {
+            uint32_t srcX = dx * scaleX + sx;
+            if (srcX >= srcW) continue;
+            uint32_t c = src[srcY * srcW + srcX];
+            aSum += (c >> 24) & 0xFF;
+            rSum += (c >> 16) & 0xFF;
+            gSum += (c >>  8) & 0xFF;
+            bSum +=  c        & 0xFF;
+            count++;
+        }
+    }
+    if (count > 1) {
+        aSum /= count; rSum /= count; gSum /= count; bSum /= count;
+    }
+    dst[dy * dstW + dx] = (aSum << 24) | (rSum << 16) | (gSum << 8) | bSum;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Per-pixel Fragment Program Interpreter
 // ═══════════════════════════════════════════════════════════════
@@ -2384,6 +2418,57 @@ void CudaRasterizer::readbackStencil(uint8_t* out) const {
     if (!fb_.d_stencil || !out) return;
     size_t bytes = size_t(fb_.width) * size_t(fb_.height) * sizeof(uint8_t);
     cudaMemcpy(out, fb_.d_stencil, bytes, cudaMemcpyDeviceToHost);
+}
+
+// ─── MSAA ─────────────────────────────────────────────────────
+void CudaRasterizer::setAntialias(uint32_t mode) {
+    aaMode_ = mode;
+}
+
+void CudaRasterizer::resolveAA(uint32_t* out, uint32_t displayW, uint32_t displayH) const {
+    if (!fb_.d_color || !out) return;
+
+    // Determine scale factors from AA mode
+    uint32_t scaleX = 1, scaleY = 1;
+    if (aaMode_ >= 12) { scaleX = 2; scaleY = 2; }       // 4× MSAA → 2×2
+    else if (aaMode_ >= 4) { scaleX = 2; scaleY = 1; }   // 2× MSAA → 2×1
+
+    // If no AA or buffer matches display, just readback
+    if (scaleX == 1 && scaleY == 1) {
+        uint32_t copyW = (fb_.width < displayW) ? fb_.width : displayW;
+        uint32_t copyH = (fb_.height < displayH) ? fb_.height : displayH;
+        size_t rowBytes = copyW * sizeof(uint32_t);
+        // Copy row by row if widths differ
+        if (copyW == fb_.width && copyW == displayW) {
+            cudaMemcpy(out, fb_.d_color, size_t(copyW) * copyH * sizeof(uint32_t),
+                       cudaMemcpyDeviceToHost);
+        } else {
+            for (uint32_t y = 0; y < copyH; ++y) {
+                cudaMemcpy(out + y * displayW, fb_.d_color + y * fb_.width,
+                           rowBytes, cudaMemcpyDeviceToHost);
+            }
+        }
+        return;
+    }
+
+    // Allocate temp device buffer for resolved output
+    uint32_t* d_resolved = nullptr;
+    size_t resolvedBytes = size_t(displayW) * displayH * sizeof(uint32_t);
+    cudaMalloc(&d_resolved, resolvedBytes);
+    cudaMemset(d_resolved, 0, resolvedBytes);
+
+    // Launch box-filter resolve kernel
+    dim3 bs(16, 16);
+    dim3 gs((displayW + bs.x - 1) / bs.x, (displayH + bs.y - 1) / bs.y);
+    k_resolveAA<<<gs, bs>>>(fb_.d_color, d_resolved,
+                            fb_.width, fb_.height,
+                            displayW, displayH,
+                            scaleX, scaleY);
+    cudaDeviceSynchronize();
+
+    // Copy resolved result to host
+    cudaMemcpy(out, d_resolved, resolvedBytes, cudaMemcpyDeviceToHost);
+    cudaFree(d_resolved);
 }
 
 // Helper: apply current MVP + viewport to a single vertex. Returns a

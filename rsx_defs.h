@@ -316,6 +316,7 @@ struct RSXState {
 
     // Surface (render target)
     uint32_t surfaceFormat;
+    uint32_t surfaceAntialias;   // AA mode from SURFACE_FORMAT bits 12-15 (0=none, 4=2x, 12=4x)
     uint32_t surfaceWidth;
     uint32_t surfaceHeight;
     uint32_t surfacePitchA;

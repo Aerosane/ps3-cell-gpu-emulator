@@ -416,6 +416,7 @@ void RasterBridge::onSurfaceSetup(const RSXState& s) {
         rast_->height() != s.surfaceHeight) {
         rast_->init(s.surfaceWidth, s.surfaceHeight);
     }
+    rast_->setAntialias(s.surfaceAntialias);
     counters.surfaceSetups++;
 }
 
