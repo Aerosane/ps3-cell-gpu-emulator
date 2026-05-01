@@ -263,6 +263,10 @@ static constexpr uint32_t NV0039_BUFFER_NOTIFY                 = 0x00000104;
 static constexpr uint32_t NV4097_SET_ZPASS_PIXEL_COUNT_ENABLE  = 0x00001D78;
 static constexpr uint32_t NV4097_GET_REPORT                    = 0x00001800;
 static constexpr uint32_t NV4097_CLEAR_REPORT_VALUE            = 0x00001D9C;
+static constexpr uint32_t NV4097_SET_RENDER_ENABLE             = 0x00001D7C;
+static constexpr uint32_t NV4097_INVALIDATE_L2                 = 0x00001FD0;
+static constexpr uint32_t NV4097_INVALIDATE_VERTEX_FILE        = 0x00001710;
+static constexpr uint32_t NV4097_INVALIDATE_VERTEX_CACHE_FILE  = 0x00001714;
 
 // ═══════════════════════════════════════════════════════════════════
 // Enumerations
@@ -536,6 +540,13 @@ struct RSXState {
     // Occlusion query (ZCULL) state.
     bool     zcullEnable;       // zpass pixel count enabled
     uint32_t zcullPixelCount;   // accumulated pixel count since last clear
+
+    // Conditional rendering (skip draw if occlusion query reports 0 pixels).
+    bool     conditionalRenderEnable;  // NV4097_SET_RENDER_ENABLE mode=2 (conditional)
+    uint32_t conditionalRenderOffset;  // VRAM offset of occlusion report to check
+
+    // Depth buffer base offset in VRAM
+    uint32_t zetaOffset;
 };
 
 // ═══════════════════════════════════════════════════════════════════

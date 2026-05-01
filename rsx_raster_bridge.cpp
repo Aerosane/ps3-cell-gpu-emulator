@@ -670,6 +670,19 @@ void RasterBridge::applyPipelineState(const RSXState& s) {
 void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t count) {
     if (!rast_ || count == 0) return;
 
+    // Conditional rendering: skip draw if occlusion report at the
+    // referenced VRAM offset has 0 visible pixels.
+    if (s.conditionalRenderEnable && vram_ && vramSize_ > 0) {
+        uint32_t off = s.conditionalRenderOffset;
+        if (off + 16 <= vramSize_) {
+            uint32_t val = ((uint32_t)vram_[off+8] << 24) |
+                           ((uint32_t)vram_[off+9] << 16) |
+                           ((uint32_t)vram_[off+10] << 8) |
+                           (uint32_t)vram_[off+11];
+            if (val == 0) return;  // 0 pixels visible → skip draw
+        }
+    }
+
     // Translate FIFO-side pipeline state into rasterizer setters before
     // every draw. Games frequently toggle depth/blend/cull mid-frame.
     applyPipelineState(s);
@@ -1399,6 +1412,19 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
 void RasterBridge::onDrawIndexed(const RSXState& s, uint32_t first, uint32_t count,
                                  uint32_t /*indexFormat*/) {
     if (!rast_ || count == 0) return;
+
+    // Conditional rendering check (same as onDrawArrays)
+    if (s.conditionalRenderEnable && vram_ && vramSize_ > 0) {
+        uint32_t off = s.conditionalRenderOffset;
+        if (off + 16 <= vramSize_) {
+            uint32_t val = ((uint32_t)vram_[off+8] << 24) |
+                           ((uint32_t)vram_[off+9] << 16) |
+                           ((uint32_t)vram_[off+10] << 8) |
+                           (uint32_t)vram_[off+11];
+            if (val == 0) return;
+        }
+    }
+
     applyPipelineState(s);
 
     // Path A — host-staged vertex + index pools (legacy test path).

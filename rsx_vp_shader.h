@@ -761,6 +761,11 @@ inline void vp_execute(const uint32_t* vpData, uint32_t vpLen, uint32_t vpStart,
                     r[k] = src0[k] > 0.0f ? 1.0f : (src0[k] < 0.0f ? -1.0f : 0.0f);
                 }
                 break;
+            case VP_VEC_TXL:
+                // Vertex texture fetch stub — returns white (1,1,1,1)
+                // Real implementation would sample vtx texture at src0.xy with LOD=src0.w
+                for (int k = 0; k < 4; ++k) r[k] = 1.0f;
+                break;
             case VP_VEC_ARL:
                 for (int k = 0; k < 4; ++k) {
                     addrReg[k] = (int32_t)__builtin_floorf(src0[k]);

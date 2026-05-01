@@ -658,6 +658,15 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     case NV4097_CLEAR_REPORT_VALUE:
         state->zcullPixelCount = 0;
         return;
+    case NV4097_SET_RENDER_ENABLE: {
+        // Bits [23:0] = VRAM offset of report, bits [25:24] = mode
+        // mode: 0=unconditional, 1=conditional wait, 2=conditional render
+        uint32_t mode = (data >> 24) & 3;
+        uint32_t offset = data & 0x00FFFFFF;
+        state->conditionalRenderEnable = (mode == 2);
+        state->conditionalRenderOffset = offset;
+        return;
+    }
     case NV4097_GET_REPORT: {
         // Write the report to VRAM at data offset.
         // Report structure: { u64 timestamp; u32 value; u32 padding }
@@ -676,6 +685,17 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         }
         return;
     }
+
+    // Texture/vertex cache invalidation (no-ops for us, caches are coherent)
+    case NV4097_INVALIDATE_L2:
+    case NV4097_INVALIDATE_VERTEX_FILE:
+    case NV4097_INVALIDATE_VERTEX_CACHE_FILE:
+        return;
+
+    // Surface zeta (depth buffer) offset — store for depth buffer management
+    case NV4097_SET_SURFACE_ZETA_OFFSET:
+        state->zetaOffset = data;
+        return;
 
     default:
         break;
