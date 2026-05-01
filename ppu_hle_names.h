@@ -182,6 +182,18 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0x7a3ceb91, "sceNpTrophy", "sceNpTrophyUnlockTrophy" },
     { 0xc868dea5, "sceNpTrophy", "sceNpTrophyGetGameProgress" },
     { 0x3fbae39e, "sceNpTrophy", "sceNpTrophyGetGameInfo" },
+
+    // ── cellVdec — video decode ─────────────────────────────────
+    { 0xA83F253B, "cellVdec", "cellVdecOpen" },
+    { 0xB6D5CACD, "cellVdec", "cellVdecClose" },
+    { 0x59F481EF, "cellVdec", "cellVdecStartSeq" },
+    { 0x9625F90A, "cellVdec", "cellVdecEndSeq" },
+    { 0xC1901AB8, "cellVdec", "cellVdecDecodeAu" },
+    { 0xAC73ADA8, "cellVdec", "cellVdecGetPicture" },
+    { 0x52B9A8B0, "cellVdec", "cellVdecGetPictureExt" },
+    { 0x5877B8AB, "cellVdec", "cellVdecSetFrameRate" },
+    { 0xA1FFA426, "cellVdec", "cellVdecQueryAttr" },
+    { 0x9AFD0B7D, "cellVdec", "cellVdecOpenEx" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {

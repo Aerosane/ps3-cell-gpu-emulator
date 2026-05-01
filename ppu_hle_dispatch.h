@@ -895,6 +895,38 @@ struct PpuHleDispatcher {
             }
             retval = 0;
 
+        // ── cellVdec — video decode stubs ───────────────────────
+        } else if (e.name == "cellVdecOpen" || e.name == "cellVdecOpenEx") {
+            // r3 = CellVdecType*, r4 = CellVdecResource*, r5 = cb, r6 = handle* (out)
+            uint32_t outPtr = (uint32_t)st.gpr[6];
+            if (outPtr && outPtr + 4 <= memSize) {
+                uint32_t h = 1;  // dummy decoder handle
+                uint8_t be[4] = { (uint8_t)(h>>24), (uint8_t)(h>>16),
+                                  (uint8_t)(h>>8),  (uint8_t)h };
+                std::memcpy(mem + outPtr, be, 4);
+                megakernel_write_mem(outPtr, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellVdecClose" ||
+                   e.name == "cellVdecStartSeq" ||
+                   e.name == "cellVdecEndSeq" ||
+                   e.name == "cellVdecDecodeAu" ||
+                   e.name == "cellVdecSetFrameRate") {
+            retval = 0;
+        } else if (e.name == "cellVdecQueryAttr") {
+            // r3 = CellVdecType*, r4 = CellVdecAttr* (out)
+            uint32_t outPtr = (uint32_t)st.gpr[4];
+            if (outPtr && outPtr + 32 <= memSize) {
+                std::memset(mem + outPtr, 0, 32);
+                megakernel_write_mem(outPtr, mem + outPtr, 32);
+            }
+            retval = 0;
+        } else if (e.name == "cellVdecGetPicture" ||
+                   e.name == "cellVdecGetPictureExt") {
+            // Return CELL_VDEC_ERROR_EMPTY (-1) to indicate no picture ready.
+            // Games check return value and skip frame display.
+            retval = (uint32_t)(-1);
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

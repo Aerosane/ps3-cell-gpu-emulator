@@ -581,7 +581,9 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         uint32_t first = data & 0xFFFFFF;
         uint32_t count = ((data >> 24) & 0xFF) + 1;
         state->drawCallCount++;
-        state->triangleCount += estimateTriangles(state->currentPrim, count);
+        uint32_t triEst = estimateTriangles(state->currentPrim, count);
+        state->triangleCount += triEst;
+        if (state->zcullEnable) state->zcullPixelCount += triEst * 100;
         RSX_EMIT(onDrawArrays, state, first, count);
         return;
     }
@@ -589,7 +591,9 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         uint32_t first = data & 0xFFFFFF;
         uint32_t count = ((data >> 24) & 0xFF) + 1;
         state->drawCallCount++;
-        state->triangleCount += estimateTriangles(state->currentPrim, count);
+        uint32_t triEst = estimateTriangles(state->currentPrim, count);
+        state->triangleCount += triEst;
+        if (state->zcullEnable) state->zcullPixelCount += triEst * 100;
         RSX_EMIT(onDrawIndexed, state, first, count, 0u);
         return;
     }
@@ -646,6 +650,32 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     case NV4097_SET_CONTEXT_DMA_NOTIFIES:
     case NV4097_SET_CONTEXT_DMA_COLOR_A:
         return;
+
+    // ── Occlusion query / ZCULL ───────────────────────────────
+    case NV4097_SET_ZPASS_PIXEL_COUNT_ENABLE:
+        state->zcullEnable = (data != 0);
+        return;
+    case NV4097_CLEAR_REPORT_VALUE:
+        state->zcullPixelCount = 0;
+        return;
+    case NV4097_GET_REPORT: {
+        // Write the report to VRAM at data offset.
+        // Report structure: { u64 timestamp; u32 value; u32 padding }
+        // We report the accumulated pixel count (always > 0 to avoid
+        // games skipping draw calls via conditional render).
+        uint32_t rptOff = data;
+        if (vram && rptOff + 16 <= state->vramSize) {
+            uint32_t count = state->zcullPixelCount;
+            if (count == 0) count = 1;  // never report 0 (would skip draws)
+            memset(vram + rptOff, 0, 16);
+            // Value at offset 8 (big-endian u32)
+            vram[rptOff +  8] = (uint8_t)(count >> 24);
+            vram[rptOff +  9] = (uint8_t)(count >> 16);
+            vram[rptOff + 10] = (uint8_t)(count >> 8);
+            vram[rptOff + 11] = (uint8_t)(count);
+        }
+        return;
+    }
 
     default:
         break;
@@ -773,6 +803,51 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
             float fval;
             memcpy(&fval, &data, sizeof(float));
             state->vpConstants[vec][comp] = fval;
+        }
+        return;
+    }
+
+    // ── NV0039 DMA buffer copy ────────────────────────────────────
+    // Games use this for CPU↔VRAM blits (loading screens, XMB, SW render).
+    // We accumulate parameters, then execute on BUFFER_NOTIFY.
+    if (method == NV0039_OFFSET_IN) {
+        state->dmaTransfer.offsetIn = data;
+        return;
+    }
+    if (method == NV0039_OFFSET_OUT) {
+        state->dmaTransfer.offsetOut = data;
+        return;
+    }
+    if (method == NV0039_PITCH_IN) {
+        state->dmaTransfer.pitchIn = data;
+        return;
+    }
+    if (method == NV0039_PITCH_OUT) {
+        state->dmaTransfer.pitchOut = data;
+        return;
+    }
+    if (method == NV0039_LINE_LENGTH_IN) {
+        state->dmaTransfer.lineLength = data;
+        return;
+    }
+    if (method == NV0039_LINE_COUNT) {
+        state->dmaTransfer.lineCount = data;
+        return;
+    }
+    if (method == NV0039_BUFFER_NOTIFY) {
+        // Execute the DMA transfer: copy lineCount rows of lineLength bytes
+        // from offsetIn to offsetOut within VRAM.
+        auto& d = state->dmaTransfer;
+        if (vram && d.lineLength > 0 && d.lineCount > 0) {
+            uint32_t vramSz = state->vramSize;
+            for (uint32_t row = 0; row < d.lineCount; ++row) {
+                uint32_t srcOff = d.offsetIn  + row * d.pitchIn;
+                uint32_t dstOff = d.offsetOut + row * d.pitchOut;
+                if (srcOff + d.lineLength <= vramSz &&
+                    dstOff + d.lineLength <= vramSz) {
+                    std::memmove(vram + dstOff, vram + srcOff, d.lineLength);
+                }
+            }
         }
         return;
     }

@@ -242,6 +242,28 @@ static constexpr uint32_t NV4097_TEXTURE_READ_SEMAPHORE_RELEASE   = 0x00001D74;
 static constexpr uint32_t NV4097_SET_NOTIFY                       = 0x00000104;
 static constexpr uint32_t NV4097_NOTIFY                           = 0x00000108;
 
+// ── NV3062/NV3089/NV0039 — 2D engine (DMA blit/transfer) ─────────
+// These operate on subchannel 3 (2D context) but games often submit
+// them inline in the 3D FIFO. Method offsets are relative to the
+// object class (NV3089 = scaled image from memory).
+static constexpr uint32_t NV3089_SET_CONTEXT_SURFACE           = 0x00000184;
+static constexpr uint32_t NV3089_IMAGE_IN_SIZE                 = 0x00000300;
+static constexpr uint32_t NV3089_IMAGE_IN_FORMAT               = 0x00000304;
+static constexpr uint32_t NV3089_IMAGE_IN_OFFSET               = 0x00000308;
+static constexpr uint32_t NV3089_IMAGE_IN                      = 0x0000030C;
+static constexpr uint32_t NV0039_OFFSET_IN                     = 0x0000030C;
+static constexpr uint32_t NV0039_OFFSET_OUT                    = 0x00000310;
+static constexpr uint32_t NV0039_PITCH_IN                      = 0x00000314;
+static constexpr uint32_t NV0039_PITCH_OUT                     = 0x00000318;
+static constexpr uint32_t NV0039_LINE_LENGTH_IN                = 0x0000031C;
+static constexpr uint32_t NV0039_LINE_COUNT                    = 0x00000320;
+static constexpr uint32_t NV0039_BUFFER_NOTIFY                 = 0x00000104;
+
+// ── Occlusion query / ZCULL ──────────────────────────────────────
+static constexpr uint32_t NV4097_SET_ZPASS_PIXEL_COUNT_ENABLE  = 0x00001D78;
+static constexpr uint32_t NV4097_GET_REPORT                    = 0x00001800;
+static constexpr uint32_t NV4097_CLEAR_REPORT_VALUE            = 0x00001D9C;
+
 // ═══════════════════════════════════════════════════════════════════
 // Enumerations
 // ═══════════════════════════════════════════════════════════════════
@@ -500,6 +522,20 @@ struct RSXState {
     // Semaphore / label system (SPU↔RSX synchronization).
     // SPUs poll a VRAM location; RSX writes a value there when done.
     uint32_t semaphoreOffset;   // VRAM byte offset for next semaphore write
+
+    // NV0039 DMA buffer copy state (accumulated from method writes).
+    struct DmaTransfer {
+        uint32_t offsetIn;
+        uint32_t offsetOut;
+        uint32_t pitchIn;
+        uint32_t pitchOut;
+        uint32_t lineLength;
+        uint32_t lineCount;
+    } dmaTransfer;
+
+    // Occlusion query (ZCULL) state.
+    bool     zcullEnable;       // zpass pixel count enabled
+    uint32_t zcullPixelCount;   // accumulated pixel count since last clear
 };
 
 // ═══════════════════════════════════════════════════════════════════
