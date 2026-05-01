@@ -1191,6 +1191,64 @@ struct PpuHleDispatcher {
             // Fill output buffer with white pixels (ARGB 0xFFFFFFFF)
             retval = 0;
 
+        // ── cellL10n — string conversion ───────────────────────────────
+        } else if (e.name == "UTF8stoUCS2s" || e.name == "UCS2stoUTF8s" ||
+                   e.name == "UTF8toUCS2" || e.name == "UCS2toUTF8" ||
+                   e.name == "UTF16stoUTF8s" || e.name == "UTF8stoUTF16s" ||
+                   e.name == "L10nConvertStr") {
+            // String conversion stubs — return 0 (success).
+            // Real impl would convert between encodings. Games usually
+            // just pass ASCII through these which works even without conversion.
+            retval = 0;
+
+        // ── cellSync — synchronization ─────────────────────────────────
+        } else if (e.name == "cellSyncMutexInitialize" ||
+                   e.name == "cellSyncBarrierInitialize" ||
+                   e.name == "cellSyncLFQueueInitialize") {
+            // r3 = *object — zero-init the sync primitive
+            uint32_t outp = (uint32_t)st.gpr[3];
+            if (outp && outp + 32 <= memSize) {
+                std::memset(mem + outp, 0, 32);
+                megakernel_write_mem(outp, mem + outp, 32);
+            }
+            retval = 0;
+        } else if (e.name == "cellSyncMutexLock" || e.name == "cellSyncMutexTryLock" ||
+                   e.name == "cellSyncMutexUnlock" ||
+                   e.name == "cellSyncBarrierNotify" ||
+                   e.name == "cellSyncBarrierTryNotify" ||
+                   e.name == "cellSyncBarrierTryWait") {
+            retval = 0;  // Always succeed (single-threaded emulation)
+        } else if (e.name == "cellSyncLFQueuePush" || e.name == "cellSyncLFQueueTryPush" ||
+                   e.name == "cellSyncLFQueuePop" || e.name == "cellSyncLFQueueTryPop") {
+            retval = 0;
+        } else if (e.name == "cellSyncLFQueueGetSize") {
+            retval = 0;  // Queue is empty
+
+        // ── cellGifDec ─────────────────────────────────────────────────
+        } else if (e.name == "cellGifDecCreate") {
+            uint32_t outPtr = (uint32_t)st.gpr[3];
+            if (outPtr && outPtr + 4 <= memSize) {
+                uint32_t h = 5;
+                uint8_t be[4] = { (uint8_t)(h>>24), (uint8_t)(h>>16),
+                                  (uint8_t)(h>>8),  (uint8_t)h };
+                std::memcpy(mem + outPtr, be, 4);
+                megakernel_write_mem(outPtr, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellGifDecDestroy" || e.name == "cellGifDecOpen" ||
+                   e.name == "cellGifDecClose") {
+            retval = 0;
+        } else if (e.name == "cellGifDecReadHeader") {
+            uint32_t outPtr = (uint32_t)st.gpr[4];
+            if (outPtr && outPtr + 16 <= memSize) {
+                std::memset(mem + outPtr, 0, 16);
+                mem[outPtr+3] = 64; mem[outPtr+7] = 64;  // 64×64
+                megakernel_write_mem(outPtr, mem + outPtr, 16);
+            }
+            retval = 0;
+        } else if (e.name == "cellGifDecDecodeData") {
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

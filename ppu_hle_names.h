@@ -318,6 +318,39 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0x5877B8AB, "cellVdec", "cellVdecSetFrameRate" },
     { 0xA1FFA426, "cellVdec", "cellVdecQueryAttr" },
     { 0x9AFD0B7D, "cellVdec", "cellVdecOpenEx" },
+
+    // cellL10n — localization / string conversion
+    { 0x49a66a63, "cellL10n", "UTF8stoUCS2s" },
+    { 0xc5925b36, "cellL10n", "UCS2stoUTF8s" },
+    { 0x9e989095, "cellL10n", "UTF8toUCS2" },
+    { 0x487b4dc1, "cellL10n", "UCS2toUTF8" },
+    { 0xa5be179f, "cellL10n", "UTF16stoUTF8s" },
+    { 0x13e7cfc1, "cellL10n", "UTF8stoUTF16s" },
+    { 0x3b95766d, "cellL10n", "L10nConvertStr" },
+
+    // cellSync — synchronization primitives
+    { 0x2733a870, "cellSync", "cellSyncMutexInitialize" },
+    { 0x91e6dcb9, "cellSync", "cellSyncMutexLock" },
+    { 0xc463ee6c, "cellSync", "cellSyncMutexTryLock" },
+    { 0xb9fbcc28, "cellSync", "cellSyncMutexUnlock" },
+    { 0x24f80472, "cellSync", "cellSyncBarrierInitialize" },
+    { 0xcb40434b, "cellSync", "cellSyncBarrierNotify" },
+    { 0xbb54b37f, "cellSync", "cellSyncBarrierTryNotify" },
+    { 0x3c81b4da, "cellSync", "cellSyncBarrierTryWait" },
+    { 0xf8ef9193, "cellSync", "cellSyncLFQueueInitialize" },
+    { 0x8c497d76, "cellSync", "cellSyncLFQueuePush" },
+    { 0x0db15740, "cellSync", "cellSyncLFQueueTryPush" },
+    { 0xe5c224e2, "cellSync", "cellSyncLFQueuePop" },
+    { 0x65f2b02f, "cellSync", "cellSyncLFQueueTryPop" },
+    { 0x8558da70, "cellSync", "cellSyncLFQueueGetSize" },
+
+    // cellGifDec — GIF image decoder
+    { 0x66315b6d, "cellGifDec", "cellGifDecCreate" },
+    { 0xfe153bbf, "cellGifDec", "cellGifDecDestroy" },
+    { 0xec45d754, "cellGifDec", "cellGifDecOpen" },
+    { 0x11ae5215, "cellGifDec", "cellGifDecClose" },
+    { 0xc52c449b, "cellGifDec", "cellGifDecReadHeader" },
+    { 0x0c0c12bd, "cellGifDec", "cellGifDecDecodeData" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {
