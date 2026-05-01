@@ -1018,6 +1018,85 @@ struct PpuHleDispatcher {
             }
             retval = 0;
 
+        // ── cellResc — resolution scaling ──────────────────────────────
+        } else if (e.name == "cellRescInit" || e.name == "cellRescExit" ||
+                   e.name == "cellRescSetDisplayMode" ||
+                   e.name == "cellRescSetConvertAndFlip" ||
+                   e.name == "cellRescSetBufferAddress" ||
+                   e.name == "cellRescSetSrc" || e.name == "cellRescSetDsts") {
+            retval = 0;
+        } else if (e.name == "cellRescGetNumColorBuffers") {
+            retval = 2;  // 2 color buffers (double-buffering)
+        } else if (e.name == "cellRescGetBufferSize") {
+            // r3 = *size (out) — return 1280*720*4 bytes per buffer
+            uint32_t outp = (uint32_t)st.gpr[3];
+            if (outp && outp + 4 <= memSize) {
+                uint32_t sz = 1280 * 720 * 4;
+                uint8_t be[4] = { (uint8_t)(sz>>24), (uint8_t)(sz>>16),
+                                  (uint8_t)(sz>>8),  (uint8_t)sz };
+                std::memcpy(mem + outp, be, 4);
+                megakernel_write_mem(outp, be, 4);
+            }
+            retval = 0;
+
+        // ── cellSysutil BGM ────────────────────────────────────────────
+        } else if (e.name == "cellSysutilEnableBgmPlayback" ||
+                   e.name == "cellSysutilDisableBgmPlayback") {
+            retval = 0;
+        } else if (e.name == "cellSysutilGetBgmPlaybackStatus") {
+            // r3 = *status (out) — set to 0 (not playing)
+            uint32_t outp = (uint32_t)st.gpr[3];
+            if (outp && outp + 4 <= memSize) {
+                std::memset(mem + outp, 0, 4);
+                megakernel_write_mem(outp, mem + outp, 4);
+            }
+            retval = 0;
+
+        // ── cellKb / cellMouse / cellCamera ────────────────────────────
+        } else if (e.name == "cellKbInit" || e.name == "cellKbEnd" ||
+                   e.name == "cellMouseInit" || e.name == "cellMouseEnd" ||
+                   e.name == "cellCameraInit" || e.name == "cellCameraEnd") {
+            retval = 0;
+        } else if (e.name == "cellKbGetInfo" || e.name == "cellMouseGetInfo") {
+            // r3 = *info (out) — zero it (no devices connected)
+            uint32_t outp = (uint32_t)st.gpr[3];
+            if (outp && outp + 32 <= memSize) {
+                std::memset(mem + outp, 0, 32);
+                megakernel_write_mem(outp, mem + outp, 32);
+            }
+            retval = 0;
+        } else if (e.name == "cellKbRead") {
+            // r3 = port, r4 = *data (out) — zero it (no key events)
+            uint32_t outp = (uint32_t)st.gpr[4];
+            if (outp && outp + 16 <= memSize) {
+                std::memset(mem + outp, 0, 16);
+                megakernel_write_mem(outp, mem + outp, 16);
+            }
+            retval = 0;
+
+        // ── cellUserInfo ───────────────────────────────────────────────
+        } else if (e.name == "cellUserInfoGetStat") {
+            // r3 = userId, r4 = *CellUserInfoStat (out) — zero it
+            uint32_t outp = (uint32_t)st.gpr[4];
+            if (outp && outp + 64 <= memSize) {
+                std::memset(mem + outp, 0, 64);
+                megakernel_write_mem(outp, mem + outp, 64);
+            }
+            retval = 0;
+        } else if (e.name == "cellUserInfoGetList") {
+            // r3 = *listNum (out), r4 = *listBuf (out) — zero (no users)
+            uint32_t numPtr = (uint32_t)st.gpr[3];
+            if (numPtr && numPtr + 4 <= memSize) {
+                std::memset(mem + numPtr, 0, 4);
+                megakernel_write_mem(numPtr, mem + numPtr, 4);
+            }
+            retval = 0;
+
+        // ── cellSsl / cellHttp ─────────────────────────────────────────
+        } else if (e.name == "cellSslInit" || e.name == "cellSslEnd" ||
+                   e.name == "cellHttpInit" || e.name == "cellHttpEnd") {
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

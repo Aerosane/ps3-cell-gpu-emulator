@@ -224,6 +224,47 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0xcae76f24, "cellOskDialog", "cellOskDialogGetInputText" },
     { 0x15cb6934, "cellOskDialog", "cellOskDialogSetInitialInputDevice" },
 
+    // cellResc — resolution scaling
+    { 0x3711bd4f, "cellResc", "cellRescInit" },
+    { 0xcb4ba814, "cellResc", "cellRescExit" },
+    { 0x089a5067, "cellResc", "cellRescSetDisplayMode" },
+    { 0xffd96327, "cellResc", "cellRescSetConvertAndFlip" },
+    { 0x770f5ac4, "cellResc", "cellRescSetBufferAddress" },
+    { 0x35239700, "cellResc", "cellRescGetNumColorBuffers" },
+    { 0xe99bbc60, "cellResc", "cellRescGetBufferSize" },
+    { 0x147dde14, "cellResc", "cellRescSetSrc" },
+    { 0xbe0760f8, "cellResc", "cellRescSetDsts" },
+
+    // cellSysutil extras — BGM
+    { 0xfc6fe574, "cellSysutil", "cellSysutilGetBgmPlaybackStatus" },
+    { 0x799b5fae, "cellSysutil", "cellSysutilEnableBgmPlayback" },
+    { 0xda004916, "cellSysutil", "cellSysutilDisableBgmPlayback" },
+
+    // cellKb — keyboard input
+    { 0x85656de9, "cellKb", "cellKbInit" },
+    { 0x8fe7f827, "cellKb", "cellKbEnd" },
+    { 0xead11ae9, "cellKb", "cellKbGetInfo" },
+    { 0xda870fc8, "cellKb", "cellKbRead" },
+
+    // cellMouse
+    { 0x890c9fb8, "cellMouse", "cellMouseInit" },
+    { 0x67c67673, "cellMouse", "cellMouseEnd" },
+    { 0xb4086711, "cellMouse", "cellMouseGetInfo" },
+
+    // cellCamera
+    { 0x30eaee99, "cellCamera", "cellCameraInit" },
+    { 0xf1e65d8d, "cellCamera", "cellCameraEnd" },
+
+    // cellUserInfo
+    { 0xdcf8eb53, "cellUserInfo", "cellUserInfoGetStat" },
+    { 0x4a5b749a, "cellUserInfo", "cellUserInfoGetList" },
+
+    // cellSsl / cellHttp — network stubs
+    { 0x8c1678ef, "cellSsl", "cellSslInit" },
+    { 0x2a574a25, "cellSsl", "cellSslEnd" },
+    { 0xf7644439, "cellHttp", "cellHttpInit" },
+    { 0x33457271, "cellHttp", "cellHttpEnd" },
+
     // ── cellVdec — video decode ─────────────────────────────────
     { 0xA83F253B, "cellVdec", "cellVdecOpen" },
     { 0xB6D5CACD, "cellVdec", "cellVdecClose" },
