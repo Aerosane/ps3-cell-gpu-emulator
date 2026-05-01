@@ -927,6 +927,97 @@ struct PpuHleDispatcher {
             // Games check return value and skip frame display.
             retval = (uint32_t)(-1);
 
+        // ── cellFs extras ──────────────────────────────────────────────
+        } else if (e.name == "cellFsOpendir" || e.name == "cellFsClosedir" ||
+                   e.name == "cellFsReaddir") {
+            // Directory stubs — return ENOENT for opendir, 0 for others
+            if (e.name == "cellFsOpendir") {
+                retval = 0x80010006;  // CELL_FS_ENOENT
+            } else {
+                retval = 0;
+            }
+        } else if (e.name == "cellFsStat") {
+            // Return ENOENT — file not found
+            retval = 0x80010006;
+        } else if (e.name == "cellFsMkdir" || e.name == "cellFsRmdir" ||
+                   e.name == "cellFsUnlink" || e.name == "cellFsRename" ||
+                   e.name == "cellFsTruncate") {
+            retval = 0;  // succeed silently
+        } else if (e.name == "cellFsGetFreeSize") {
+            // r3 = path*, r4 = block_size*, r5 = free_blocks*
+            uint32_t bsPtr = (uint32_t)st.gpr[4];
+            uint32_t fbPtr = (uint32_t)st.gpr[5];
+            if (bsPtr && bsPtr + 4 <= memSize) {
+                uint32_t bs = 512;
+                uint8_t be[4] = { (uint8_t)(bs>>24), (uint8_t)(bs>>16),
+                                  (uint8_t)(bs>>8),  (uint8_t)bs };
+                std::memcpy(mem + bsPtr, be, 4);
+                megakernel_write_mem(bsPtr, be, 4);
+            }
+            if (fbPtr && fbPtr + 4 <= memSize) {
+                uint32_t fb = 1024*1024;  // ~512MB free
+                uint8_t be[4] = { (uint8_t)(fb>>24), (uint8_t)(fb>>16),
+                                  (uint8_t)(fb>>8),  (uint8_t)fb };
+                std::memcpy(mem + fbPtr, be, 4);
+                megakernel_write_mem(fbPtr, be, 4);
+            }
+            retval = 0;
+
+        // ── cellSysmodule ──────────────────────────────────────────────
+        } else if (e.name == "cellSysmoduleLoadModule" ||
+                   e.name == "cellSysmoduleUnloadModule") {
+            retval = 0;  // Always succeed
+        } else if (e.name == "cellSysmoduleIsLoaded") {
+            retval = 0;  // CELL_SYSMODULE_LOADED
+        } else if (e.name == "cellSysmoduleInitialize" ||
+                   e.name == "cellSysmoduleFinalize") {
+            retval = 0;
+
+        // ── cellNetCtl ─────────────────────────────────────────────────
+        } else if (e.name == "cellNetCtlInit" || e.name == "cellNetCtlTerm") {
+            retval = 0;
+        } else if (e.name == "cellNetCtlGetState") {
+            // r3 = state* (out) — set to DISCONNECTED (0)
+            uint32_t statePtr = (uint32_t)st.gpr[3];
+            if (statePtr && statePtr + 4 <= memSize) {
+                uint32_t state = 0;  // CELL_NET_CTL_STATE_Disconnected
+                uint8_t be[4] = { 0, 0, 0, 0 };
+                std::memcpy(mem + statePtr, be, 4);
+                megakernel_write_mem(statePtr, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellNetCtlGetInfo") {
+            // Return error — not connected
+            retval = 0x80130106;  // CELL_NET_CTL_ERROR_NOT_CONNECTED
+        } else if (e.name == "cellNetCtlAddHandler" ||
+                   e.name == "cellNetCtlDelHandler") {
+            retval = 0;
+
+        // ── cellMsgDialog ──────────────────────────────────────────────
+        } else if (e.name == "cellMsgDialogOpen" ||
+                   e.name == "cellMsgDialogOpen2") {
+            // Immediately "close" dialog — game callback gets DIALOG_CLOSE
+            retval = 0;
+        } else if (e.name == "cellMsgDialogClose" ||
+                   e.name == "cellMsgDialogAbort" ||
+                   e.name == "cellMsgDialogProgressBarInc" ||
+                   e.name == "cellMsgDialogProgressBarSetMsg") {
+            retval = 0;
+
+        // ── cellOskDialog ──────────────────────────────────────────────
+        } else if (e.name == "cellOskDialogLoadAsync" ||
+                   e.name == "cellOskDialogUnloadAsync" ||
+                   e.name == "cellOskDialogSetInitialInputDevice") {
+            retval = 0;
+        } else if (e.name == "cellOskDialogGetInputText") {
+            // r3 = buffer*, r4 = size — write empty string
+            uint32_t bufPtr = (uint32_t)st.gpr[3];
+            if (bufPtr && bufPtr + 2 <= memSize) {
+                mem[bufPtr] = 0; mem[bufPtr+1] = 0;
+                megakernel_write_mem(bufPtr, mem + bufPtr, 2);
+            }
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

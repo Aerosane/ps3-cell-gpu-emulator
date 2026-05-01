@@ -388,26 +388,30 @@ static inline bool decode_attr(const uint8_t* vram, uint32_t vramSize,
 static void decode_vertex_stream(const RSXState& s,
                                  const uint8_t* vram, uint32_t vramSize,
                                  uint32_t first, uint32_t count,
-                                 std::vector<RasterVertex>& out) {
+                                 std::vector<RasterVertex>& out,
+                                 uint32_t instanceId = 0) {
     out.resize(count);
+    uint32_t freqDiv = s.freqDividerOp;  // bit N set = slot N uses instance index
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t idx = first + i;
         float pos[4]   = { 0, 0, 0, 1 };
         float color[4] = { 1, 1, 1, 1 };
         float uv[4]    = { 0, 0, 0, 0 };
 
-        // VA0 is always position
-        decode_attr(vram, vramSize, s.vertexArrays[0], idx, 4, pos);
+        // VA0 is always position — instanced if bit 0 set
+        uint32_t posIdx = (freqDiv & 1) ? instanceId : idx;
+        decode_attr(vram, vramSize, s.vertexArrays[0], posIdx, 4, pos);
 
         // Scan remaining VAs for color (type=UB) and UV (type=F, size=2)
         for (int va = 1; va < 16; ++va) {
             if (!s.vertexArrays[va].enabled) continue;
+            uint32_t attrIdx = (freqDiv & (1u << va)) ? instanceId : idx;
             uint32_t type = s.vertexArrays[va].format & 0xF;
             uint32_t sz   = (s.vertexArrays[va].format >> 4) & 0xF;
             if (type == VERTEX_UB)
-                decode_attr(vram, vramSize, s.vertexArrays[va], idx, 4, color);
+                decode_attr(vram, vramSize, s.vertexArrays[va], attrIdx, 4, color);
             else if (type == VERTEX_F && sz == 2)
-                decode_attr(vram, vramSize, s.vertexArrays[va], idx, 4, uv);
+                decode_attr(vram, vramSize, s.vertexArrays[va], attrIdx, 4, uv);
         }
 
         RasterVertex& v = out[i];

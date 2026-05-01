@@ -183,6 +183,47 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0xc868dea5, "sceNpTrophy", "sceNpTrophyGetGameProgress" },
     { 0x3fbae39e, "sceNpTrophy", "sceNpTrophyGetGameInfo" },
 
+    // cellFs extras (beyond sys_fs basics)
+    { 0x9eaf0f23, "cellFs", "cellFsOpendir" },
+    { 0x49e735fd, "cellFs", "cellFsReaddir" },
+    { 0xe1464921, "cellFs", "cellFsClosedir" },
+    { 0x0a7faeba, "cellFs", "cellFsStat" },
+    { 0x05b82844, "cellFs", "cellFsMkdir" },
+    { 0xadff8f10, "cellFs", "cellFsRmdir" },
+    { 0x40ba070f, "cellFs", "cellFsUnlink" },
+    { 0x3591cf02, "cellFs", "cellFsRename" },
+    { 0x60a6c70f, "cellFs", "cellFsTruncate" },
+    { 0xe7d6ba00, "cellFs", "cellFsGetFreeSize" },
+
+    // cellSysmodule — PRX module loading
+    { 0xb8a0bf48, "cellSysmodule", "cellSysmoduleLoadModule" },
+    { 0x2a1321c1, "cellSysmodule", "cellSysmoduleUnloadModule" },
+    { 0x452adbc2, "cellSysmodule", "cellSysmoduleIsLoaded" },
+    { 0x6e0040b4, "cellSysmodule", "cellSysmoduleInitialize" },
+    { 0x8b59a7b1, "cellSysmodule", "cellSysmoduleFinalize" },
+
+    // cellNetCtl — network control
+    { 0xf53f04bb, "cellNetCtl", "cellNetCtlInit" },
+    { 0x9f18ccad, "cellNetCtl", "cellNetCtlTerm" },
+    { 0x5c413ca9, "cellNetCtl", "cellNetCtlGetState" },
+    { 0x08a8a347, "cellNetCtl", "cellNetCtlGetInfo" },
+    { 0x2e274b74, "cellNetCtl", "cellNetCtlAddHandler" },
+    { 0x438cee7b, "cellNetCtl", "cellNetCtlDelHandler" },
+
+    // cellMsgDialog — message/progress dialog
+    { 0x503d1913, "cellMsgDialog", "cellMsgDialogOpen" },
+    { 0x860634da, "cellMsgDialog", "cellMsgDialogOpen2" },
+    { 0x7da3e04f, "cellMsgDialog", "cellMsgDialogClose" },
+    { 0xf0d11ff1, "cellMsgDialog", "cellMsgDialogAbort" },
+    { 0xbb49b97e, "cellMsgDialog", "cellMsgDialogProgressBarInc" },
+    { 0x6df96f85, "cellMsgDialog", "cellMsgDialogProgressBarSetMsg" },
+
+    // cellOskDialog — on-screen keyboard
+    { 0x36cff0d8, "cellOskDialog", "cellOskDialogLoadAsync" },
+    { 0xf5daa620, "cellOskDialog", "cellOskDialogUnloadAsync" },
+    { 0xcae76f24, "cellOskDialog", "cellOskDialogGetInputText" },
+    { 0x15cb6934, "cellOskDialog", "cellOskDialogSetInitialInputDevice" },
+
     // ── cellVdec — video decode ─────────────────────────────────
     { 0xA83F253B, "cellVdec", "cellVdecOpen" },
     { 0xB6D5CACD, "cellVdec", "cellVdecClose" },

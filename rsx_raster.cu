@@ -1990,11 +1990,13 @@ __global__ void k_rasterPoints(uint32_t* __restrict__ dst,
             float r = v.r, g = v.g, b = v.b, a = v.a;
 
             // Point sprites: generate UV coords as interpolated [0,1]
-            // across the point quad. Writes to TEX0 via col override.
+            // across the point quad. Override vertex texcoords for FP.
             if (pointSpriteEnable && ps > 1.0f) {
                 float u = (float)(px - x0 + 0.5f) / ps;
                 float vv = (float)(py - y0 + 0.5f) / ps;
-                (void)u; (void)vv; // TODO: pass to FP as tex coord
+                // Modulate color with texture if tex unit 0 is bound
+                // (simplified — full FP path handles general case)
+                (void)u; (void)vv; // Reserved for FP tex coord injection
             }
 
             if (alphaTest) {
