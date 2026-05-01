@@ -235,6 +235,13 @@ static constexpr uint32_t NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP = 0x00000E20;
 // NV406E Reference register (subchannel agnostic)
 static constexpr uint32_t NV4097_SET_REFERENCE               = 0x00000050;
 
+// Semaphore / label system (SPU↔RSX sync)
+static constexpr uint32_t NV4097_SET_SEMAPHORE_OFFSET        = 0x00001D6C;
+static constexpr uint32_t NV4097_BACK_END_WRITE_SEMAPHORE_RELEASE = 0x00001D70;
+static constexpr uint32_t NV4097_TEXTURE_READ_SEMAPHORE_RELEASE   = 0x00001D74;
+static constexpr uint32_t NV4097_SET_NOTIFY                       = 0x00000104;
+static constexpr uint32_t NV4097_NOTIFY                           = 0x00000108;
+
 // ═══════════════════════════════════════════════════════════════════
 // Enumerations
 // ═══════════════════════════════════════════════════════════════════
@@ -489,6 +496,10 @@ struct RSXState {
 
     // Actual VRAM allocation size (set by rsx_process_fifo).
     uint32_t vramSize;
+
+    // Semaphore / label system (SPU↔RSX synchronization).
+    // SPUs poll a VRAM location; RSX writes a value there when done.
+    uint32_t semaphoreOffset;   // VRAM byte offset for next semaphore write
 };
 
 // ═══════════════════════════════════════════════════════════════════

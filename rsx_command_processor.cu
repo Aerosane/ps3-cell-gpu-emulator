@@ -602,6 +602,38 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         return;
 
     // ── Reference register ─────────────────────────────────────
+    // ── Semaphore / label (SPU↔RSX sync) ────────────────────────
+    case NV4097_SET_SEMAPHORE_OFFSET:
+        state->semaphoreOffset = data;
+        return;
+    case NV4097_BACK_END_WRITE_SEMAPHORE_RELEASE:
+        // Write value to VRAM at semaphoreOffset (big-endian).
+        // SPUs poll this location to detect GPU completion.
+        if (vram && state->semaphoreOffset + 4 <= state->vramSize) {
+            uint32_t off = state->semaphoreOffset;
+            // RSX writes the value in GPU byte order (little-endian on real HW,
+            // but PS3 convention is big-endian for cross-unit sync).
+            vram[off + 0] = (uint8_t)(data >> 24);
+            vram[off + 1] = (uint8_t)(data >> 16);
+            vram[off + 2] = (uint8_t)(data >> 8);
+            vram[off + 3] = (uint8_t)(data);
+        }
+        return;
+    case NV4097_TEXTURE_READ_SEMAPHORE_RELEASE:
+        // Same as BACK_END but signals texture pipe completion.
+        if (vram && state->semaphoreOffset + 4 <= state->vramSize) {
+            uint32_t off = state->semaphoreOffset;
+            vram[off + 0] = (uint8_t)(data >> 24);
+            vram[off + 1] = (uint8_t)(data >> 16);
+            vram[off + 2] = (uint8_t)(data >> 8);
+            vram[off + 3] = (uint8_t)(data);
+        }
+        return;
+    case NV4097_SET_NOTIFY:
+    case NV4097_NOTIFY:
+        // Notify mechanism — acknowledge without action for now.
+        return;
+
     case NV4097_SET_REFERENCE:
         state->ref = data;
         return;
