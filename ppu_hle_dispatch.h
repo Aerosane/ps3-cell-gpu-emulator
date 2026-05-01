@@ -47,6 +47,7 @@ struct PpuHleDispatcher {
     uint32_t tlsBaseAddr = 0x00E00000;   // dummy TLS heap base
     uint32_t tlsNext     = 0x00E00000;
     uint64_t virtTime    = 0;
+    uint32_t nextHandleId = 0x1000;      // monotonic handle allocator
 
     // Libc heap scratch arena (used when we HLE-patch the ELF's
     // internal allocator; address grows upward).
@@ -1247,6 +1248,126 @@ struct PpuHleDispatcher {
             }
             retval = 0;
         } else if (e.name == "cellGifDecDecodeData") {
+            retval = 0;
+
+        // ═══ sceNpTrophy — PSN trophy system ═══
+        } else if (e.name == "sceNpTrophyInit") {
+            retval = 0;
+        } else if (e.name == "sceNpTrophyTerm") {
+            retval = 0;
+        } else if (e.name == "sceNpTrophyCreateHandle") {
+            // r3 = handle_ptr
+            uint32_t hid = nextHandleId++;
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                mem[ptr] = (uint8_t)(hid >> 24); mem[ptr+1] = (uint8_t)(hid >> 16);
+                mem[ptr+2] = (uint8_t)(hid >> 8); mem[ptr+3] = (uint8_t)hid;
+            }
+            retval = 0;
+        } else if (e.name == "sceNpTrophyDestroyHandle") {
+            retval = 0;
+        } else if (e.name == "sceNpTrophyCreateContext") {
+            // r3 = context_ptr
+            uint32_t cid = nextHandleId++;
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                mem[ptr] = (uint8_t)(cid >> 24); mem[ptr+1] = (uint8_t)(cid >> 16);
+                mem[ptr+2] = (uint8_t)(cid >> 8); mem[ptr+3] = (uint8_t)cid;
+            }
+            retval = 0;
+        } else if (e.name == "sceNpTrophyDestroyContext") {
+            retval = 0;
+        } else if (e.name == "sceNpTrophyRegisterContext") {
+            retval = 0;
+        } else if (e.name == "sceNpTrophyGetRequiredDiskSpace") {
+            // r3 = context, r4 = handle, r5 = reqspace_ptr
+            uint64_t ptr = st.gpr[5];
+            if (ptr && ptr + 8 <= memSize) {
+                // 1MB required space
+                uint64_t space = 0x100000ULL;
+                for (int i = 0; i < 8; i++) mem[ptr+i] = (uint8_t)(space >> (56 - 8*i));
+            }
+            retval = 0;
+        } else if (e.name == "sceNpTrophyGetGameInfo") {
+            // r5 = game_info_ptr — zero-fill the structure
+            uint64_t ptr = st.gpr[5];
+            if (ptr && ptr + 64 <= memSize) {
+                std::memset(mem + ptr, 0, 64);
+            }
+            retval = 0;
+        } else if (e.name == "sceNpTrophyUnlockTrophy") {
+            // r3 = context, r4 = handle, r5 = trophy_id, r6 = platinum_id_ptr
+            uint64_t ptr = st.gpr[6];
+            if (ptr && ptr + 4 <= memSize) {
+                mem[ptr] = 0xFF; mem[ptr+1] = 0xFF; mem[ptr+2] = 0xFF; mem[ptr+3] = 0xFF; // -1 = no platinum
+            }
+            retval = 0;
+        } else if (e.name == "sceNpTrophyGetTrophyInfo") {
+            // r5 = info_ptr
+            uint64_t ptr = st.gpr[5];
+            if (ptr && ptr + 48 <= memSize) {
+                std::memset(mem + ptr, 0, 48);
+            }
+            retval = 0;
+        } else if (e.name == "sceNpTrophyGetTrophyUnlockState") {
+            // r5 = flag_array_ptr, r6 = count_ptr
+            uint64_t ptr = st.gpr[5];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16); // all locked
+            }
+            uint64_t cnt = st.gpr[6];
+            if (cnt && cnt + 4 <= memSize) {
+                mem[cnt] = 0; mem[cnt+1] = 0; mem[cnt+2] = 0; mem[cnt+3] = 0;
+            }
+            retval = 0;
+        } else if (e.name == "sceNpTrophyGetGameProgress") {
+            // r5 = progress_ptr (int32 percentage)
+            uint64_t ptr = st.gpr[5];
+            if (ptr && ptr + 4 <= memSize) {
+                mem[ptr] = 0; mem[ptr+1] = 0; mem[ptr+2] = 0; mem[ptr+3] = 0; // 0%
+            }
+            retval = 0;
+
+        // ═══ sceNp — PSN base ═══
+        } else if (e.name == "sceNpInit") {
+            retval = 0;
+        } else if (e.name == "sceNpTerm") {
+            retval = 0;
+        } else if (e.name == "sceNpGetNpId" || e.name == "sceNpManagerGetNpId") {
+            // r3 = npid_ptr — fill with dummy offline NP ID
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 36 <= memSize) {
+                std::memset(mem + ptr, 0, 36);
+                // Write "OfflineUser" as the handle
+                const char* handle = "OfflineUser";
+                for (int i = 0; handle[i]; i++) mem[ptr + i] = handle[i];
+            }
+            retval = 0;
+        } else if (e.name == "sceNpGetOnlineId" || e.name == "sceNpManagerGetOnlineId") {
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 20 <= memSize) {
+                std::memset(mem + ptr, 0, 20);
+                const char* oid = "OfflineUser";
+                for (int i = 0; oid[i]; i++) mem[ptr + i] = oid[i];
+            }
+            retval = 0;
+        } else if (e.name == "sceNpGetUserProfile") {
+            retval = 0;
+        } else if (e.name == "sceNpManagerGetStatus") {
+            // Return SCE_NP_MANAGER_STATUS_OFFLINE (1) via r4
+            st.gpr[4] = 1;
+            retval = 0;
+        } else if (e.name == "sceNpManagerGetNetworkTime") {
+            // r3 = time_ptr (CellRtcTick - uint64_t)
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 8 <= memSize) {
+                uint64_t tick = 0x000DC46C0D3B3600ULL; // ~2024 epoch
+                for (int i = 0; i < 8; i++) mem[ptr+i] = (uint8_t)(tick >> (56 - 8*i));
+            }
+            retval = 0;
+        } else if (e.name == "sceNpManagerRegisterCallback" || e.name == "sceNpManagerUnregisterCallback") {
+            retval = 0;
+        } else if (e.name == "sceNpCommerce2Init" || e.name == "sceNpCommerce2Term") {
             retval = 0;
 
         } else {

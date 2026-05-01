@@ -299,6 +299,24 @@ __device__ static void handleSyscall(PPEState& s, uint8_t* mem, uint32_t* hle_lo
         s.gpr[3] = 0;
         break;
 
+    // ─── Reader/writer lock ──────────────────────────────────────
+    case SYS_RWLOCK_CREATE: {
+        uint32_t id = hle_alloc_id();
+        if (s.gpr[3] && s.gpr[3] < PS3_SANDBOX_SIZE - 4)
+            mem_write32(mem, s.gpr[3], id);
+        s.gpr[3] = 0;
+        break;
+    }
+    case SYS_RWLOCK_DESTROY:
+    case SYS_RWLOCK_RLOCK:
+    case SYS_RWLOCK_RUNLOCK:
+    case SYS_RWLOCK_WLOCK:
+    case SYS_RWLOCK_WUNLOCK:
+    case SYS_RWLOCK_TRYRLOCK:
+    case SYS_RWLOCK_TRYWLOCK:
+        s.gpr[3] = 0;
+        break;
+
     // ─── Semaphore ───────────────────────────────────────────────
     case SYS_SEMAPHORE_CREATE: {
         uint32_t id = hle_alloc_id();

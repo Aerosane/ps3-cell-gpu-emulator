@@ -430,6 +430,16 @@ enum LV2Syscall : uint32_t {
     SYS_LWCOND_SIGNAL           = 115,
     SYS_LWCOND_SIGNAL_ALL       = 116,
 
+    // Reader/writer lock
+    SYS_RWLOCK_CREATE           = 120,
+    SYS_RWLOCK_DESTROY          = 121,
+    SYS_RWLOCK_RLOCK            = 122,
+    SYS_RWLOCK_RUNLOCK          = 123,
+    SYS_RWLOCK_WLOCK            = 124,
+    SYS_RWLOCK_WUNLOCK          = 125,
+    SYS_RWLOCK_TRYRLOCK         = 126,
+    SYS_RWLOCK_TRYWLOCK         = 127,
+
     // Event queue
     SYS_EVENT_QUEUE_CREATE      = 128,
     SYS_EVENT_QUEUE_DESTROY     = 129,

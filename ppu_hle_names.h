@@ -351,6 +351,40 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0x11ae5215, "cellGifDec", "cellGifDecClose" },
     { 0xc52c449b, "cellGifDec", "cellGifDecReadHeader" },
     { 0x0c0c12bd, "cellGifDec", "cellGifDecDecodeData" },
+
+    // sceNpTrophy — PlayStation Network trophy system
+    { 0xdd74bdae, "sceNp", "sceNpTrophyInit" },
+    { 0xd972691b, "sceNp", "sceNpTrophyTerm" },
+    { 0xc10b8fce, "sceNp", "sceNpTrophyCreateHandle" },
+    { 0x7775c461, "sceNp", "sceNpTrophyDestroyHandle" },
+    { 0x7aa2fcff, "sceNp", "sceNpTrophyCreateContext" },
+    { 0x0cde7100, "sceNp", "sceNpTrophyDestroyContext" },
+    { 0x287f6018, "sceNp", "sceNpTrophyRegisterContext" },
+    { 0x99d5fcdb, "sceNp", "sceNpTrophyGetRequiredDiskSpace" },
+    { 0x3fbae39e, "sceNp", "sceNpTrophyGetGameInfo" },
+    { 0x7a3ceb91, "sceNp", "sceNpTrophyUnlockTrophy" },
+    { 0xdd29bb02, "sceNp", "sceNpTrophyGetTrophyInfo" },
+    { 0x74b16e87, "sceNp", "sceNpTrophyGetTrophyUnlockState" },
+    { 0xc868dea5, "sceNp", "sceNpTrophyGetGameProgress" },
+
+    // sceNp — PlayStation Network base
+    { 0xd59da152, "sceNp", "sceNpInit" },
+    { 0xec72d838, "sceNp", "sceNpTerm" },
+    { 0xd1fcb865, "sceNp", "sceNpGetNpId" },
+    { 0x259ab84f, "sceNp", "sceNpGetOnlineId" },
+    { 0x2aba00d1, "sceNp", "sceNpGetUserProfile" },
+
+    // sceNpManager — PSN manager stubs
+    { 0x9b98354e, "sceNp", "sceNpManagerGetStatus" },
+    { 0x3566cd38, "sceNp", "sceNpManagerGetNetworkTime" },
+    { 0x54bcafb8, "sceNp", "sceNpManagerGetOnlineId" },
+    { 0xebae6c1a, "sceNp", "sceNpManagerGetNpId" },
+    { 0x13079e64, "sceNp", "sceNpManagerRegisterCallback" },
+    { 0x39853605, "sceNp", "sceNpManagerUnregisterCallback" },
+
+    // sceNpCommerce2 — store stubs
+    { 0xaaeae4a9, "sceNp", "sceNpCommerce2Init" },
+    { 0x66da2edd, "sceNp", "sceNpCommerce2Term" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {
