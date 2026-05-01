@@ -265,6 +265,48 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0xf7644439, "cellHttp", "cellHttpInit" },
     { 0x33457271, "cellHttp", "cellHttpEnd" },
 
+    // cellAdec — audio decoder
+    { 0x8f027e01, "cellAdec", "cellAdecOpen" },
+    { 0xcd96044f, "cellAdec", "cellAdecClose" },
+    { 0xcc534abe, "cellAdec", "cellAdecStartSeq" },
+    { 0xccfeefc2, "cellAdec", "cellAdecEndSeq" },
+    { 0x4d682b55, "cellAdec", "cellAdecDecodeAu" },
+    { 0x0cfa3baf, "cellAdec", "cellAdecGetPcm" },
+    { 0x382b0cf4, "cellAdec", "cellAdecGetPcmItem" },
+    { 0xf07a2ec7, "cellAdec", "cellAdecQueryAttr" },
+
+    // cellDmux — media demuxer
+    { 0x2d4ce3df, "cellDmux", "cellDmuxOpen" },
+    { 0x438a5a0f, "cellDmux", "cellDmuxClose" },
+    { 0xcd076abf, "cellDmux", "cellDmuxSetStream" },
+    { 0xabbbb443, "cellDmux", "cellDmuxResetStream" },
+    { 0x143a3968, "cellDmux", "cellDmuxQueryAttr" },
+    { 0x181d1978, "cellDmux", "cellDmuxEnableEs" },
+    { 0x022dda52, "cellDmux", "cellDmuxDisableEs" },
+    { 0x7d539c24, "cellDmux", "cellDmuxGetAu" },
+
+    // cellPamf — PAMF container reader
+    { 0xb13dac24, "cellPamf", "cellPamfReaderInitialize" },
+    { 0x484cfb6f, "cellPamf", "cellPamfReaderGetNumberOfStreams" },
+    { 0xbf6c31af, "cellPamf", "cellPamfReaderGetStreamInfo" },
+    { 0x79df04e4, "cellPamf", "cellPamfReaderGetStreamTypeCoding" },
+    { 0x847d96d4, "cellPamf", "cellPamfReaderGetEsFilterId" },
+    { 0xd245f601, "cellPamf", "cellPamfGetHeaderSize" },
+
+    // cellJpgDec / cellPngDec — image decoders
+    { 0x8b18c8eb, "cellJpgDec", "cellJpgDecOpen" },
+    { 0xbbbfa42c, "cellJpgDec", "cellJpgDecClose" },
+    { 0x5920178f, "cellJpgDec", "cellJpgDecReadHeader" },
+    { 0xc2a0d674, "cellJpgDec", "cellJpgDecDecodeData" },
+    { 0xb4fdda24, "cellJpgDec", "cellJpgDecCreate" },
+    { 0xd1f838b9, "cellJpgDec", "cellJpgDecDestroy" },
+    { 0xebeab923, "cellPngDec", "cellPngDecOpen" },
+    { 0x01c158db, "cellPngDec", "cellPngDecClose" },
+    { 0x8cdae535, "cellPngDec", "cellPngDecReadHeader" },
+    { 0x994e6188, "cellPngDec", "cellPngDecDecodeData" },
+    { 0xf8d2000f, "cellPngDec", "cellPngDecCreate" },
+    { 0x7515cc92, "cellPngDec", "cellPngDecDestroy" },
+
     // ── cellVdec — video decode ─────────────────────────────────
     { 0xA83F253B, "cellVdec", "cellVdecOpen" },
     { 0xB6D5CACD, "cellVdec", "cellVdecClose" },

@@ -1097,6 +1097,100 @@ struct PpuHleDispatcher {
                    e.name == "cellHttpInit" || e.name == "cellHttpEnd") {
             retval = 0;
 
+        // ── cellAdec — audio decoder ───────────────────────────────────
+        } else if (e.name == "cellAdecOpen") {
+            // r3 = type*, r4 = resource*, r5 = cb, r6 = handle* (out)
+            uint32_t outPtr = (uint32_t)st.gpr[6];
+            if (outPtr && outPtr + 4 <= memSize) {
+                uint32_t h = 2;  // dummy audio decoder handle
+                uint8_t be[4] = { (uint8_t)(h>>24), (uint8_t)(h>>16),
+                                  (uint8_t)(h>>8),  (uint8_t)h };
+                std::memcpy(mem + outPtr, be, 4);
+                megakernel_write_mem(outPtr, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellAdecClose" || e.name == "cellAdecStartSeq" ||
+                   e.name == "cellAdecEndSeq" || e.name == "cellAdecDecodeAu") {
+            retval = 0;
+        } else if (e.name == "cellAdecGetPcm" || e.name == "cellAdecGetPcmItem") {
+            retval = (uint32_t)(-1);  // No PCM ready
+        } else if (e.name == "cellAdecQueryAttr") {
+            uint32_t outPtr = (uint32_t)st.gpr[4];
+            if (outPtr && outPtr + 32 <= memSize) {
+                std::memset(mem + outPtr, 0, 32);
+                megakernel_write_mem(outPtr, mem + outPtr, 32);
+            }
+            retval = 0;
+
+        // ── cellDmux — demuxer ─────────────────────────────────────────
+        } else if (e.name == "cellDmuxOpen") {
+            uint32_t outPtr = (uint32_t)st.gpr[5];
+            if (outPtr && outPtr + 4 <= memSize) {
+                uint32_t h = 3;  // dummy demux handle
+                uint8_t be[4] = { (uint8_t)(h>>24), (uint8_t)(h>>16),
+                                  (uint8_t)(h>>8),  (uint8_t)h };
+                std::memcpy(mem + outPtr, be, 4);
+                megakernel_write_mem(outPtr, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellDmuxClose" || e.name == "cellDmuxSetStream" ||
+                   e.name == "cellDmuxResetStream" || e.name == "cellDmuxEnableEs" ||
+                   e.name == "cellDmuxDisableEs") {
+            retval = 0;
+        } else if (e.name == "cellDmuxGetAu") {
+            retval = (uint32_t)(-1);  // No AU available
+        } else if (e.name == "cellDmuxQueryAttr") {
+            uint32_t outPtr = (uint32_t)st.gpr[4];
+            if (outPtr && outPtr + 32 <= memSize) {
+                std::memset(mem + outPtr, 0, 32);
+                megakernel_write_mem(outPtr, mem + outPtr, 32);
+            }
+            retval = 0;
+
+        // ── cellPamf — PAMF container ──────────────────────────────────
+        } else if (e.name == "cellPamfReaderInitialize") {
+            retval = 0;
+        } else if (e.name == "cellPamfReaderGetNumberOfStreams") {
+            retval = 0;  // 0 streams (no media)
+        } else if (e.name == "cellPamfReaderGetStreamInfo" ||
+                   e.name == "cellPamfReaderGetStreamTypeCoding" ||
+                   e.name == "cellPamfReaderGetEsFilterId") {
+            retval = 0;
+        } else if (e.name == "cellPamfGetHeaderSize") {
+            retval = 2048;  // Typical PAMF header size
+
+        // ── cellJpgDec / cellPngDec ────────────────────────────────────
+        } else if (e.name == "cellJpgDecCreate" || e.name == "cellPngDecCreate") {
+            // r3 = *mainHandle (out) — write dummy handle
+            uint32_t outPtr = (uint32_t)st.gpr[3];
+            if (outPtr && outPtr + 4 <= memSize) {
+                uint32_t h = 4;
+                uint8_t be[4] = { (uint8_t)(h>>24), (uint8_t)(h>>16),
+                                  (uint8_t)(h>>8),  (uint8_t)h };
+                std::memcpy(mem + outPtr, be, 4);
+                megakernel_write_mem(outPtr, be, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellJpgDecDestroy" || e.name == "cellPngDecDestroy" ||
+                   e.name == "cellJpgDecOpen" || e.name == "cellJpgDecClose" ||
+                   e.name == "cellPngDecOpen" || e.name == "cellPngDecClose") {
+            retval = 0;
+        } else if (e.name == "cellJpgDecReadHeader" || e.name == "cellPngDecReadHeader") {
+            // Return header info — write dummy 64×64 dimensions
+            uint32_t outPtr = (uint32_t)st.gpr[4];
+            if (outPtr && outPtr + 16 <= memSize) {
+                std::memset(mem + outPtr, 0, 16);
+                // width=64, height=64 at offset 0 and 4 (big-endian)
+                uint32_t dim = 64;
+                mem[outPtr+0] = 0; mem[outPtr+1] = 0; mem[outPtr+2] = 0; mem[outPtr+3] = 64;
+                mem[outPtr+4] = 0; mem[outPtr+5] = 0; mem[outPtr+6] = 0; mem[outPtr+7] = 64;
+                megakernel_write_mem(outPtr, mem + outPtr, 16);
+            }
+            retval = 0;
+        } else if (e.name == "cellJpgDecDecodeData" || e.name == "cellPngDecDecodeData") {
+            // Fill output buffer with white pixels (ARGB 0xFFFFFFFF)
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;
