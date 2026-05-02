@@ -232,6 +232,25 @@ enum SurfaceColorTarget : uint32_t {
 // Flip (surface A offset for display flip)
 static constexpr uint32_t NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP = 0x00000E20;
 
+// Anti-aliasing / line & polygon smoothing
+static constexpr uint32_t NV4097_SET_ANTI_ALIASING_CONTROL     = 0x00000D7C;
+static constexpr uint32_t NV4097_SET_LINE_SMOOTH_ENABLE        = 0x00000DB4;
+static constexpr uint32_t NV4097_SET_POLY_SMOOTH_ENABLE        = 0x00000DB8;
+
+// Shader packer / flat shade / attrib input mask
+static constexpr uint32_t NV4097_SET_SHADER_PACKER             = 0x00001D48;
+static constexpr uint32_t NV4097_SET_FLAT_SHADE_OP             = 0x00001D98;
+static constexpr uint32_t NV4097_SET_VERTEX_ATTRIB_INPUT_MASK  = 0x00001FF0;
+
+// ZCULL control
+static constexpr uint32_t NV4097_SET_ZCULL_STATS_ENABLE        = 0x00001DC8;
+static constexpr uint32_t NV4097_SET_SCULL_CONTROL             = 0x00001D80;
+
+// Misc pipeline control
+static constexpr uint32_t NV4097_SET_REDUCE_DST_COLOR          = 0x00000D2C;
+static constexpr uint32_t NV4097_SET_TRANSFORM_TIMEOUT         = 0x00001EF8;
+static constexpr uint32_t NV4097_SET_WAIT_FOR_IDLE             = 0x00000110;
+
 // NV406E Reference register (subchannel agnostic)
 static constexpr uint32_t NV4097_SET_REFERENCE               = 0x00000050;
 
@@ -486,6 +505,21 @@ struct RSXState {
     uint32_t vpAttribOutputMask;   // which VP outputs are active
     uint32_t freqDividerOp;        // vertex attrib instancing dividers
     bool     sRGBWrite;            // gamma encode on FB write
+
+    // Anti-aliasing / smoothing
+    uint32_t antiAliasingControl;   // MSAA hint (no-op in software raster)
+    bool     lineSmoothEnable;
+    bool     polySmoothEnable;
+
+    // ZCULL / S-CULL
+    uint32_t zcullStatsEnable;
+    uint32_t scullControl;
+
+    // Misc pipeline
+    uint32_t shaderPacker;
+    uint32_t flatShadeOp;
+    uint32_t vertexAttribInputMask;
+    uint32_t reduceDstColor;
 
     // Transform constants (up to 468 × vec4 on NV47; round up to 512)
     float    vpConstants[512][4];

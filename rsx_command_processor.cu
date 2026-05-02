@@ -697,6 +697,44 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         state->zetaOffset = data;
         return;
 
+    // Anti-aliasing / smoothing control
+    case NV4097_SET_ANTI_ALIASING_CONTROL:
+        state->antiAliasingControl = data;
+        return;
+    case NV4097_SET_LINE_SMOOTH_ENABLE:
+        state->lineSmoothEnable = (data != 0);
+        return;
+    case NV4097_SET_POLY_SMOOTH_ENABLE:
+        state->polySmoothEnable = (data != 0);
+        return;
+
+    // ZCULL stats (performance hint, no-op in our rasterizer)
+    case NV4097_SET_ZCULL_STATS_ENABLE:
+        state->zcullStatsEnable = data;
+        return;
+    case NV4097_SET_SCULL_CONTROL:
+        state->scullControl = data;
+        return;
+
+    // Shader packer / flat shade / vertex attrib input mask
+    case NV4097_SET_SHADER_PACKER:
+        state->shaderPacker = data;
+        return;
+    case NV4097_SET_FLAT_SHADE_OP:
+        state->flatShadeOp = data;
+        return;
+    case NV4097_SET_VERTEX_ATTRIB_INPUT_MASK:
+        state->vertexAttribInputMask = data;
+        return;
+
+    // Misc pipeline control (no-ops — perf hints / stall points)
+    case NV4097_SET_REDUCE_DST_COLOR:
+        state->reduceDstColor = data;
+        return;
+    case NV4097_SET_TRANSFORM_TIMEOUT:
+    case NV4097_SET_WAIT_FOR_IDLE:
+        return;
+
     default:
         break;
     }
