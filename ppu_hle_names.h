@@ -533,6 +533,79 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0xbd8f1ead, "cellPad", "cellPadSetSensorMode" },
     { 0x0353d3cf, "cellPad", "cellPadLddRegisterController" },
     { 0x9589f71c, "cellPad", "cellPadLddGetPortNo" },
+
+    // ── cellPrint ────────────────────────────────────────────────
+    { 0xB2D72BB9, "cellPrint", "cellPrintOpenConfig" },
+    { 0xB75EB4F8, "cellPrint", "cellPrintGetStatus" },
+    { 0xFC06712D, "cellPrint", "cellPrintStartJob" },
+    { 0xD94E89BC, "cellPrint", "cellPrintEndJob" },
+
+    // ── cellMusicDecode ──────────────────────────────────────────
+    { 0x98FDAFD5, "cellMusicDecode", "cellMusicDecodeInitialize" },
+    { 0x7659B1E7, "cellMusicDecode", "cellMusicDecodeInitialize2" },
+    { 0xDDA1BC5E, "cellMusicDecode", "cellMusicDecodeFinalize" },
+    { 0x3BE565BF, "cellMusicDecode", "cellMusicDecodeFinalize2" },
+    { 0x9609CA68, "cellMusicDecode", "cellMusicDecodeSelectContents" },
+    { 0x18CFE79D, "cellMusicDecode", "cellMusicDecodeSetDecodeCommand" },
+    { 0xC8E261CE, "cellMusicDecode", "cellMusicDecodeGetDecodeStatus" },
+    { 0x22953249, "cellMusicDecode", "cellMusicDecodeRead" },
+
+    // ── sceNpFriends ─────────────────────────────────────────────
+    { 0xA72CA286, "sceNpFriends", "sceNpFriendsInit" },
+    { 0xBDEF1053, "sceNpFriends", "sceNpFriendsTerm" },
+    { 0x912E5879, "sceNpFriends", "sceNpFriendsGetFriendListEntryCount" },
+    { 0xFDD24474, "sceNpFriends", "sceNpFriendsGetFriendListEntry" },
+    { 0xA98A49F1, "sceNpFriends", "sceNpFriendsGetFriendPresence" },
+    { 0x8AE071CF, "sceNpFriends", "sceNpFriendsGetFriendInfo" },
+
+    // ── cellSail (media player) ──────────────────────────────────
+    { 0x948DAF24, "cellSail", "cellSailPlayerInitialize" },
+    { 0x1C674A46, "cellSail", "cellSailPlayerFinalize" },
+    { 0x928AF120, "cellSail", "cellSailPlayerSetParameter" },
+    { 0xD43F8537, "cellSail", "cellSailPlayerGetParameter" },
+    { 0x9D9DA3F4, "cellSail", "cellSailPlayerBoot" },
+    { 0x254936DB, "cellSail", "cellSailPlayerCreateDescriptor" },
+    { 0x2B5F20BE, "cellSail", "cellSailPlayerDestroyDescriptor" },
+    { 0x3A6E01B1, "cellSail", "cellSailPlayerOpenStream" },
+
+    // ── cellRudp (reliable UDP) ──────────────────────────────────
+    { 0xE26B7209, "cellRudp", "cellRudpInit" },
+    { 0xB92636EA, "cellRudp", "cellRudpEnd" },
+    { 0xCA071AAC, "cellRudp", "cellRudpCreateContext" },
+    { 0x500A408E, "cellRudp", "cellRudpBind" },
+    { 0x23293E9B, "cellRudp", "cellRudpSend" },
+    { 0x61DB1F47, "cellRudp", "cellRudpReceive" },
+
+    // ── cellHttpUtil ─────────────────────────────────────────────
+    { 0x1C7430EE, "cellHttpUtil", "cellHttpUtilParseUri" },
+    { 0x77A3D37C, "cellHttpUtil", "cellHttpUtilBuildUri" },
+    { 0xD95B0C60, "cellHttpUtil", "cellHttpUtilEscapeUri" },
+    { 0xA4C9B7DC, "cellHttpUtil", "cellHttpUtilUnescapeUri" },
+
+    // ── cellSsl ──────────────────────────────────────────────────
+    { 0x8C1678EF, "cellSsl", "cellSslInit" },
+    { 0x2A574A25, "cellSsl", "cellSslEnd" },
+    { 0xCA220E5B, "cellSsl", "cellSslCertificateLoader" },
+    { 0x10C1BFFC, "cellSsl", "cellSslCertGetSerialNumber" },
+    { 0xAB209809, "cellSsl", "cellSslCertGetPublicKey" },
+
+    // ── cellHttp ─────────────────────────────────────────────────
+    { 0xF7644439, "cellHttp", "cellHttpInit" },
+    { 0x33457271, "cellHttp", "cellHttpEnd" },
+    { 0x598DD02E, "cellHttp", "cellHttpCreateClient" },
+    { 0x6907A5FB, "cellHttp", "cellHttpDestroyClient" },
+    { 0x21149D0A, "cellHttp", "cellHttpCreateTransaction" },
+    { 0xC2D6836B, "cellHttp", "cellHttpDestroyTransaction" },
+    { 0x6180BA1A, "cellHttp", "cellHttpSendRequest" },
+    { 0xFB40BF8E, "cellHttp", "cellHttpRecvResponse" },
+
+    // ── cellNetCtl ───────────────────────────────────────────────
+    { 0xF53F04BB, "cellNetCtl", "cellNetCtlInit" },
+    { 0x9F18CCAD, "cellNetCtl", "cellNetCtlTerm" },
+    { 0x5C413CA9, "cellNetCtl", "cellNetCtlGetState" },
+    { 0x08A8A347, "cellNetCtl", "cellNetCtlGetInfo" },
+    { 0x2E274B74, "cellNetCtl", "cellNetCtlAddHandler" },
+    { 0x438CEE7B, "cellNetCtl", "cellNetCtlDelHandler" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {

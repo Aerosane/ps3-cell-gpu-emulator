@@ -1676,6 +1676,141 @@ struct PpuHleDispatcher {
             st.gpr[4] = (uint64_t)(int64_t)-1; // no port
             retval = 0;
 
+        // ── cellPrint ────────────────────────────────────────────
+        } else if (e.name == "cellPrintOpenConfig" || e.name == "cellPrintGetStatus" ||
+                   e.name == "cellPrintStartJob" || e.name == "cellPrintEndJob") {
+            retval = 0;
+
+        // ── cellMusicDecode ──────────────────────────────────────
+        } else if (e.name == "cellMusicDecodeInitialize" || e.name == "cellMusicDecodeInitialize2") {
+            retval = 0;
+        } else if (e.name == "cellMusicDecodeFinalize" || e.name == "cellMusicDecodeFinalize2") {
+            retval = 0;
+        } else if (e.name == "cellMusicDecodeSelectContents" || e.name == "cellMusicDecodeSetDecodeCommand") {
+            retval = 0;
+        } else if (e.name == "cellMusicDecodeGetDecodeStatus") {
+            // Write status=0 (idle) to pointer in r4
+            if (st.gpr[4] && st.gpr[4] + 4 <= memSize) {
+                uint32_t zero = 0;
+                std::memcpy(mem + (uint32_t)st.gpr[4], &zero, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellMusicDecodeRead") {
+            retval = (uint64_t)(int64_t)-1; // no data
+
+        // ── sceNpFriends ─────────────────────────────────────────
+        } else if (e.name == "sceNpFriendsInit") {
+            retval = 0;
+        } else if (e.name == "sceNpFriendsTerm") {
+            retval = 0;
+        } else if (e.name == "sceNpFriendsGetFriendListEntryCount") {
+            // Write count=0 to pointer in r4
+            if (st.gpr[4] && st.gpr[4] + 4 <= memSize) {
+                uint32_t zero = 0;
+                std::memcpy(mem + (uint32_t)st.gpr[4], &zero, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sceNpFriendsGetFriendListEntry" ||
+                   e.name == "sceNpFriendsGetFriendPresence" ||
+                   e.name == "sceNpFriendsGetFriendInfo") {
+            retval = (uint64_t)(int64_t)-1; // not found
+
+        // ── cellSail (media player) ──────────────────────────────
+        } else if (e.name == "cellSailPlayerInitialize") {
+            retval = 0;
+        } else if (e.name == "cellSailPlayerFinalize") {
+            retval = 0;
+        } else if (e.name == "cellSailPlayerSetParameter" || e.name == "cellSailPlayerGetParameter") {
+            retval = 0;
+        } else if (e.name == "cellSailPlayerBoot") {
+            retval = 0;
+        } else if (e.name == "cellSailPlayerCreateDescriptor") {
+            // Write handle to r4 pointer
+            if (st.gpr[4] && st.gpr[4] + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + (uint32_t)st.gpr[4], &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellSailPlayerDestroyDescriptor") {
+            retval = 0;
+        } else if (e.name == "cellSailPlayerOpenStream") {
+            retval = 0;
+
+        // ── cellRudp (reliable UDP) ──────────────────────────────
+        } else if (e.name == "cellRudpInit") {
+            retval = 0;
+        } else if (e.name == "cellRudpEnd") {
+            retval = 0;
+        } else if (e.name == "cellRudpCreateContext") {
+            retval = (uint64_t)nextHandleId++; // context ID
+        } else if (e.name == "cellRudpBind") {
+            retval = 0;
+        } else if (e.name == "cellRudpSend") {
+            retval = (uint64_t)(int64_t)-1; // network error
+        } else if (e.name == "cellRudpReceive") {
+            retval = (uint64_t)(int64_t)-1; // no data
+
+        // ── cellHttpUtil ─────────────────────────────────────────
+        } else if (e.name == "cellHttpUtilParseUri" || e.name == "cellHttpUtilBuildUri" ||
+                   e.name == "cellHttpUtilEscapeUri" || e.name == "cellHttpUtilUnescapeUri") {
+            retval = 0;
+
+        // ── cellSsl ──────────────────────────────────────────────
+        } else if (e.name == "cellSslInit") {
+            retval = 0;
+        } else if (e.name == "cellSslEnd") {
+            retval = 0;
+        } else if (e.name == "cellSslCertificateLoader" || e.name == "cellSslCertGetSerialNumber" ||
+                   e.name == "cellSslCertGetPublicKey") {
+            retval = 0;
+
+        // ── cellHttp ─────────────────────────────────────────────
+        } else if (e.name == "cellHttpInit") {
+            retval = 0;
+        } else if (e.name == "cellHttpEnd") {
+            retval = 0;
+        } else if (e.name == "cellHttpCreateClient") {
+            // Write client handle to r4 pointer
+            if (st.gpr[4] && st.gpr[4] + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + (uint32_t)st.gpr[4], &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellHttpDestroyClient") {
+            retval = 0;
+        } else if (e.name == "cellHttpCreateTransaction") {
+            // Write transaction handle to r5 pointer
+            if (st.gpr[5] && st.gpr[5] + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + (uint32_t)st.gpr[5], &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellHttpDestroyTransaction") {
+            retval = 0;
+        } else if (e.name == "cellHttpSendRequest") {
+            retval = (uint64_t)(int64_t)-1; // network error
+        } else if (e.name == "cellHttpRecvResponse") {
+            retval = (uint64_t)(int64_t)-1; // network error
+
+        // ── cellNetCtl ───────────────────────────────────────────
+        } else if (e.name == "cellNetCtlInit") {
+            retval = 0;
+        } else if (e.name == "cellNetCtlTerm") {
+            retval = 0;
+        } else if (e.name == "cellNetCtlGetState") {
+            // Write state=0 (disconnected) to r4 pointer
+            if (st.gpr[4] && st.gpr[4] + 4 <= memSize) {
+                uint32_t zero = 0;
+                std::memcpy(mem + (uint32_t)st.gpr[4], &zero, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellNetCtlGetInfo") {
+            retval = (uint64_t)(int64_t)-1; // not connected
+        } else if (e.name == "cellNetCtlAddHandler") {
+            retval = 0;
+        } else if (e.name == "cellNetCtlDelHandler") {
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;
