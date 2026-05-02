@@ -1471,6 +1471,94 @@ struct PpuHleDispatcher {
                    e.name == "cellImeJpOpen" || e.name == "cellImeJpClose") {
             retval = 0;
 
+        // ═══ cellSysutil extras ═══
+        } else if (e.name == "cellSysutilGetSystemParamString") {
+            // r3 = param_id, r4 = buf_ptr, r5 = buf_size
+            uint64_t buf = st.gpr[4];
+            uint32_t sz = (uint32_t)st.gpr[5];
+            if (buf && sz > 0 && buf + sz <= memSize) {
+                mem[buf] = 0; // empty string
+            }
+            retval = 0;
+        } else if (e.name == "cellSysutilGetBgmPlaybackStatus2") {
+            // r3 = status_ptr (u32) → 0 = not playing
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                mem[ptr] = 0; mem[ptr+1] = 0; mem[ptr+2] = 0; mem[ptr+3] = 0;
+            }
+            retval = 0;
+        } else if (e.name == "cellSysutilEnableBgmPlaybackEx" || e.name == "cellSysutilDisableBgmPlaybackEx") {
+            retval = 0;
+
+        // ═══ cellDiscGame ═══
+        } else if (e.name == "cellDiscGameGetBootDiscInfo") {
+            // r3 = CellDiscGameBootInfo* — zero-fill
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 32 <= memSize) {
+                std::memset(mem + ptr, 0, 32);
+            }
+            retval = 0;
+        } else if (e.name == "cellDiscGameRegisterDiscChangeCallback" ||
+                   e.name == "cellDiscGameUnregisterDiscChangeCallback") {
+            retval = 0;
+
+        // ═══ cellStorage ═══
+        } else if (e.name == "cellStorageDataImportMove" || e.name == "cellStorageDataExport") {
+            retval = 0;
+
+        // ═══ cellSubDisplay ═══
+        } else if (e.name == "cellSubDisplayInit" || e.name == "cellSubDisplayEnd") {
+            retval = 0;
+        } else if (e.name == "cellSubDisplayGetRequiredMemory") {
+            // r3 = size_ptr
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t sz = 0x10000; // 64KB
+                mem[ptr] = (uint8_t)(sz>>24); mem[ptr+1] = (uint8_t)(sz>>16);
+                mem[ptr+2] = (uint8_t)(sz>>8); mem[ptr+3] = (uint8_t)sz;
+            }
+            retval = 0;
+
+        // ═══ cellSearch ═══
+        } else if (e.name == "cellSearchInitialize" || e.name == "cellSearchFinalize") {
+            retval = 0;
+        } else if (e.name == "cellSearchStartListSearch") {
+            retval = 0;
+        } else if (e.name == "cellSearchGetListItems") {
+            // r4 = count_ptr → 0 results
+            uint64_t ptr = st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                mem[ptr] = 0; mem[ptr+1] = 0; mem[ptr+2] = 0; mem[ptr+3] = 0;
+            }
+            retval = 0;
+
+        // ═══ cellMusic ═══
+        } else if (e.name == "cellMusicInitialize" || e.name == "cellMusicFinalize") {
+            retval = 0;
+        } else if (e.name == "cellMusicGetPlaybackStatus") {
+            // r3 = status_ptr → 0 = stopped
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                mem[ptr] = 0; mem[ptr+1] = 0; mem[ptr+2] = 0; mem[ptr+3] = 0;
+            }
+            retval = 0;
+
+        // ═══ cellPhotoExport ═══
+        } else if (e.name == "cellPhotoRegistFromFile" || e.name == "cellPhotoExportInitialize" ||
+                   e.name == "cellPhotoExportFinalize") {
+            retval = 0;
+
+        // ═══ cellRemotePlay / cellBgdl / cellGameUpdate ═══
+        } else if (e.name == "cellRemotePlayGetStatus") {
+            st.gpr[4] = 0; // not connected
+            retval = 0;
+        } else if (e.name == "cellBgdlGetInfo") {
+            retval = (uint64_t)(int64_t)-1; // no background downloads
+        } else if (e.name == "cellGameUpdateInit" || e.name == "cellGameUpdateTerm") {
+            retval = 0;
+        } else if (e.name == "cellGameUpdateCheckStartAsync") {
+            retval = 0; // no update available
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

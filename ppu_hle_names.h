@@ -425,6 +425,49 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     // cellImeJp — IME Japanese input stubs
     { 0x4cf28923, "cellImeJp", "cellImeJpOpen" },
     { 0x2a9372c3, "cellImeJp", "cellImeJpClose" },
+
+    // cellSysutil extras
+    { 0xf89e3dbd, "cellSysutil", "cellSysutilGetSystemParamString" },
+    { 0x38ecda87, "cellSysutil", "cellSysutilGetBgmPlaybackStatus2" },
+    { 0x6ae48aa9, "cellSysutil", "cellSysutilEnableBgmPlaybackEx" },
+    { 0x78410b3f, "cellSysutil", "cellSysutilDisableBgmPlaybackEx" },
+
+    // cellDiscGame — disc info stubs
+    { 0x312c9ac4, "cellDiscGame", "cellDiscGameGetBootDiscInfo" },
+    { 0xfee36d78, "cellDiscGame", "cellDiscGameRegisterDiscChangeCallback" },
+    { 0x04bb3c46, "cellDiscGame", "cellDiscGameUnregisterDiscChangeCallback" },
+
+    // cellStorage — data import/export
+    { 0xe462f5e5, "cellStorage", "cellStorageDataImportMove" },
+    { 0x1d911b52, "cellStorage", "cellStorageDataExport" },
+
+    // cellSubDisplay — sub-display output
+    { 0xb8fea1c2, "cellSubDisplay", "cellSubDisplayInit" },
+    { 0x64c14696, "cellSubDisplay", "cellSubDisplayEnd" },
+    { 0x278e51bf, "cellSubDisplay", "cellSubDisplayGetRequiredMemory" },
+
+    // cellSearch — media search
+    { 0x45e3ec64, "cellSearch", "cellSearchInitialize" },
+    { 0xb79cbc6e, "cellSearch", "cellSearchFinalize" },
+    { 0xa660aaea, "cellSearch", "cellSearchStartListSearch" },
+    { 0x5e331ebe, "cellSearch", "cellSearchGetListItems" },
+
+    // cellMusic — music playback
+    { 0x21929812, "cellMusic", "cellMusicInitialize" },
+    { 0x74c0bb2f, "cellMusic", "cellMusicFinalize" },
+    { 0xa7bf1b92, "cellMusic", "cellMusicGetPlaybackStatus" },
+
+    // cellPhotoExport — photo registration
+    { 0xd3b10cbd, "cellPhotoExport", "cellPhotoRegistFromFile" },
+    { 0xb29f2aed, "cellPhotoExport", "cellPhotoExportInitialize" },
+    { 0x8d422d8b, "cellPhotoExport", "cellPhotoExportFinalize" },
+
+    // cellRemotePlay / cellBgdl / cellGameUpdate
+    { 0xed1c0428, "cellRemotePlay", "cellRemotePlayGetStatus" },
+    { 0xf09e1d35, "cellBgdl", "cellBgdlGetInfo" },
+    { 0xae299ba5, "cellGameUpdate", "cellGameUpdateInit" },
+    { 0x00e38e0b, "cellGameUpdate", "cellGameUpdateTerm" },
+    { 0x4b88c75a, "cellGameUpdate", "cellGameUpdateCheckStartAsync" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {
