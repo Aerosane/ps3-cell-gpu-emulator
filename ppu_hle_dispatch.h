@@ -1943,6 +1943,146 @@ struct PpuHleDispatcher {
         } else if (e.name == "cellDmuxEnableEs" || e.name == "cellDmuxDisableEs") {
             retval = 0;
 
+        // ── cellAvconfExt — audio/video config ───────────────────────
+        } else if (e.name == "cellVideoOutGetDeviceInfo") {
+            // r3 = videoOut (0=PRIMARY), r4 = ptr to CellVideoOutDeviceInfo
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 32 <= memSize) {
+                std::memset(mem + ptr, 0, 32);
+                // portType=HDMI(1), colorSpace=RGB(1)
+                mem[ptr] = 1;     // portType
+                mem[ptr+4] = 1;   // colorSpace
+            }
+            retval = 0;
+        } else if (e.name == "cellVideoOutGetNumberOfDevice") {
+            retval = 1;  // 1 device (primary display)
+        } else if (e.name == "cellVideoOutGetResolutionAvailability") {
+            retval = 1;  // all resolutions "available"
+        } else if (e.name == "cellVideoOutGetState") {
+            // r3 = videoOut, r4 = deviceIndex, r5 = ptr to CellVideoOutState
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                // state=2 (ENABLED), colorMode=1 (32bit), resolutionId=2 (720p)
+                mem[ptr]   = 2;   // state
+                mem[ptr+4] = 1;   // colorMode
+                mem[ptr+8] = 0; mem[ptr+9] = 2; // resolutionId=2 (720p) big-endian
+            }
+            retval = 0;
+        } else if (e.name == "cellVideoOutConfigure") {
+            retval = 0;  // success
+        } else if (e.name == "cellAudioOutGetState") {
+            // r3 = audioOut, r4 = deviceIndex, r5 = ptr to CellAudioOutState
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                mem[ptr] = 2;   // state = ENABLED
+                mem[ptr+4] = 1; // encoder = LPCM
+                mem[ptr+8] = 2; // channels = stereo
+            }
+            retval = 0;
+        } else if (e.name == "cellAudioOutConfigure" ||
+                   e.name == "cellAudioOutGetSoundAvailability") {
+            retval = (e.name == "cellAudioOutGetSoundAvailability") ? 8 : 0;
+        } else if (e.name == "cellAudioOutGetDeviceInfo") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.name == "cellAudioOutGetNumberOfDevice") {
+            retval = 1;  // 1 audio output
+
+        // ── cellSync2 — enhanced sync primitives ─────────────────────
+        } else if (e.name == "cellSync2MutexNew") {
+            // r3 = ptr to mutex struct, zero-init it
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.name == "cellSync2MutexLock" ||
+                   e.name == "cellSync2MutexUnlock" ||
+                   e.name == "cellSync2MutexTryLock") {
+            retval = 0;  // single-threaded: always succeeds
+        } else if (e.name == "cellSync2QueueNew") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 128 <= memSize) std::memset(mem + ptr, 0, 128);
+            retval = 0;
+        } else if (e.name == "cellSync2QueuePush" ||
+                   e.name == "cellSync2QueueTryPush") {
+            retval = 0;
+        } else if (e.name == "cellSync2QueuePop" ||
+                   e.name == "cellSync2QueueTryPop") {
+            retval = (int32_t)0x80410101;  // CELL_SYNC2_ERROR_EMPTY
+        } else if (e.name == "cellSync2QueueGetSize") {
+            retval = 0;  // empty
+
+        // ── cellVideoExport ──────────────────────────────────────────
+        } else if (e.name == "cellVideoExportInitialize" ||
+                   e.name == "cellVideoExportFinalize") {
+            retval = 0;
+        } else if (e.name == "cellVideoExportProgress") {
+            retval = 100;  // 100% done (stub)
+
+        // ── cellPhotoImport ──────────────────────────────────────────
+        } else if (e.name == "cellPhotoImportInitialize" ||
+                   e.name == "cellPhotoImportFinalize") {
+            retval = 0;
+        } else if (e.name == "cellPhotoImportSelectImage") {
+            retval = (int32_t)0x80028b01;  // CELL_PHOTO_IMPORT_ERROR_CANCEL
+
+        // ── cellNetCtlExt — extended network ─────────────────────────
+        } else if (e.name == "cellNetCtlGetNatInfo") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                mem[ptr] = 3;  // NAT type 3 (strict — offline)
+            }
+            retval = 0;
+        } else if (e.name == "cellNetCtlGetIfAddr") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                std::memcpy(mem + ptr, "0.0.0.0", 7);
+            }
+            retval = 0;
+        } else if (e.name == "cellNetCtlNetStartDialogLoadAsync" ||
+                   e.name == "cellNetCtlNetStartDialogAbortAsync" ||
+                   e.name == "cellNetCtlNetStartDialogUnloadAsync") {
+            retval = 0;
+
+        // ── sys_io — controller I/O ──────────────────────────────────
+        } else if (e.name == "sys_io_pad_get_capability") {
+            retval = 0;  // no special capabilities
+        } else if (e.name == "sys_io_pad_set_press_mode") {
+            retval = 0;
+        } else if (e.name == "sys_io_pad_clear_buf") {
+            retval = 0;
+        } else if (e.name == "sys_io_pad_get_data" ||
+                   e.name == "sys_io_pad_get_data_extra") {
+            // r3 = port, r4 = ptr to CellPadData (zero = no input)
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = 0;
+
+        // ── cellL10n — single-char conversion ────────────────────────
+        } else if (e.name == "UTF8toUCS2") {
+            // r3 = ptr to utf8 byte(s), r4 = ptr to ucs2 output
+            // Simple: just copy first byte as UCS-2
+            uint32_t src = (uint32_t)st.gpr[3];
+            uint32_t dst = (uint32_t)st.gpr[4];
+            if (src < memSize && dst + 2 <= memSize) {
+                uint16_t c = (uint16_t)mem[src];
+                mem[dst] = (uint8_t)(c >> 8);
+                mem[dst+1] = (uint8_t)(c & 0xFF);
+            }
+            retval = 1;  // 1 byte consumed
+        } else if (e.name == "UCS2toUTF8") {
+            uint32_t src = (uint32_t)st.gpr[3];
+            uint32_t dst = (uint32_t)st.gpr[4];
+            if (src + 2 <= memSize && dst < memSize) {
+                uint16_t c = ((uint16_t)mem[src] << 8) | mem[src+1];
+                mem[dst] = (uint8_t)(c & 0x7F);
+            }
+            retval = 1;  // 1 byte written
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

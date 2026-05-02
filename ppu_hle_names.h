@@ -676,6 +676,54 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0xABBBB443, "cellDmux", "cellDmuxResetStream" },
     { 0x181D1978, "cellDmux", "cellDmuxEnableEs" },
     { 0x022DDA52, "cellDmux", "cellDmuxDisableEs" },
+
+    // ── cellAvconfExt — audio/video config extras ────────────────
+    { 0x9df98130, "cellAvconfExt", "cellVideoOutGetDeviceInfo" },
+    { 0x1e930eef, "cellAvconfExt", "cellVideoOutGetNumberOfDevice" },
+    { 0x75bbb672, "cellAvconfExt", "cellVideoOutGetResolutionAvailability" },
+    { 0x887572d5, "cellAvconfExt", "cellVideoOutGetState" },
+    { 0x0bae8772, "cellAvconfExt", "cellVideoOutConfigure" },
+    { 0x15b0b0cd, "cellAvconfExt", "cellAudioOutGetState" },
+    { 0x4692ab35, "cellAvconfExt", "cellAudioOutConfigure" },
+    { 0xa0e6fdf0, "cellAvconfExt", "cellAudioOutGetSoundAvailability" },
+    { 0xa5927fc5, "cellAvconfExt", "cellAudioOutGetDeviceInfo" },
+    { 0x7794d7e7, "cellAvconfExt", "cellAudioOutGetNumberOfDevice" },
+
+    // ── cellSync2 — enhanced sync primitives ─────────────────────
+    { 0x55836e73, "cellSync2", "cellSync2MutexNew" },
+    { 0x5551b4df, "cellSync2", "cellSync2MutexLock" },
+    { 0x5551b540, "cellSync2", "cellSync2MutexUnlock" },
+    { 0x5551b56c, "cellSync2", "cellSync2MutexTryLock" },
+    { 0xa661b35c, "cellSync2", "cellSync2QueueNew" },
+    { 0xa661b4d0, "cellSync2", "cellSync2QueuePush" },
+    { 0xa661b4e8, "cellSync2", "cellSync2QueueTryPush" },
+    { 0xa661b500, "cellSync2", "cellSync2QueuePop" },
+    { 0xa661b518, "cellSync2", "cellSync2QueueTryPop" },
+    { 0xa661b530, "cellSync2", "cellSync2QueueGetSize" },
+
+    // ── cellVideoExport — video export stubs ─────────────────────
+    { 0xe7998490, "cellVideoExport", "cellVideoExportInitialize" },
+    { 0x12998e3a, "cellVideoExport", "cellVideoExportFinalize" },
+    { 0x3cf0b78e, "cellVideoExport", "cellVideoExportProgress" },
+
+    // ── cellPhotoImport — photo import stubs ─────────────────────
+    { 0x0783bce0, "cellPhotoImport", "cellPhotoImportInitialize" },
+    { 0x1c231710, "cellPhotoImport", "cellPhotoImportFinalize" },
+    { 0x59405c00, "cellPhotoImport", "cellPhotoImportSelectImage" },
+
+    // ── cellNetCtlExt — extended network ─────────────────────────
+    { 0xca8cd5b7, "cellNetCtlExt", "cellNetCtlGetNatInfo" },
+    { 0x3b23dbd0, "cellNetCtlExt", "cellNetCtlGetIfAddr" },
+    { 0x2a72ed91, "cellNetCtlExt", "cellNetCtlNetStartDialogLoadAsync" },
+    { 0x7e4a2c6e, "cellNetCtlExt", "cellNetCtlNetStartDialogAbortAsync" },
+    { 0x6f000e53, "cellNetCtlExt", "cellNetCtlNetStartDialogUnloadAsync" },
+
+    // ── sys_io — controller/keyboard/mouse I/O ───────────────────
+    { 0x3733ea3c, "sys_io", "sys_io_pad_get_capability" },
+    { 0x1cf98800, "sys_io", "sys_io_pad_set_press_mode" },
+    { 0x578e3c98, "sys_io", "sys_io_pad_clear_buf" },
+    { 0xa703a917, "sys_io", "sys_io_pad_get_data" },
+    { 0x6bc09c61, "sys_io", "sys_io_pad_get_data_extra" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {
