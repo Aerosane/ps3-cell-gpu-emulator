@@ -2083,6 +2083,167 @@ struct PpuHleDispatcher {
             }
             retval = 1;  // 1 byte written
 
+        // ── cellGem (PlayStation Move) ───────────────────────────────
+        } else if (e.name == "cellGemInit") {
+            retval = 0;
+        } else if (e.name == "cellGemEnd" || e.name == "cellGemReset" ||
+                   e.name == "cellGemCalibrate" ||
+                   e.name == "cellGemEnableCameraPitchAngleCorrection" ||
+                   e.name == "cellGemUpdateStart" || e.name == "cellGemUpdateFinish") {
+            retval = 0;
+        } else if (e.name == "cellGemGetState") {
+            // r3 = gem_num, r4 = ptr to state, r5 = flag
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = (int32_t)0x80121806;  // CELL_GEM_ERROR_NOT_CONNECTED
+        } else if (e.name == "cellGemGetInfo") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 32 <= memSize) {
+                std::memset(mem + ptr, 0, 32);
+                // max_connect=0 (no Move controllers)
+            }
+            retval = 0;
+        } else if (e.name == "cellGemGetTrackerHue") {
+            retval = 0;
+
+        // ── cellMove ─────────────────────────────────────────────────
+        } else if (e.name == "cellMoveInit" || e.name == "cellMoveEnd" ||
+                   e.name == "cellMoveStart" || e.name == "cellMoveStop") {
+            retval = 0;
+
+        // ── cellOvis ─────────────────────────────────────────────────
+        } else if (e.name == "cellOvisInitialize" || e.name == "cellOvisFinalize") {
+            retval = 0;
+        } else if (e.name == "cellOvisGetStatus") {
+            retval = 0;
+
+        // ── cellCamera ───────────────────────────────────────────────
+        } else if (e.name == "cellCameraInit" || e.name == "cellCameraEnd") {
+            retval = 0;
+        } else if (e.name == "cellCameraOpen" || e.name == "cellCameraClose" ||
+                   e.name == "cellCameraStart" || e.name == "cellCameraStop") {
+            retval = 0;
+        } else if (e.name == "cellCameraGetDeviceGUID") {
+            retval = 0;
+        } else if (e.name == "cellCameraGetType") {
+            // r3 = devNum, r4 = ptr to type output
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t v = 0; // no camera
+                std::memcpy(mem + ptr, &v, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellCameraIsAvailable") {
+            retval = 0;  // not available
+
+        // ── cellResc (Resolution Scaler) ─────────────────────────────
+        } else if (e.name == "cellRescInit") {
+            retval = 0;
+        } else if (e.name == "cellRescExit") {
+            retval = 0;
+        } else if (e.name == "cellRescSetDisplayMode" || e.name == "cellRescSetConvertAndFlip" ||
+                   e.name == "cellRescSetBufferAddress" || e.name == "cellRescSetSrc" ||
+                   e.name == "cellRescSetDsts") {
+            retval = 0;
+        } else if (e.name == "cellRescGetNumColorBuffers") {
+            retval = 2;  // double buffer
+        } else if (e.name == "cellRescGetFlipStatus") {
+            retval = 0;  // ready
+        } else if (e.name == "cellRescResetFlipStatus") {
+            retval = 0;
+
+        // ── cellPamf (PS3 media format) ──────────────────────────────
+        } else if (e.name == "cellPamfReaderInitialize") {
+            retval = 0;
+        } else if (e.name == "cellPamfReaderGetNumberOfStreams") {
+            retval = 0;  // no streams
+        } else if (e.name == "cellPamfReaderGetStreamTypeCoding") {
+            retval = 0;
+        } else if (e.name == "cellPamfReaderSetStreamWithTypeAndIndex" ||
+                   e.name == "cellPamfReaderGetStreamIndex") {
+            retval = 0;
+        } else if (e.name == "cellPamfReaderGetNumberOfSpecificStreams") {
+            retval = 0;
+        } else if (e.name == "cellPamfStreamGetInfo") {
+            retval = 0;
+
+        // ── sceNpUtil ────────────────────────────────────────────────
+        } else if (e.name == "sceNpUtilBandwidthTestInitStart") {
+            retval = 0;
+        } else if (e.name == "sceNpUtilBandwidthTestGetStatus") {
+            retval = 100;  // complete
+        } else if (e.name == "sceNpUtilBandwidthTestShutdown") {
+            retval = 0;
+
+        // ── sceNpSignaling ───────────────────────────────────────────
+        } else if (e.name == "sceNpSignalingCreateCtx") {
+            // r3 = ptr to npId, r4 = handler, r5 = arg, r6 = ptr to ctxId
+            uint32_t ptr = (uint32_t)st.gpr[6];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sceNpSignalingDestroyCtx") {
+            retval = 0;
+        } else if (e.name == "sceNpSignalingActivateConnection" ||
+                   e.name == "sceNpSignalingDeactivateConnection") {
+            retval = 0;
+        } else if (e.name == "sceNpSignalingGetLocalNetInfo") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+
+        // ── sceNpClans ───────────────────────────────────────────────
+        } else if (e.name == "sceNpClansInit" || e.name == "sceNpClansTerm") {
+            retval = 0;
+        } else if (e.name == "sceNpClansCreateRequest") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sceNpClansDestroyRequest") {
+            retval = 0;
+
+        // ── cellSpursTrace ───────────────────────────────────────────
+        } else if (e.name == "cellSpursTraceInitialize" ||
+                   e.name == "cellSpursTraceFinalize" ||
+                   e.name == "cellSpursTraceStart" ||
+                   e.name == "cellSpursTraceStop") {
+            retval = 0;
+
+        // ── cellCrossController ──────────────────────────────────────
+        } else if (e.name == "cellCrossControllerInitialize" ||
+                   e.name == "cellCrossControllerFinalize") {
+            retval = 0;
+
+        // ── cellSysconf ──────────────────────────────────────────────
+        } else if (e.name == "cellSysconfAbort") {
+            retval = 0;
+        } else if (e.name == "cellSysconfBtGetDeviceList") {
+            // r3 = ptr to device list, zero-fill (no BT devices)
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = 0;
+        } else if (e.name == "cellSysconfGetIntegerVariable") {
+            retval = 0;
+
+        // ── cellMusicExport ──────────────────────────────────────────
+        } else if (e.name == "cellMusicExportInitialize" ||
+                   e.name == "cellMusicExportFinalize") {
+            retval = 0;
+        } else if (e.name == "cellMusicExportProgress") {
+            retval = 100;
+
+        // ── cellPhotoUtility ─────────────────────────────────────────
+        } else if (e.name == "cellPhotoInitialize" ||
+                   e.name == "cellPhotoFinalize") {
+            retval = 0;
+        } else if (e.name == "cellPhotoRegistFromFile") {
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

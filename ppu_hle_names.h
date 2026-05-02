@@ -724,6 +724,104 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0x578e3c98, "sys_io", "sys_io_pad_clear_buf" },
     { 0xa703a917, "sys_io", "sys_io_pad_get_data" },
     { 0x6bc09c61, "sys_io", "sys_io_pad_get_data_extra" },
+
+    // ── cellGem (PlayStation Move) ───────────────────────────────
+    { 0xabb4b268, "cellGem", "cellGemInit" },
+    { 0xa8bc1648, "cellGem", "cellGemEnd" },
+    { 0x3e24e759, "cellGem", "cellGemGetState" },
+    { 0x13ea53e7, "cellGem", "cellGemGetInfo" },
+    { 0x6a666297, "cellGem", "cellGemGetTrackerHue" },
+    { 0xfb5887f9, "cellGem", "cellGemCalibrate" },
+    { 0xe1f85a80, "cellGem", "cellGemEnableCameraPitchAngleCorrection" },
+    { 0xc7622586, "cellGem", "cellGemReset" },
+    { 0x6d245f02, "cellGem", "cellGemUpdateStart" },
+    { 0x3507f03b, "cellGem", "cellGemUpdateFinish" },
+
+    // ── cellMove (PS Move controller) ────────────────────────────
+    { 0x9eb07a5b, "cellMove", "cellMoveInit" },
+    { 0xadee0a65, "cellMove", "cellMoveEnd" },
+    { 0x82cfb3d1, "cellMove", "cellMoveStart" },
+    { 0xd37b8e36, "cellMove", "cellMoveStop" },
+
+    // ── cellOvis (visual development) ────────────────────────────
+    { 0xcc78cd7b, "cellOvis", "cellOvisInitialize" },
+    { 0x2e70a5a1, "cellOvis", "cellOvisFinalize" },
+    { 0x71894bfa, "cellOvis", "cellOvisGetStatus" },
+
+    // ── cellCamera ───────────────────────────────────────────────
+    { 0x36e1e930, "cellCamera", "cellCameraInit" },
+    { 0x20f3f498, "cellCamera", "cellCameraEnd" },
+    { 0x5de25cd1, "cellCamera", "cellCameraOpen" },
+    { 0x379c5dd6, "cellCamera", "cellCameraClose" },
+    { 0x40f6ead6, "cellCamera", "cellCameraStart" },
+    { 0xa6b20b8c, "cellCamera", "cellCameraStop" },
+    { 0x60237200, "cellCamera", "cellCameraGetDeviceGUID" },
+    { 0x10697d02, "cellCamera", "cellCameraGetType" },
+    { 0xb0647e5a, "cellCamera", "cellCameraIsAvailable" },
+
+    // ── cellResc (Resolution Scaler) ─────────────────────────────
+    { 0x7f3c66b0, "cellResc", "cellRescInit" },
+    { 0x25c107e6, "cellResc", "cellRescExit" },
+    { 0x10db5b1a, "cellResc", "cellRescSetDisplayMode" },
+    { 0x0d3c22ce, "cellResc", "cellRescSetConvertAndFlip" },
+    { 0x1d7deee6, "cellResc", "cellRescSetBufferAddress" },
+    { 0x01220224, "cellResc", "cellRescSetSrc" },
+    { 0x5a338e69, "cellResc", "cellRescSetDsts" },
+    { 0x516ee89e, "cellResc", "cellRescGetNumColorBuffers" },
+    { 0x2ea3061e, "cellResc", "cellRescGetFlipStatus" },
+    { 0xaa8b2baa, "cellResc", "cellRescResetFlipStatus" },
+
+    // ── cellPamf (PS3 media format) ──────────────────────────────
+    { 0x90fc9a36, "cellPamf", "cellPamfReaderInitialize" },
+    { 0xd1a40ef4, "cellPamf", "cellPamfReaderGetNumberOfStreams" },
+    { 0x041a5c89, "cellPamf", "cellPamfReaderGetStreamTypeCoding" },
+    { 0x28b4e2c1, "cellPamf", "cellPamfReaderSetStreamWithTypeAndIndex" },
+    { 0x45d62a3b, "cellPamf", "cellPamfReaderGetStreamIndex" },
+    { 0x461534a4, "cellPamf", "cellPamfReaderGetNumberOfSpecificStreams" },
+    { 0xd6a50759, "cellPamf", "cellPamfStreamGetInfo" },
+
+    // ── sceNpUtil — NP utilities ─────────────────────────────────
+    { 0x05af7b56, "sceNpUtil", "sceNpUtilBandwidthTestInitStart" },
+    { 0xaa9a4c83, "sceNpUtil", "sceNpUtilBandwidthTestGetStatus" },
+    { 0xfade2b8d, "sceNpUtil", "sceNpUtilBandwidthTestShutdown" },
+
+    // ── sceNpSignaling — NP signaling ────────────────────────────
+    { 0xa3c4ddeb, "sceNpSignaling", "sceNpSignalingCreateCtx" },
+    { 0x7db3e905, "sceNpSignaling", "sceNpSignalingDestroyCtx" },
+    { 0x55e42a79, "sceNpSignaling", "sceNpSignalingActivateConnection" },
+    { 0x7d5a4a87, "sceNpSignaling", "sceNpSignalingDeactivateConnection" },
+    { 0xa10fedd3, "sceNpSignaling", "sceNpSignalingGetLocalNetInfo" },
+
+    // ── sceNpClans — NP clans ────────────────────────────────────
+    { 0xaa79031d, "sceNpClans", "sceNpClansInit" },
+    { 0x1f51ae44, "sceNpClans", "sceNpClansTerm" },
+    { 0x6e24f290, "sceNpClans", "sceNpClansCreateRequest" },
+    { 0x3c67c847, "sceNpClans", "sceNpClansDestroyRequest" },
+
+    // ── cellSpursTrace — SPURS tracing ───────────────────────────
+    { 0x72ec1bf4, "cellSpursTrace", "cellSpursTraceInitialize" },
+    { 0x2db41dea, "cellSpursTrace", "cellSpursTraceFinalize" },
+    { 0x9cae4fdc, "cellSpursTrace", "cellSpursTraceStart" },
+    { 0x04a6bd22, "cellSpursTrace", "cellSpursTraceStop" },
+
+    // ── cellCrossController — cross-controller ───────────────────
+    { 0x174ece14, "cellCrossController", "cellCrossControllerInitialize" },
+    { 0x7adf3bab, "cellCrossController", "cellCrossControllerFinalize" },
+
+    // ── cellSysconf — system config ──────────────────────────────
+    { 0x00753e2a, "cellSysconf", "cellSysconfAbort" },
+    { 0x0beecf67, "cellSysconf", "cellSysconfBtGetDeviceList" },
+    { 0xac410de9, "cellSysconf", "cellSysconfGetIntegerVariable" },
+
+    // ── cellMusicExport — music export ───────────────────────────
+    { 0xe8ad3dd4, "cellMusicExport", "cellMusicExportInitialize" },
+    { 0x4ab73a73, "cellMusicExport", "cellMusicExportFinalize" },
+    { 0x61ead640, "cellMusicExport", "cellMusicExportProgress" },
+
+    // ── cellPhotoUtility — photo utility ─────────────────────────
+    { 0x5caa19e7, "cellPhotoUtility", "cellPhotoInitialize" },
+    { 0xd46fa1f7, "cellPhotoUtility", "cellPhotoFinalize" },
+    { 0x2ff6e155, "cellPhotoUtility", "cellPhotoRegistFromFile" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {
