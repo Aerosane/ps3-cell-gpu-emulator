@@ -448,6 +448,54 @@ struct FPEmitter {
             }
             break;
 
+        // Pack/unpack opcodes
+        case FP_PK4:
+            emit1("vec4(uintBitsToFloat(packUnorm4x8(" + s0 + ")))");
+            break;
+        case FP_UP4:
+            emit1("unpackUnorm4x8(floatBitsToUint(" + s0 + ".x)))");
+            break;
+        case FP_PK2:
+            emit1("vec4(uintBitsToFloat(packHalf2x16(" + s0 + ".xy)))");
+            break;
+        case FP_UP2:
+            emit1("vec4(unpackHalf2x16(floatBitsToUint(" + s0 + ".x)), 0.0, 1.0)");
+            break;
+        case FP_PK16:
+            emit1("vec4(uintBitsToFloat(packUnorm2x16(" + s0 + ".xy)))");
+            break;
+        case FP_UP16:
+            emit1("vec4(unpackUnorm2x16(floatBitsToUint(" + s0 + ".x)), 0.0, 1.0)");
+            break;
+        case FP_PKB: case FP_UPB:
+        case FP_PKG: case FP_UPG:
+            emit1(s0); // passthrough for rare variants
+            break;
+
+        // Bump/environment map
+        case FP_BEM:
+            emit1(s0 + " + " + s1);
+            break;
+        case FP_TEXBEM:
+        case FP_TXPBEM: {
+            std::string tex = "tex" + std::to_string(insn.texUnit);
+            texUnitsMask |= (1 << insn.texUnit);
+            emit1("texture(" + tex + ", " + s0 + ".xy)");
+            break;
+        }
+        case FP_BEMLUM:
+            emit1(s0 + " + " + s1);
+            break;
+        case FP_TIMESWTEX:
+            emit1(s0); // passthrough stub
+            break;
+
+        // Texture/branch fence — no-ops
+        case FP_FENCT:
+        case FP_FENCB:
+            code += indent() + "// fence (no-op)\n";
+            break;
+
         default:
             code += indent() + "// UNHANDLED fp op 0x" + std::to_string(insn.opcode) + "\n";
             break;
@@ -817,8 +865,114 @@ inline void fp_execute(const uint32_t* fpData, uint32_t fpMaxWords,
                 return;
             }
             continue;
+
+        // ── Pack/unpack opcodes ──────────────────────────────────
+        case FP_PK4: {
+            // Pack 4 floats [0,1] into 4 unsigned bytes → stored as float bits
+            uint32_t packed = 0;
+            for (int k = 0; k < 4; k++) {
+                float c = s0[k] < 0 ? 0 : (s0[k] > 1 ? 1 : s0[k]);
+                packed |= ((uint32_t)(c * 255.0f + 0.5f) & 0xFF) << (k * 8);
+            }
+            float f; memcpy(&f, &packed, 4);
+            r[0] = r[1] = r[2] = r[3] = f;
+            break;
+        }
+        case FP_UP4: {
+            // Unpack float-as-bits → 4 unsigned bytes → [0,1]
+            uint32_t packed; memcpy(&packed, &s0[0], 4);
+            r[0] = ((packed >>  0) & 0xFF) / 255.0f;
+            r[1] = ((packed >>  8) & 0xFF) / 255.0f;
+            r[2] = ((packed >> 16) & 0xFF) / 255.0f;
+            r[3] = ((packed >> 24) & 0xFF) / 255.0f;
+            break;
+        }
+        case FP_PK2: {
+            // Pack 2 floats into 2 × float16 bits → stored as float bits
+            auto f32_to_f16 = [](float v) -> uint16_t {
+                uint32_t b; memcpy(&b, &v, 4);
+                uint32_t s = (b >> 16) & 0x8000;
+                int32_t e = ((b >> 23) & 0xFF) - 127 + 15;
+                uint32_t m = b & 0x7FFFFF;
+                if (e <= 0) return (uint16_t)s;
+                if (e >= 31) return (uint16_t)(s | 0x7C00);
+                return (uint16_t)(s | (e << 10) | (m >> 13));
+            };
+            uint32_t packed = f32_to_f16(s0[0]) | ((uint32_t)f32_to_f16(s0[1]) << 16);
+            float f; memcpy(&f, &packed, 4);
+            r[0] = r[1] = r[2] = r[3] = f;
+            break;
+        }
+        case FP_UP2: {
+            // Unpack float16×2 from float bits
+            auto f16_to_f32 = [](uint16_t h) -> float {
+                uint32_t s = (h & 0x8000) << 16;
+                uint32_t e = (h >> 10) & 0x1F;
+                uint32_t m = h & 0x3FF;
+                if (e == 0) return 0.0f;
+                if (e == 31) { uint32_t b = s | 0x7F800000; float f; memcpy(&f, &b, 4); return f; }
+                uint32_t b = s | ((e + 112) << 23) | (m << 13);
+                float f; memcpy(&f, &b, 4); return f;
+            };
+            uint32_t packed; memcpy(&packed, &s0[0], 4);
+            r[0] = f16_to_f32((uint16_t)(packed & 0xFFFF));
+            r[1] = f16_to_f32((uint16_t)(packed >> 16));
+            r[2] = 0.0f; r[3] = 1.0f;
+            break;
+        }
+        case FP_PK16: {
+            // Pack 2 floats → 2 × unsigned 16-bit normalized
+            auto f_to_u16 = [](float v) -> uint16_t {
+                float c = v < 0 ? 0 : (v > 1 ? 1 : v);
+                return (uint16_t)(c * 65535.0f + 0.5f);
+            };
+            uint32_t packed = f_to_u16(s0[0]) | ((uint32_t)f_to_u16(s0[1]) << 16);
+            float f; memcpy(&f, &packed, 4);
+            r[0] = r[1] = r[2] = r[3] = f;
+            break;
+        }
+        case FP_UP16: {
+            // Unpack 2 × unsigned 16-bit normalized
+            uint32_t packed; memcpy(&packed, &s0[0], 4);
+            r[0] = (packed & 0xFFFF) / 65535.0f;
+            r[1] = (packed >> 16) / 65535.0f;
+            r[2] = 0.0f; r[3] = 1.0f;
+            break;
+        }
+        case FP_PKB: case FP_UPB:
+        case FP_PKG: case FP_UPG:
+            // Rare packing variants — pass through or zero
+            for (int k = 0; k < 4; ++k) r[k] = s0[k];
+            break;
+
+        // ── Bump/environment map opcodes (stubs) ─────────────────
+        case FP_BEM:
+            // Bump environment map: dst = s0 + mat2×s1 — without the 2×2 matrix,
+            // treat as simple addition (close enough for visual correctness)
+            for (int k = 0; k < 4; ++k) r[k] = s0[k] + s1[k];
+            break;
+        case FP_TEXBEM:
+        case FP_TXPBEM:
+            // BEM + texture sample — just sample with s0 coords
+            { float uvw[3] = { s0[0], s0[1], s0[2] };
+              if (sampler) sampler(samplerUserdata, insn.texUnit, uvw, r); }
+            break;
+        case FP_BEMLUM:
+            // BEM + luminance multiply — stub as BEM
+            for (int k = 0; k < 4; ++k) r[k] = s0[k] + s1[k];
+            break;
+        case FP_TIMESWTEX:
+            // Multiply src0 by texcoord W component — stub as passthrough
+            for (int k = 0; k < 4; ++k) r[k] = s0[k];
+            break;
+
+        // ── Flow control fence (no-ops in interpreter) ───────────
+        case FP_FENCT:
+        case FP_FENCB:
+            continue; // texture/branch fence — no-op
+
         default:
-            // Unsupported (flow control, packing) — leave zero.
+            // Unsupported (remaining flow control) — leave zero.
             for (int k = 0; k < 4; ++k) r[k] = 0.0f;
             break;
         }
