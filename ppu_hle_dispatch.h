@@ -1370,6 +1370,107 @@ struct PpuHleDispatcher {
         } else if (e.name == "sceNpCommerce2Init" || e.name == "sceNpCommerce2Term") {
             retval = 0;
 
+        // ═══ cellRtc — real-time clock ═══
+        } else if (e.name == "cellRtcGetCurrentTick") {
+            // r3 = CellRtcTick* (uint64_t big-endian)
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 8 <= memSize) {
+                // ~2024 epoch in microseconds from 0001-01-01
+                uint64_t tick = 0x000DC46C0D3B3600ULL + virtTime;
+                for (int i = 0; i < 8; i++) mem[ptr+i] = (uint8_t)(tick >> (56 - 8*i));
+            }
+            virtTime += 16667; // advance ~1 frame
+            retval = 0;
+        } else if (e.name == "cellRtcGetCurrentClockLocalTime" || e.name == "cellRtcGetCurrentClock") {
+            // r3 = CellRtcDateTime* (16 bytes)
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                // year=2024, month=6, day=15, hour=12, min=0, sec=0
+                mem[ptr+0] = 0x07; mem[ptr+1] = 0xE8; // year BE 2024
+                mem[ptr+2] = 0x00; mem[ptr+3] = 6;     // month
+                mem[ptr+4] = 0x00; mem[ptr+5] = 15;    // day
+                mem[ptr+6] = 0x00; mem[ptr+7] = 12;    // hour
+            }
+            retval = 0;
+        } else if (e.name == "cellRtcConvertLocalTimeToUtc" || e.name == "cellRtcConvertUtcToLocalTime") {
+            // r3 = src tick*, r4 = dst tick*  — just copy (no timezone offset)
+            uint64_t src = st.gpr[3], dst = st.gpr[4];
+            if (src && dst && src + 8 <= memSize && dst + 8 <= memSize) {
+                std::memcpy(mem + dst, mem + src, 8);
+            }
+            retval = 0;
+        } else if (e.name == "cellRtcGetTick") {
+            // r3 = CellRtcDateTime*, r4 = CellRtcTick* — fake tick output
+            uint64_t ptr = st.gpr[4];
+            if (ptr && ptr + 8 <= memSize) {
+                uint64_t tick = 0x000DC46C0D3B3600ULL;
+                for (int i = 0; i < 8; i++) mem[ptr+i] = (uint8_t)(tick >> (56 - 8*i));
+            }
+            retval = 0;
+        } else if (e.name == "cellRtcSetTick") {
+            retval = 0;
+        } else if (e.name == "cellRtcTickAddSeconds" || e.name == "cellRtcTickAddMinutes") {
+            // r3 = dst tick*, r4 = src tick*, r5 = delta
+            uint64_t dst = st.gpr[3], src = st.gpr[4];
+            if (src && dst && src + 8 <= memSize && dst + 8 <= memSize) {
+                uint64_t tick = 0;
+                for (int i = 0; i < 8; i++) tick = (tick << 8) | mem[src+i];
+                uint64_t delta = st.gpr[5];
+                if (e.name == "cellRtcTickAddMinutes") delta *= 60;
+                tick += delta * 1000000ULL;
+                for (int i = 0; i < 8; i++) mem[dst+i] = (uint8_t)(tick >> (56 - 8*i));
+            }
+            retval = 0;
+        } else if (e.name == "cellRtcFormatRfc2822") {
+            retval = 0; // no-op (buffer left empty)
+        } else if (e.name == "cellRtcIsLeapYear") {
+            uint32_t year = (uint32_t)st.gpr[3];
+            st.gpr[4] = ((year % 4 == 0) && (year % 100 != 0 || year % 400 == 0)) ? 1 : 0;
+            retval = 0;
+        } else if (e.name == "cellRtcGetDaysInMonth") {
+            uint32_t year = (uint32_t)st.gpr[3];
+            uint32_t month = (uint32_t)st.gpr[4];
+            static const int days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+            int d = (month >= 1 && month <= 12) ? days[month-1] : 30;
+            if (month == 2 && ((year%4==0) && (year%100!=0 || year%400==0))) d = 29;
+            st.gpr[4] = d;
+            retval = 0;
+        } else if (e.name == "cellRtcGetDayOfWeek") {
+            st.gpr[4] = 0; // Monday
+            retval = 0;
+
+        // ═══ cellScreenshot ═══
+        } else if (e.name == "cellScreenShotEnable" || e.name == "cellScreenShotDisable" ||
+                   e.name == "cellScreenShotSetParameter" || e.name == "cellScreenShotSetOverlayImage") {
+            retval = 0;
+
+        // ═══ cellMic ═══
+        } else if (e.name == "cellMicInit" || e.name == "cellMicEnd" ||
+                   e.name == "cellMicOpen" || e.name == "cellMicClose") {
+            retval = 0;
+        } else if (e.name == "cellMicGetDeviceAttr") {
+            retval = (uint64_t)(int64_t)-1; // CELL_MIC_ERROR_DEVICE_NOT_FOUND
+
+        // ═══ cellSysCache ═══
+        } else if (e.name == "cellSysCacheMount") {
+            // r3 = CellSysCacheParam* — write cache path
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 512 <= memSize) {
+                // getCachePath offset = +4, write "/dev_hdd1/caches/"
+                const char* path = "/dev_hdd1/caches/";
+                for (int i = 0; path[i]; i++) mem[ptr + 4 + i] = path[i];
+                mem[ptr + 4 + 17] = 0;
+            }
+            retval = 1; // CELL_SYSCACHE_RET_OK_CLEARED
+        } else if (e.name == "cellSysCacheClear") {
+            retval = 0;
+
+        // ═══ cellUsbd / cellImeJp ═══
+        } else if (e.name == "cellUsbdInit" || e.name == "cellUsbdEnd" ||
+                   e.name == "cellImeJpOpen" || e.name == "cellImeJpClose") {
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

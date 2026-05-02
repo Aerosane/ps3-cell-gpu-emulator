@@ -385,6 +385,46 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     // sceNpCommerce2 — store stubs
     { 0xaaeae4a9, "sceNp", "sceNpCommerce2Init" },
     { 0x66da2edd, "sceNp", "sceNpCommerce2Term" },
+
+    // cellRtc — real-time clock
+    { 0x9148aab9, "cellRtc", "cellRtcGetCurrentTick" },
+    { 0x27ffb3e3, "cellRtc", "cellRtcGetCurrentClockLocalTime" },
+    { 0xd85c3c42, "cellRtc", "cellRtcGetCurrentClock" },
+    { 0x18466b0e, "cellRtc", "cellRtcConvertLocalTimeToUtc" },
+    { 0xead86714, "cellRtc", "cellRtcConvertUtcToLocalTime" },
+    { 0x9c1aa28d, "cellRtc", "cellRtcGetTick" },
+    { 0x7767eeb3, "cellRtc", "cellRtcSetTick" },
+    { 0xf8cf8759, "cellRtc", "cellRtcTickAddSeconds" },
+    { 0x17947909, "cellRtc", "cellRtcTickAddMinutes" },
+    { 0x9ab17608, "cellRtc", "cellRtcFormatRfc2822" },
+    { 0x49119def, "cellRtc", "cellRtcIsLeapYear" },
+    { 0x2bb6158e, "cellRtc", "cellRtcGetDaysInMonth" },
+    { 0xd68d676a, "cellRtc", "cellRtcGetDayOfWeek" },
+
+    // cellScreenshot — screenshot capture stubs
+    { 0x3ecc4646, "cellScreenshot", "cellScreenShotEnable" },
+    { 0xa58d3f77, "cellScreenshot", "cellScreenShotDisable" },
+    { 0xd1bb8d91, "cellScreenshot", "cellScreenShotSetParameter" },
+    { 0xdf3c9711, "cellScreenshot", "cellScreenShotSetOverlayImage" },
+
+    // cellMic — microphone stubs
+    { 0x1bf34275, "cellMic", "cellMicInit" },
+    { 0xb278948c, "cellMic", "cellMicEnd" },
+    { 0xe57b4e17, "cellMic", "cellMicOpen" },
+    { 0x287bf034, "cellMic", "cellMicClose" },
+    { 0x448f9a7c, "cellMic", "cellMicGetDeviceAttr" },
+
+    // cellSysCache — system cache mount/clear
+    { 0x83a4afca, "cellSysCache", "cellSysCacheMount" },
+    { 0x78f6204d, "cellSysCache", "cellSysCacheClear" },
+
+    // cellUsbd — USB device stubs
+    { 0x23658577, "cellUsbd", "cellUsbdInit" },
+    { 0x3782d73f, "cellUsbd", "cellUsbdEnd" },
+
+    // cellImeJp — IME Japanese input stubs
+    { 0x4cf28923, "cellImeJp", "cellImeJpOpen" },
+    { 0x2a9372c3, "cellImeJp", "cellImeJpClose" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {
