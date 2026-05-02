@@ -209,7 +209,104 @@ static uint32_t estimateTriangles(PrimitiveType prim, uint32_t vertexCount) {
 // ═══════════════════════════════════════════════════════════════════
 
 static void dispatchMethod(RSXState* state, uint8_t* vram,
-                           uint32_t method, uint32_t data) {
+                           uint32_t method, uint32_t data,
+                           uint32_t subchannel = 0) {
+
+    // ── NV3062/NV3089 2D engine (subchannels 4-6) ────────────────
+    // Must be checked BEFORE the NV4097 switch because method addresses
+    // 0x300-0x31C overlap with NV4097 dither/alpha/blend registers.
+    if (subchannel == 4) {
+        // NV3062 context surfaces
+        if (method == NV3062_SET_COLOR_FORMAT) {
+            state->blit2DSurface.colorFormat = data;
+        } else if (method == NV3062_SET_PITCH) {
+            state->blit2DSurface.pitch = data;
+        } else if (method == NV3062_SET_OFFSET_DESTIN) {
+            state->blit2DSurface.dstOffset = data;
+        }
+        return;
+    }
+    if (subchannel == 5 || subchannel == 6) {
+        // NV3089 scaled image from memory
+        if (method == NV3089_SET_CONTEXT_SURFACE) {
+            // links to NV3062 — single context, ignore
+        } else if (method == NV3089_SET_OPERATION) {
+            state->scaledImage.operation = data;
+        } else if (method == NV3089_SET_COLOR_FORMAT) {
+            state->scaledImage.colorFormat = data;
+        } else if (method == NV3089_CLIP_POINT) {
+            state->scaledImage.clipX = data & 0xFFFF;
+            state->scaledImage.clipY = (data >> 16) & 0xFFFF;
+        } else if (method == NV3089_CLIP_SIZE) {
+            state->scaledImage.clipW = data & 0xFFFF;
+            state->scaledImage.clipH = (data >> 16) & 0xFFFF;
+        } else if (method == NV3089_IMAGE_OUT_POINT) {
+            state->scaledImage.outX = data & 0xFFFF;
+            state->scaledImage.outY = (data >> 16) & 0xFFFF;
+        } else if (method == NV3089_IMAGE_OUT_SIZE) {
+            state->scaledImage.outW = data & 0xFFFF;
+            state->scaledImage.outH = (data >> 16) & 0xFFFF;
+        } else if (method == NV3089_DS_DX) {
+            state->scaledImage.dsDx = data;
+        } else if (method == NV3089_DT_DY) {
+            state->scaledImage.dtDy = data;
+        } else if (method == NV3089_IMAGE_IN_SIZE) {
+            state->scaledImage.inW = (data >> 16) & 0xFFFF;
+            state->scaledImage.inH = data & 0xFFFF;
+        } else if (method == NV3089_IMAGE_IN_FORMAT) {
+            state->scaledImage.inPitch = (data >> 16) & 0xFFFF;
+        } else if (method == NV3089_IMAGE_IN_OFFSET) {
+            state->scaledImage.inOffset = data;
+        } else if (method == NV3089_IMAGE_IN) {
+            // Trigger: execute the 2D scaled blit
+            auto& si  = state->scaledImage;
+            auto& dst = state->blit2DSurface;
+            if (vram && si.inW > 0 && si.inH > 0 && si.outW > 0 && si.outH > 0) {
+                uint32_t vramSz = state->vramSize;
+                uint32_t srcPitch = si.inPitch ? si.inPitch : (si.inW * 4);
+                uint32_t dstPitch = dst.pitch ? dst.pitch : (si.outW * 4);
+                uint32_t bpp = 4;  // A8R8G8B8
+
+                if (si.inW == si.outW && si.inH == si.outH) {
+                    // 1:1 copy — fast path
+                    uint32_t copyW = (si.clipW && si.clipW < si.inW) ? si.clipW : si.inW;
+                    uint32_t copyH = (si.clipH && si.clipH < si.inH) ? si.clipH : si.inH;
+                    uint32_t rowBytes = copyW * bpp;
+                    for (uint32_t y = 0; y < copyH; ++y) {
+                        uint32_t srcOff = si.inOffset + y * srcPitch;
+                        uint32_t dstOff = dst.dstOffset + (si.outY + y) * dstPitch + si.outX * bpp;
+                        if (srcOff + rowBytes <= vramSz && dstOff + rowBytes <= vramSz) {
+                            std::memmove(vram + dstOff, vram + srcOff, rowBytes);
+                        }
+                    }
+                } else {
+                    // Scaled blit — nearest-neighbor via dsDx/dtDy (20.12 fixed-point)
+                    uint32_t dsDx = si.dsDx ? si.dsDx : (1 << 20);
+                    uint32_t dtDy = si.dtDy ? si.dtDy : (1 << 20);
+                    uint32_t outW = si.outW;
+                    uint32_t outH = si.outH;
+                    if (si.clipW && si.clipW < outW) outW = si.clipW;
+                    if (si.clipH && si.clipH < outH) outH = si.clipH;
+                    for (uint32_t dy = 0; dy < outH; ++dy) {
+                        uint32_t sy = (dy * dtDy) >> 20;
+                        if (sy >= si.inH) sy = si.inH - 1;
+                        for (uint32_t dx = 0; dx < outW; ++dx) {
+                            uint32_t sx = (dx * dsDx) >> 20;
+                            if (sx >= si.inW) sx = si.inW - 1;
+                            uint32_t srcOff = si.inOffset + sy * srcPitch + sx * bpp;
+                            uint32_t dstOff = dst.dstOffset + (si.outY + dy) * dstPitch + (si.outX + dx) * bpp;
+                            if (srcOff + bpp <= vramSz && dstOff + bpp <= vramSz) {
+                                std::memcpy(vram + dstOff, vram + srcOff, bpp);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // ── NV4097 3D engine (subchannel 0) + NV0039 DMA (subchannel 3) ──
     // ── Surface setup ──────────────────────────────────────────
     switch (method) {
     case NV4097_SET_SURFACE_FORMAT:
@@ -865,7 +962,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         return;
     }
 
-    // ── NV0039 DMA buffer copy ────────────────────────────────────
+    // ── NV0039 DMA buffer copy (subchannel 3 or default) ──────────
     // Games use this for CPU↔VRAM blits (loading screens, XMB, SW render).
     // We accumulate parameters, then execute on BUFFER_NOTIFY.
     if (method == NV0039_OFFSET_IN) {
@@ -944,7 +1041,7 @@ int rsx_process_fifo(RSXState* state, const uint32_t* fifo, uint32_t fifoSize,
         uint32_t method = cmd.method;
         for (uint32_t i = 0; i < cmd.count && pos < fifoSize; i++) {
             uint32_t data = fifo[pos++];
-            dispatchMethod(state, vram, method, data);
+            dispatchMethod(state, vram, method, data, cmd.subchannel);
             state->cmdCount++;
             cmds++;
 

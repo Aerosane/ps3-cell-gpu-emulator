@@ -593,6 +593,167 @@ static void test_full_frame() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// TEST 7: NV3089 Scaled Image Blit (2D engine)
+// ═══════════════════════════════════════════════════════════════════
+
+static void test_nv3089_blit() {
+    printf("\n╔═══════════════════════════════════════════════╗\n");
+    printf("║  TEST 7: NV3089 Scaled Image Blit (2D)        ║\n");
+    printf("╚═══════════════════════════════════════════════╝\n");
+
+    RSXState state;
+    rsx_init(&state);
+    state.vramSize = 256 * 1024 * 1024;
+    uint8_t* vram = (uint8_t*)calloc(1, state.vramSize);
+
+    // ── Sub-test 7a: 1:1 blit (64x64 ARGB8, src→dst in VRAM) ──
+    {
+        const uint32_t SRC_OFF = 0x100000;  // 1MB into VRAM
+        const uint32_t DST_OFF = 0x200000;  // 2MB into VRAM
+        const uint32_t W = 64, H = 64;
+        const uint32_t PITCH = W * 4;
+
+        // Fill source with a recognizable pattern
+        for (uint32_t y = 0; y < H; ++y)
+            for (uint32_t x = 0; x < W; ++x) {
+                uint32_t pixel = 0xFF000000 | (y << 16) | (x << 8) | 0x42;
+                memcpy(vram + SRC_OFF + y * PITCH + x * 4, &pixel, 4);
+            }
+
+        // Build FIFO: NV3062 surface setup (subchannel 4) + NV3089 blit (subchannel 5)
+        uint32_t fifo[32];
+        int n = 0;
+
+        // NV3062: set dst color format + pitch + offset
+        fifo[n++] = fifo_method(NV3062_SET_COLOR_FORMAT, 3, 4);  // 3 incrementing words, subchannel 4
+        fifo[n++] = 0x0A;        // A8R8G8B8
+        fifo[n++] = PITCH;       // dst pitch
+        fifo[n++] = DST_OFF;     // dst VRAM offset
+
+        // NV3089: operation + color format
+        fifo[n++] = fifo_method(NV3089_SET_OPERATION, 1, 5);
+        fifo[n++] = 3;  // SRCCOPY
+
+        fifo[n++] = fifo_method(NV3089_SET_COLOR_FORMAT, 1, 5);
+        fifo[n++] = 0x0A;  // A8R8G8B8
+
+        // Clip + output size
+        fifo[n++] = fifo_method(NV3089_CLIP_POINT, 2, 5);
+        fifo[n++] = 0;          // clip origin (0,0)
+        fifo[n++] = (H << 16) | W;  // clip size (W, H)
+
+        fifo[n++] = fifo_method(NV3089_IMAGE_OUT_POINT, 2, 5);
+        fifo[n++] = 0;          // out origin (0,0)
+        fifo[n++] = (H << 16) | W;  // out size (W, H)
+
+        // Scale factors 1:1 (20.12 fixed-point: 1.0 = 1<<20 = 0x100000)
+        fifo[n++] = fifo_method(NV3089_DS_DX, 2, 5);
+        fifo[n++] = (1 << 20);
+        fifo[n++] = (1 << 20);
+
+        // Source image: size + format/pitch + offset + trigger
+        fifo[n++] = fifo_method(NV3089_IMAGE_IN_SIZE, 4, 5);
+        fifo[n++] = (W << 16) | H;        // inW, inH
+        fifo[n++] = (PITCH << 16) | 0;    // pitch in upper 16, origin in lower
+        fifo[n++] = SRC_OFF;              // source VRAM offset
+        fifo[n++] = 0;                    // IMAGE_IN trigger (fractional origin=0)
+
+        int cmds = rsx_process_fifo(&state, fifo, n, vram, 100);
+
+        // Verify destination matches source
+        bool match = true;
+        for (uint32_t y = 0; y < H && match; ++y)
+            for (uint32_t x = 0; x < W && match; ++x) {
+                uint32_t src_px, dst_px;
+                memcpy(&src_px, vram + SRC_OFF + y * PITCH + x * 4, 4);
+                memcpy(&dst_px, vram + DST_OFF + y * PITCH + x * 4, 4);
+                if (src_px != dst_px) match = false;
+            }
+
+        if (match && cmds > 0) {
+            printf("  ✅ 7a: 1:1 blit 64x64 ARGB8 → %d cmds, pixels match\n", cmds);
+            total_pass++;
+        } else {
+            printf("  ❌ 7a: 1:1 blit failed (cmds=%d, match=%d)\n", cmds, match);
+            total_fail++;
+        }
+    }
+
+    // ── Sub-test 7b: 2× downscale blit (128x128 → 64x64) ──
+    {
+        const uint32_t SRC_OFF = 0x300000;
+        const uint32_t DST_OFF = 0x400000;
+        const uint32_t SRC_W = 128, SRC_H = 128;
+        const uint32_t DST_W = 64,  DST_H = 64;
+        const uint32_t SRC_PITCH = SRC_W * 4;
+        const uint32_t DST_PITCH = DST_W * 4;
+
+        // Fill source
+        for (uint32_t y = 0; y < SRC_H; ++y)
+            for (uint32_t x = 0; x < SRC_W; ++x) {
+                uint32_t pixel = 0xAA000000 | ((y & 0xFF) << 16) | ((x & 0xFF) << 8) | 0x99;
+                memcpy(vram + SRC_OFF + y * SRC_PITCH + x * 4, &pixel, 4);
+            }
+
+        // Reset blit state
+        memset(&state.blit2DSurface, 0, sizeof(state.blit2DSurface));
+        memset(&state.scaledImage, 0, sizeof(state.scaledImage));
+
+        uint32_t fifo[32];
+        int n = 0;
+
+        // NV3062 dst surface
+        fifo[n++] = fifo_method(NV3062_SET_COLOR_FORMAT, 3, 4);
+        fifo[n++] = 0x0A;
+        fifo[n++] = DST_PITCH;
+        fifo[n++] = DST_OFF;
+
+        // NV3089 params
+        fifo[n++] = fifo_method(NV3089_CLIP_POINT, 2, 5);
+        fifo[n++] = 0;
+        fifo[n++] = (DST_H << 16) | DST_W;
+
+        fifo[n++] = fifo_method(NV3089_IMAGE_OUT_POINT, 2, 5);
+        fifo[n++] = 0;
+        fifo[n++] = (DST_H << 16) | DST_W;
+
+        // 2× scale: dsDx = dtDy = 2.0 in 20.12 = 2<<20
+        fifo[n++] = fifo_method(NV3089_DS_DX, 2, 5);
+        fifo[n++] = (2 << 20);
+        fifo[n++] = (2 << 20);
+
+        fifo[n++] = fifo_method(NV3089_IMAGE_IN_SIZE, 4, 5);
+        fifo[n++] = (SRC_W << 16) | SRC_H;
+        fifo[n++] = (SRC_PITCH << 16) | 0;
+        fifo[n++] = SRC_OFF;
+        fifo[n++] = 0;  // trigger
+
+        int cmds = rsx_process_fifo(&state, fifo, n, vram, 100);
+
+        // Verify: dst[x,y] should match src[x*2, y*2] (nearest-neighbor)
+        bool match = true;
+        for (uint32_t y = 0; y < DST_H && match; ++y)
+            for (uint32_t x = 0; x < DST_W && match; ++x) {
+                uint32_t src_px, dst_px;
+                memcpy(&src_px, vram + SRC_OFF + (y*2) * SRC_PITCH + (x*2) * 4, 4);
+                memcpy(&dst_px, vram + DST_OFF + y * DST_PITCH + x * 4, 4);
+                if (src_px != dst_px) match = false;
+            }
+
+        if (match && cmds > 0) {
+            printf("  ✅ 7b: 2× downscale 128→64 → %d cmds, pixels match\n", cmds);
+            total_pass++;
+        } else {
+            printf("  ❌ 7b: 2× downscale failed (cmds=%d, match=%d)\n", cmds, match);
+            total_fail++;
+        }
+    }
+
+    free(vram);
+    rsx_shutdown(&state);
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // Main
 // ═══════════════════════════════════════════════════════════════════
 
@@ -609,6 +770,7 @@ int main() {
     test_vertex_program_upload();
     test_draw_call_tracking();
     test_full_frame();
+    test_nv3089_blit();
 
     printf("\n═══════════════════════════════════════════════════\n");
     printf("  Results: %d/%d tests passed\n", total_pass, total_pass + total_fail);

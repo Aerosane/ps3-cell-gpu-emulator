@@ -265,11 +265,25 @@ static constexpr uint32_t NV4097_NOTIFY                           = 0x00000108;
 // These operate on subchannel 3 (2D context) but games often submit
 // them inline in the 3D FIFO. Method offsets are relative to the
 // object class (NV3089 = scaled image from memory).
+static constexpr uint32_t NV3062_SET_OBJECT                    = 0x00000000;
+static constexpr uint32_t NV3062_SET_COLOR_FORMAT              = 0x00000300;
+static constexpr uint32_t NV3062_SET_PITCH                     = 0x00000304;
+static constexpr uint32_t NV3062_SET_OFFSET_DESTIN             = 0x00000308;
+
 static constexpr uint32_t NV3089_SET_CONTEXT_SURFACE           = 0x00000184;
-static constexpr uint32_t NV3089_IMAGE_IN_SIZE                 = 0x00000300;
-static constexpr uint32_t NV3089_IMAGE_IN_FORMAT               = 0x00000304;
-static constexpr uint32_t NV3089_IMAGE_IN_OFFSET               = 0x00000308;
-static constexpr uint32_t NV3089_IMAGE_IN                      = 0x0000030C;
+static constexpr uint32_t NV3089_SET_COLOR_FORMAT              = 0x00000300;
+static constexpr uint32_t NV3089_SET_OPERATION                 = 0x000002FC;
+static constexpr uint32_t NV3089_CLIP_POINT                    = 0x00000308;
+static constexpr uint32_t NV3089_CLIP_SIZE                     = 0x0000030C;
+static constexpr uint32_t NV3089_IMAGE_OUT_POINT               = 0x00000310;
+static constexpr uint32_t NV3089_IMAGE_OUT_SIZE                = 0x00000314;
+static constexpr uint32_t NV3089_DS_DX                         = 0x00000318;
+static constexpr uint32_t NV3089_DT_DY                         = 0x0000031C;
+static constexpr uint32_t NV3089_IMAGE_IN_SIZE                 = 0x00000400;
+static constexpr uint32_t NV3089_IMAGE_IN_FORMAT               = 0x00000404;
+static constexpr uint32_t NV3089_IMAGE_IN_OFFSET               = 0x00000408;
+static constexpr uint32_t NV3089_IMAGE_IN                      = 0x0000040C;
+
 static constexpr uint32_t NV0039_OFFSET_IN                     = 0x0000030C;
 static constexpr uint32_t NV0039_OFFSET_OUT                    = 0x00000310;
 static constexpr uint32_t NV0039_PITCH_IN                      = 0x00000314;
@@ -570,6 +584,25 @@ struct RSXState {
         uint32_t lineLength;
         uint32_t lineCount;
     } dmaTransfer;
+
+    // NV3062 destination surface for 2D blit.
+    struct Blit2DSurface {
+        uint32_t colorFormat;  // 0x0A = A8R8G8B8
+        uint32_t pitch;        // bytes per row (src<<16 | dst)
+        uint32_t dstOffset;    // VRAM offset of destination
+    } blit2DSurface;
+
+    // NV3089 scaled image from memory state.
+    struct ScaledImage {
+        uint32_t operation;    // 3=SRCCOPY
+        uint32_t colorFormat;  // 0x0A = A8R8G8B8
+        uint32_t clipX, clipY, clipW, clipH;
+        uint32_t outX, outY, outW, outH;
+        uint32_t dsDx, dtDy;  // 20.12 fixed-point scale factors
+        uint32_t inW, inH;
+        uint32_t inPitch;      // bits [31:16]=pitch, bits [15:0]=origin
+        uint32_t inOffset;     // VRAM offset of source
+    } scaledImage;
 
     // Occlusion query (ZCULL) state.
     bool     zcullEnable;       // zpass pixel count enabled
