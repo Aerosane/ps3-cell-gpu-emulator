@@ -1559,6 +1559,123 @@ struct PpuHleDispatcher {
         } else if (e.name == "cellGameUpdateCheckStartAsync") {
             retval = 0; // no update available
 
+        // ═══ cellVpost — video post-processing ═══
+        } else if (e.name == "cellVpostOpen" || e.name == "cellVpostOpenEx") {
+            uint32_t hid = nextHandleId++;
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                mem[ptr] = (uint8_t)(hid >> 24); mem[ptr+1] = (uint8_t)(hid >> 16);
+                mem[ptr+2] = (uint8_t)(hid >> 8); mem[ptr+3] = (uint8_t)hid;
+            }
+            retval = 0;
+        } else if (e.name == "cellVpostClose" || e.name == "cellVpostExec") {
+            retval = 0;
+
+        // ═══ cellAtrac — ATRAC3+ audio ═══
+        } else if (e.name == "cellAtracCreateDecoder") {
+            uint32_t hid = nextHandleId++;
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                mem[ptr] = (uint8_t)(hid >> 24); mem[ptr+1] = (uint8_t)(hid >> 16);
+                mem[ptr+2] = (uint8_t)(hid >> 8); mem[ptr+3] = (uint8_t)hid;
+            }
+            retval = 0;
+        } else if (e.name == "cellAtracDeleteDecoder") {
+            retval = 0;
+        } else if (e.name == "cellAtracDecode") {
+            retval = (uint64_t)(int64_t)-1; // no audio data
+        } else if (e.name == "cellAtracGetStreamDataInfo") {
+            retval = 0;
+        } else if (e.name == "cellAtracAddStreamData") {
+            retval = 0;
+        } else if (e.name == "cellAtracIsSecondBufferNeeded") {
+            st.gpr[4] = 0; // not needed
+            retval = 0;
+
+        // ═══ cellVoice ═══
+        } else if (e.name == "cellVoiceInit" || e.name == "cellVoiceEnd") {
+            retval = 0;
+        } else if (e.name == "cellVoiceCreatePort") {
+            uint32_t hid = nextHandleId++;
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                mem[ptr] = (uint8_t)(hid >> 24); mem[ptr+1] = (uint8_t)(hid >> 16);
+                mem[ptr+2] = (uint8_t)(hid >> 8); mem[ptr+3] = (uint8_t)hid;
+            }
+            retval = 0;
+        } else if (e.name == "cellVoiceDeletePort") {
+            retval = 0;
+
+        // ═══ sceNpMatching2 — matchmaking ═══
+        } else if (e.name == "sceNpMatching2Init" || e.name == "sceNpMatching2Term") {
+            retval = 0;
+        } else if (e.name == "sceNpMatching2CreateContext") {
+            uint32_t hid = nextHandleId++;
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                mem[ptr] = (uint8_t)(hid >> 24); mem[ptr+1] = (uint8_t)(hid >> 16);
+                mem[ptr+2] = (uint8_t)(hid >> 8); mem[ptr+3] = (uint8_t)hid;
+            }
+            retval = 0;
+        } else if (e.name == "sceNpMatching2DestroyContext") {
+            retval = 0;
+
+        // ═══ sceNpScore — leaderboards ═══
+        } else if (e.name == "sceNpScoreInit" || e.name == "sceNpScoreTerm") {
+            retval = 0;
+        } else if (e.name == "sceNpScoreCreateTitleCtx") {
+            st.gpr[4] = nextHandleId++;
+            retval = 0;
+        } else if (e.name == "sceNpScoreDeleteTitleCtx") {
+            retval = 0;
+
+        // ═══ sceNpTus — title user storage ═══
+        } else if (e.name == "sceNpTusInit" || e.name == "sceNpTusTerm") {
+            retval = 0;
+        } else if (e.name == "sceNpTusCreateTitleCtx") {
+            st.gpr[4] = nextHandleId++;
+            retval = 0;
+        } else if (e.name == "sceNpTusDeleteTitleCtx") {
+            retval = 0;
+
+        // ═══ cellSaveData v2 variants ═══
+        } else if (e.name == "cellSaveDataAutoLoad2" || e.name == "cellSaveDataAutoSave2" ||
+                   e.name == "cellSaveDataUserListLoad" || e.name == "cellSaveDataUserListSave" ||
+                   e.name == "cellSaveDataUserFixedLoad" || e.name == "cellSaveDataUserFixedSave") {
+            retval = 0;
+
+        // ═══ cellGame extras ═══
+        } else if (e.name == "cellGameSetExitParam" || e.name == "cellGameThemeInstall" ||
+                   e.name == "cellGameThemeInstallFromBuffer") {
+            retval = 0;
+        } else if (e.name == "cellGameGetLocalWebContentPath") {
+            // r3 = buf, r4 = size — empty path
+            uint64_t buf = st.gpr[3];
+            if (buf && buf < memSize) mem[buf] = 0;
+            retval = 0;
+
+        // ═══ cellWebBrowser ═══
+        } else if (e.name == "cellWebBrowserInitialize" || e.name == "cellWebBrowserShutdown") {
+            retval = 0;
+
+        // ═══ cellPad extras ═══
+        } else if (e.name == "cellPadSetActDirect" || e.name == "cellPadSetPortSetting" ||
+                   e.name == "cellPadSetSensorMode" || e.name == "cellPadLddRegisterController") {
+            retval = 0;
+        } else if (e.name == "cellPadGetCapabilityInfo") {
+            // r4 = info_ptr — zero-fill
+            uint64_t ptr = st.gpr[4];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.name == "cellPadGetInfo2") {
+            // r3 = CellPadInfo2* — zero-fill (0 pads connected)
+            uint64_t ptr = st.gpr[3];
+            if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = 0;
+        } else if (e.name == "cellPadLddGetPortNo") {
+            st.gpr[4] = (uint64_t)(int64_t)-1; // no port
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

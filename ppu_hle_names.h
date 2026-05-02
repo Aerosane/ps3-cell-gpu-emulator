@@ -468,6 +468,71 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0xae299ba5, "cellGameUpdate", "cellGameUpdateInit" },
     { 0x00e38e0b, "cellGameUpdate", "cellGameUpdateTerm" },
     { 0x4b88c75a, "cellGameUpdate", "cellGameUpdateCheckStartAsync" },
+
+    // cellVpost — video post-processing
+    { 0xce247a9c, "cellVpost", "cellVpostOpen" },
+    { 0x292d1115, "cellVpost", "cellVpostClose" },
+    { 0xf62c6004, "cellVpost", "cellVpostExec" },
+    { 0xd28c4359, "cellVpost", "cellVpostOpenEx" },
+
+    // cellAtrac — ATRAC3+ audio decode
+    { 0xeeb4289f, "cellAtrac", "cellAtracCreateDecoder" },
+    { 0x34e241d7, "cellAtrac", "cellAtracDeleteDecoder" },
+    { 0xb771667c, "cellAtrac", "cellAtracDecode" },
+    { 0x1c5004f5, "cellAtrac", "cellAtracGetStreamDataInfo" },
+    { 0x05d6b33e, "cellAtrac", "cellAtracAddStreamData" },
+    { 0x4343cb43, "cellAtrac", "cellAtracIsSecondBufferNeeded" },
+
+    // cellVoice — voice chat stubs
+    { 0x8cf0742d, "cellVoice", "cellVoiceInit" },
+    { 0x176d528e, "cellVoice", "cellVoiceEnd" },
+    { 0x25e2f250, "cellVoice", "cellVoiceCreatePort" },
+    { 0x47f672fb, "cellVoice", "cellVoiceDeletePort" },
+
+    // sceNpMatching2 — multiplayer matchmaking
+    { 0x91a66b60, "sceNpMatching2", "sceNpMatching2Init" },
+    { 0x8df1c55b, "sceNpMatching2", "sceNpMatching2Term" },
+    { 0x7795cbfb, "sceNpMatching2", "sceNpMatching2CreateContext" },
+    { 0x43e7ee1a, "sceNpMatching2", "sceNpMatching2DestroyContext" },
+
+    // sceNpScore — leaderboard stubs
+    { 0x368bac16, "sceNpScore", "sceNpScoreInit" },
+    { 0xe36d39ae, "sceNpScore", "sceNpScoreTerm" },
+    { 0x57efaab2, "sceNpScore", "sceNpScoreCreateTitleCtx" },
+    { 0xec58df2b, "sceNpScore", "sceNpScoreDeleteTitleCtx" },
+
+    // sceNpTus — title user storage
+    { 0x3a24b2ef, "sceNpTus", "sceNpTusInit" },
+    { 0x63496d84, "sceNpTus", "sceNpTusTerm" },
+    { 0x6a49f21a, "sceNpTus", "sceNpTusCreateTitleCtx" },
+    { 0xdb17369f, "sceNpTus", "sceNpTusDeleteTitleCtx" },
+
+    // cellSaveData — additional variants
+    { 0x590e6d0b, "cellSaveData", "cellSaveDataAutoLoad2" },
+    { 0xf0f530b7, "cellSaveData", "cellSaveDataAutoSave2" },
+    { 0x22126da4, "cellSaveData", "cellSaveDataUserListLoad" },
+    { 0x06a7a4a8, "cellSaveData", "cellSaveDataUserListSave" },
+    { 0xf14197af, "cellSaveData", "cellSaveDataUserFixedLoad" },
+    { 0xa4726925, "cellSaveData", "cellSaveDataUserFixedSave" },
+
+    // cellGame — extras
+    { 0x8e422adc, "cellGame", "cellGameSetExitParam" },
+    { 0xbaed3165, "cellGame", "cellGameGetLocalWebContentPath" },
+    { 0x586bdc5c, "cellGame", "cellGameThemeInstall" },
+    { 0xc6bee834, "cellGame", "cellGameThemeInstallFromBuffer" },
+
+    // cellWebBrowser
+    { 0xf19fd906, "cellWebBrowser", "cellWebBrowserInitialize" },
+    { 0x2b5f3544, "cellWebBrowser", "cellWebBrowserShutdown" },
+
+    // cellPad — extras
+    { 0x23ef9b61, "cellPad", "cellPadSetActDirect" },
+    { 0x316cdf06, "cellPad", "cellPadGetCapabilityInfo" },
+    { 0x1be2bbee, "cellPad", "cellPadGetInfo2" },
+    { 0x0f2c5daf, "cellPad", "cellPadSetPortSetting" },
+    { 0xbd8f1ead, "cellPad", "cellPadSetSensorMode" },
+    { 0x0353d3cf, "cellPad", "cellPadLddRegisterController" },
+    { 0x9589f71c, "cellPad", "cellPadLddGetPortNo" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {
