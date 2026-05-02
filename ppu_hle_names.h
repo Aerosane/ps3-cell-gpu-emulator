@@ -606,6 +606,76 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0x08A8A347, "cellNetCtl", "cellNetCtlGetInfo" },
     { 0x2E274B74, "cellNetCtl", "cellNetCtlAddHandler" },
     { 0x438CEE7B, "cellNetCtl", "cellNetCtlDelHandler" },
+
+    // ── cellFont ─────────────────────────────────────────────────
+    { 0x4B734C8C, "cellFont", "cellFontInit" },
+    { 0x3E3712ED, "cellFont", "cellFontEnd" },
+    { 0xC1B20A00, "cellFont", "cellFontNewLibrary" },
+    { 0x859A29D7, "cellFont", "cellFontFreeLibrary" },
+    { 0x85CAD796, "cellFont", "cellFontOpenFontset" },
+    { 0x62F4F193, "cellFont", "cellFontOpenFontFile" },
+    { 0xEC2185A8, "cellFont", "cellFontCloseFont" },
+    { 0x4B02499C, "cellFont", "cellFontRenderCharGlyphImage" },
+
+    // ── cellFontFT ───────────────────────────────────────────────
+    { 0xE67CA1DB, "cellFontFT", "cellFontFTInit" },
+    { 0xECD30388, "cellFontFT", "cellFontFTEnd" },
+    { 0xA3F2DCEB, "cellFontFT", "cellFontFTGetInitializedRevisionFlags" },
+    { 0x6741115E, "cellFontFT", "cellFontFTLoadModule" },
+
+    // ── cellSpurs ────────────────────────────────────────────────
+    { 0x70E3D58A, "cellSpurs", "cellSpursInitialize" },
+    { 0xE48BF572, "cellSpurs", "cellSpursFinalize" },
+    { 0x1BF8A000, "cellSpurs", "cellSpursGetNumSpuThread" },
+    { 0xE2DF437E, "cellSpurs", "cellSpursGetSpuThreadGroupId" },
+    { 0x3942F6BF, "cellSpurs", "cellSpursSetMaxContention" },
+    { 0x79B36C3E, "cellSpurs", "cellSpursSetPriorities" },
+    { 0xBC7001AF, "cellSpurs", "cellSpursAttachLv2EventQueue" },
+    { 0xC97CEC02, "cellSpurs", "cellSpursCreateTask" },
+    { 0x3FD6C11A, "cellSpurs", "cellSpursCreateTaskset" },
+    { 0xE591F650, "cellSpurs", "cellSpursJoinTaskset" },
+    { 0x899934DC, "cellSpurs", "cellSpursShutdownTaskset" },
+    { 0x71DC1454, "cellSpurs", "cellSpursWakeupTaskset" },
+
+    // ── cellSpursJq ──────────────────────────────────────────────
+    { 0x94965961, "cellSpursJq", "cellSpursJqInitialize" },
+    { 0x5AFC1E7C, "cellSpursJq", "cellSpursJqFinalize" },
+    { 0xC8101522, "cellSpursJq", "cellSpursJqAddJob" },
+    { 0xAB27B2C4, "cellSpursJq", "cellSpursJqGetJobCount" },
+
+    // ── sys_net (BSD sockets) ────────────────────────────────────
+    { 0xAE26EAB1, "sys_net", "sys_net_bnet_socket" },
+    { 0x5A048BCB, "sys_net", "sys_net_bnet_close" },
+    { 0xFC5F38C2, "sys_net", "sys_net_bnet_bind" },
+    { 0xDCA3F6F6, "sys_net", "sys_net_bnet_listen" },
+    { 0x3B214BA1, "sys_net", "sys_net_bnet_accept" },
+    { 0x4E89A57A, "sys_net", "sys_net_bnet_connect" },
+    { 0x8CC694CE, "sys_net", "sys_net_bnet_sendto" },
+    { 0x75B3C344, "sys_net", "sys_net_bnet_recvfrom" },
+    { 0x9A5C66E3, "sys_net", "sys_net_bnet_setsockopt" },
+    { 0xF448BBF6, "sys_net", "sys_net_bnet_getsockopt" },
+
+    // ── cellUserInfo ─────────────────────────────────────────────
+    { 0xDCF8EB53, "cellUserInfo", "cellUserInfoGetStat" },
+    { 0xADCCC2B9, "cellUserInfo", "cellUserInfoSelectUser_ListType" },
+    { 0x389EB4EC, "cellUserInfo", "cellUserInfoEnableOverlay" },
+    { 0x4A5B749A, "cellUserInfo", "cellUserInfoGetList" },
+
+    // ── cellAdec (audio decoder) ─────────────────────────────────
+    { 0x8F027E01, "cellAdec", "cellAdecOpen" },
+    { 0xCD96044F, "cellAdec", "cellAdecClose" },
+    { 0xCC534ABE, "cellAdec", "cellAdecStartSeq" },
+    { 0xCCFEEFC2, "cellAdec", "cellAdecEndSeq" },
+    { 0x4D682B55, "cellAdec", "cellAdecDecodeAu" },
+    { 0x0CFA3BAF, "cellAdec", "cellAdecGetPcm" },
+
+    // ── cellDmux (demuxer) ───────────────────────────────────────
+    { 0x2D4CE3DF, "cellDmux", "cellDmuxOpen" },
+    { 0x438A5A0F, "cellDmux", "cellDmuxClose" },
+    { 0xCD076ABF, "cellDmux", "cellDmuxSetStream" },
+    { 0xABBBB443, "cellDmux", "cellDmuxResetStream" },
+    { 0x181D1978, "cellDmux", "cellDmuxEnableEs" },
+    { 0x022DDA52, "cellDmux", "cellDmuxDisableEs" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {

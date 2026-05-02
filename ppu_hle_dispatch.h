@@ -1811,6 +1811,138 @@ struct PpuHleDispatcher {
         } else if (e.name == "cellNetCtlDelHandler") {
             retval = 0;
 
+        // ── cellFont ─────────────────────────────────────────────
+        } else if (e.name == "cellFontInit" || e.name == "cellFontEnd") {
+            retval = 0;
+        } else if (e.name == "cellFontNewLibrary") {
+            // Write library handle to r4 pointer
+            if (st.gpr[4] && st.gpr[4] + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + (uint32_t)st.gpr[4], &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellFontFreeLibrary" || e.name == "cellFontCloseFont") {
+            retval = 0;
+        } else if (e.name == "cellFontOpenFontset" || e.name == "cellFontOpenFontFile") {
+            retval = 0;
+        } else if (e.name == "cellFontRenderCharGlyphImage") {
+            // Render nothing — games fall back to blank glyph
+            retval = 0;
+
+        // ── cellFontFT ───────────────────────────────────────────
+        } else if (e.name == "cellFontFTInit" || e.name == "cellFontFTEnd" ||
+                   e.name == "cellFontFTLoadModule") {
+            retval = 0;
+        } else if (e.name == "cellFontFTGetInitializedRevisionFlags") {
+            retval = 0; // flags=0
+
+        // ── cellSpurs ────────────────────────────────────────────
+        } else if (e.name == "cellSpursInitialize") {
+            retval = 0;
+        } else if (e.name == "cellSpursFinalize") {
+            retval = 0;
+        } else if (e.name == "cellSpursGetNumSpuThread") {
+            // Write count=6 to r4 pointer (PS3 has 6 SPUs available)
+            if (st.gpr[4] && st.gpr[4] + 4 <= memSize) {
+                uint32_t six = __builtin_bswap32(6);
+                std::memcpy(mem + (uint32_t)st.gpr[4], &six, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellSpursGetSpuThreadGroupId") {
+            // Write fake group ID to r4 pointer
+            if (st.gpr[4] && st.gpr[4] + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + (uint32_t)st.gpr[4], &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellSpursSetMaxContention" || e.name == "cellSpursSetPriorities" ||
+                   e.name == "cellSpursAttachLv2EventQueue") {
+            retval = 0;
+        } else if (e.name == "cellSpursCreateTask") {
+            retval = 0;
+        } else if (e.name == "cellSpursCreateTaskset") {
+            retval = 0;
+        } else if (e.name == "cellSpursJoinTaskset") {
+            retval = 0;
+        } else if (e.name == "cellSpursShutdownTaskset" || e.name == "cellSpursWakeupTaskset") {
+            retval = 0;
+
+        // ── cellSpursJq ──────────────────────────────────────────
+        } else if (e.name == "cellSpursJqInitialize" || e.name == "cellSpursJqFinalize") {
+            retval = 0;
+        } else if (e.name == "cellSpursJqAddJob") {
+            retval = 0;
+        } else if (e.name == "cellSpursJqGetJobCount") {
+            // Write count=0 to r4 pointer
+            if (st.gpr[4] && st.gpr[4] + 4 <= memSize) {
+                uint32_t zero = 0;
+                std::memcpy(mem + (uint32_t)st.gpr[4], &zero, 4);
+            }
+            retval = 0;
+
+        // ── sys_net (BSD sockets) ────────────────────────────────
+        } else if (e.name == "sys_net_bnet_socket") {
+            retval = (uint64_t)nextHandleId++; // fake socket fd
+        } else if (e.name == "sys_net_bnet_close") {
+            retval = 0;
+        } else if (e.name == "sys_net_bnet_bind" || e.name == "sys_net_bnet_listen") {
+            retval = 0;
+        } else if (e.name == "sys_net_bnet_accept" || e.name == "sys_net_bnet_connect") {
+            retval = (uint64_t)(int64_t)-1; // network error
+        } else if (e.name == "sys_net_bnet_sendto") {
+            retval = (uint64_t)(int64_t)-1;
+        } else if (e.name == "sys_net_bnet_recvfrom") {
+            retval = (uint64_t)(int64_t)-1;
+        } else if (e.name == "sys_net_bnet_setsockopt" || e.name == "sys_net_bnet_getsockopt") {
+            retval = 0;
+
+        // ── cellUserInfo ─────────────────────────────────────────
+        } else if (e.name == "cellUserInfoGetStat") {
+            retval = 0;
+        } else if (e.name == "cellUserInfoSelectUser_ListType") {
+            retval = 0;
+        } else if (e.name == "cellUserInfoEnableOverlay") {
+            retval = 0;
+        } else if (e.name == "cellUserInfoGetList") {
+            // Write count=1 (one user) to r4 pointer
+            if (st.gpr[4] && st.gpr[4] + 4 <= memSize) {
+                uint32_t one = __builtin_bswap32(1);
+                std::memcpy(mem + (uint32_t)st.gpr[4], &one, 4);
+            }
+            retval = 0;
+
+        // ── cellAdec (audio decoder) ─────────────────────────────
+        } else if (e.name == "cellAdecOpen") {
+            // Write handle to r5 pointer
+            if (st.gpr[5] && st.gpr[5] + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + (uint32_t)st.gpr[5], &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellAdecClose") {
+            retval = 0;
+        } else if (e.name == "cellAdecStartSeq" || e.name == "cellAdecEndSeq") {
+            retval = 0;
+        } else if (e.name == "cellAdecDecodeAu") {
+            retval = 0;
+        } else if (e.name == "cellAdecGetPcm") {
+            retval = (uint64_t)(int64_t)-1; // no audio data
+
+        // ── cellDmux (demuxer) ───────────────────────────────────
+        } else if (e.name == "cellDmuxOpen") {
+            // Write handle to r5 pointer
+            if (st.gpr[5] && st.gpr[5] + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + (uint32_t)st.gpr[5], &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellDmuxClose") {
+            retval = 0;
+        } else if (e.name == "cellDmuxSetStream" || e.name == "cellDmuxResetStream") {
+            retval = 0;
+        } else if (e.name == "cellDmuxEnableEs" || e.name == "cellDmuxDisableEs") {
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;
