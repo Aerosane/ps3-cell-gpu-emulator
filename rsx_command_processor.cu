@@ -112,6 +112,10 @@ int rsx_init(RSXState* state) {
     // Dither default
     state->ditherEnable  = true;  // RSX default is enabled
 
+    // Polygon mode defaults (FILL)
+    state->frontPolygonMode = 0x1B02;  // GL_FILL
+    state->backPolygonMode  = 0x1B02;
+
     // Two-sided stencil defaults
     state->twoSidedStencilEnable = false;
     // Two-sided color defaults
@@ -181,7 +185,40 @@ void rsx_clear_surface(RSXState* state, uint8_t* vram, uint32_t clearMask) {
         }
     }
 
-    // Depth / stencil clear is a no-op for Phase 4a
+    // Depth / stencil clear
+    if ((clearMask & (CLEAR_Z | CLEAR_STENCIL)) && state->zetaOffset) {
+        uint32_t w = state->surfaceWidth;
+        uint32_t h = state->surfaceHeight;
+        uint32_t pitch = state->surfacePitchZ ? state->surfacePitchZ : (w * 4);
+        uint32_t maxBytes = state->vramSize ? state->vramSize : VRAM_SIZE;
+        uint32_t clearVal = state->zstencilClearValue;
+
+        if (state->depthFormat == DEPTH_Z24S8) {
+            // 32-bit: stencil[31:24] | depth[23:0]
+            for (uint32_t y = 0; y < h; y++) {
+                uint32_t rowOff = state->zetaOffset + y * pitch;
+                if (rowOff + w * 4 > maxBytes) break;
+                uint32_t* row = (uint32_t*)(vram + rowOff);
+                for (uint32_t x = 0; x < w; x++) {
+                    uint32_t cur = row[x];
+                    if (clearMask & CLEAR_Z) cur = (cur & 0xFF000000) | (clearVal & 0x00FFFFFF);
+                    if (clearMask & CLEAR_STENCIL) cur = (cur & 0x00FFFFFF) | (clearVal & 0xFF000000);
+                    row[x] = cur;
+                }
+            }
+        } else if (state->depthFormat == DEPTH_Z16) {
+            uint32_t zpitch = state->surfacePitchZ ? state->surfacePitchZ : (w * 2);
+            uint16_t z16 = (uint16_t)(clearVal & 0xFFFF);
+            for (uint32_t y = 0; y < h; y++) {
+                uint32_t rowOff = state->zetaOffset + y * zpitch;
+                if (rowOff + w * 2 > maxBytes) break;
+                uint16_t* row = (uint16_t*)(vram + rowOff);
+                if (clearMask & CLEAR_Z) {
+                    for (uint32_t x = 0; x < w; x++) row[x] = z16;
+                }
+            }
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -832,6 +869,41 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     case NV4097_SET_WAIT_FOR_IDLE:
         return;
 
+    // DMA context bindings (select VRAM vs main memory for buffers)
+    case NV4097_SET_CONTEXT_DMA_A:
+        state->contextDmaA = data;
+        return;
+    case NV4097_SET_CONTEXT_DMA_B:
+        state->contextDmaB = data;
+        return;
+    case NV4097_SET_CONTEXT_DMA_COLOR_B:
+        state->contextDmaColorB = data;
+        return;
+    case NV4097_SET_CONTEXT_DMA_STATE:
+        state->contextDmaState = data;
+        return;
+    case NV4097_SET_CONTEXT_DMA_ZETA:
+        state->contextDmaZeta = data;
+        return;
+
+    // Polygon rasterization mode (wireframe support)
+    case NV4097_SET_FRONT_POLYGON_MODE:
+        state->frontPolygonMode = data;
+        return;
+    case NV4097_SET_BACK_POLYGON_MODE:
+        state->backPolygonMode = data;
+        return;
+
+    // Depth buffer pitch
+    case NV4097_SET_SURFACE_PITCH_Z:
+        state->surfacePitchZ = data;
+        return;
+
+    // Depth+stencil clear value
+    case NV4097_SET_ZSTENCIL_CLEAR_VALUE:
+        state->zstencilClearValue = data;
+        return;
+
     default:
         break;
     }
@@ -912,6 +984,14 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         if (unit < 16) {
             state->textures[unit].control1 = data;
         }
+        return;
+    }
+
+    // ── Texture control2 (aniso level per unit, 16 units) ─────
+    if (method >= NV4097_SET_TEXTURE_CONTROL2 &&
+        method <  NV4097_SET_TEXTURE_CONTROL2 + 16 * 4) {
+        // bits [3:0] = max aniso, bits [12:4] = ISO level
+        // Store for future anisotropic filtering; currently no-op
         return;
     }
 

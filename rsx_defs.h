@@ -251,6 +251,9 @@ static constexpr uint32_t NV4097_SET_REDUCE_DST_COLOR          = 0x00000D2C;
 static constexpr uint32_t NV4097_SET_TRANSFORM_TIMEOUT         = 0x00001EF8;
 static constexpr uint32_t NV4097_SET_WAIT_FOR_IDLE             = 0x00000110;
 
+// Texture aniso control per unit (16 units at stride 4)
+static constexpr uint32_t NV4097_SET_TEXTURE_CONTROL2          = 0x00001D34;
+
 // NV406E Reference register (subchannel agnostic)
 static constexpr uint32_t NV4097_SET_REFERENCE               = 0x00000050;
 
@@ -614,6 +617,23 @@ struct RSXState {
 
     // Depth buffer base offset in VRAM
     uint32_t zetaOffset;
+
+    // DMA context IDs (used to select VRAM region for read/write)
+    uint32_t contextDmaA;        // usually local VRAM
+    uint32_t contextDmaB;        // usually main memory
+    uint32_t contextDmaColorB;   // color buffer B
+    uint32_t contextDmaState;    // report/notify region
+    uint32_t contextDmaZeta;     // depth buffer region
+
+    // Polygon rasterization mode (0x1B00=POINT, 0x1B01=LINE, 0x1B02=FILL)
+    uint32_t frontPolygonMode;   // default FILL
+    uint32_t backPolygonMode;    // default FILL
+
+    // Surface depth pitch (bytes per row for Z buffer)
+    uint32_t surfacePitchZ;
+
+    // Zstencil clear value (depth[23:0] | stencil[31:24])
+    uint32_t zstencilClearValue;
 };
 
 // ═══════════════════════════════════════════════════════════════════
