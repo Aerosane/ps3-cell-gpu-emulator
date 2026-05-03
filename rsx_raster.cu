@@ -2034,25 +2034,34 @@ __global__ void k_rasterTriangles(DrawParams dp) {
 
         if (blendEnable) {
             uint32_t dc = dstPx;
-            float dr = ((dc >> 16) & 0xFF) / 255.0f;
-            float dg = ((dc >>  8) & 0xFF) / 255.0f;
-            float db = ((dc >>  0) & 0xFF) / 255.0f;
-            float da = ((dc >> 24) & 0xFF) / 255.0f;
+            float dr = ((dc >> 16) & 0xFF) * (1.0f / 255.0f);
+            float dg = ((dc >>  8) & 0xFF) * (1.0f / 255.0f);
+            float db = ((dc >>  0) & 0xFF) * (1.0f / 255.0f);
+            float da = ((dc >> 24) & 0xFF) * (1.0f / 255.0f);
 
-            // Evaluate per-channel source/dest factors.
-            float fSr = blendFactor(bfSrcRGB, r, dr, a, da, ccR, ccA, 0);
-            float fSg = blendFactor(bfSrcRGB, g, dg, a, da, ccG, ccA, 0);
-            float fSb = blendFactor(bfSrcRGB, b, db, a, da, ccB, ccA, 0);
-            float fSa = blendFactor(bfSrcA,   a, da, a, da, ccA, ccA, 1);
-            float fDr = blendFactor(bfDstRGB, r, dr, a, da, ccR, ccA, 0);
-            float fDg = blendFactor(bfDstRGB, g, dg, a, da, ccG, ccA, 0);
-            float fDb = blendFactor(bfDstRGB, b, db, a, da, ccB, ccA, 0);
-            float fDa = blendFactor(bfDstA,   a, da, a, da, ccA, ccA, 1);
+            // Fast path: SrcAlpha/OneMinusSrcAlpha + Add (most common mode)
+            if (bfSrcRGB == 6 && bfDstRGB == 7 && beRGB == 0 &&
+                bfSrcA == 6 && bfDstA == 7 && beA == 0) {
+                float oma = 1.0f - a;
+                r = r * a + dr * oma;
+                g = g * a + dg * oma;
+                b = b * a + db * oma;
+                a = a * a + da * oma;
+            } else {
+                float fSr = blendFactor(bfSrcRGB, r, dr, a, da, ccR, ccA, 0);
+                float fSg = blendFactor(bfSrcRGB, g, dg, a, da, ccG, ccA, 0);
+                float fSb = blendFactor(bfSrcRGB, b, db, a, da, ccB, ccA, 0);
+                float fSa = blendFactor(bfSrcA,   a, da, a, da, ccA, ccA, 1);
+                float fDr = blendFactor(bfDstRGB, r, dr, a, da, ccR, ccA, 0);
+                float fDg = blendFactor(bfDstRGB, g, dg, a, da, ccG, ccA, 0);
+                float fDb = blendFactor(bfDstRGB, b, db, a, da, ccB, ccA, 0);
+                float fDa = blendFactor(bfDstA,   a, da, a, da, ccA, ccA, 1);
 
-            r = blendEquation(beRGB, r * fSr, dr * fDr);
-            g = blendEquation(beRGB, g * fSg, dg * fDg);
-            b = blendEquation(beRGB, b * fSb, db * fDb);
-            a = blendEquation(beA,   a * fSa, da * fDa);
+                r = blendEquation(beRGB, r * fSr, dr * fDr);
+                g = blendEquation(beRGB, g * fSg, dg * fDg);
+                b = blendEquation(beRGB, b * fSb, db * fDb);
+                a = blendEquation(beA,   a * fSa, da * fDa);
+            }
         }
 
         // Ordered 4×4 Bayer dither: small perturbation to reduce banding.
