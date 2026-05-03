@@ -257,6 +257,12 @@ static constexpr uint32_t NV4097_SET_TEXTURE_CONTROL2          = 0x00001D34;
 // NV406E Reference register (subchannel agnostic)
 static constexpr uint32_t NV4097_SET_REFERENCE               = 0x00000050;
 
+// NV406E subchannel semaphore (subchannels 1-2, cellGcm labels)
+static constexpr uint32_t NV406E_SET_REFERENCE               = 0x00000050;
+static constexpr uint32_t NV406E_SEMAPHORE_OFFSET            = 0x00000010;
+static constexpr uint32_t NV406E_SEMAPHORE_ACQUIRE           = 0x00000014;
+static constexpr uint32_t NV406E_SEMAPHORE_RELEASE           = 0x00000018;
+
 // Semaphore / label system (SPU↔RSX sync)
 static constexpr uint32_t NV4097_SET_SEMAPHORE_OFFSET        = 0x00001D6C;
 static constexpr uint32_t NV4097_BACK_END_WRITE_SEMAPHORE_RELEASE = 0x00001D70;
@@ -577,6 +583,10 @@ struct RSXState {
     // Semaphore / label system (SPU↔RSX synchronization).
     // SPUs poll a VRAM location; RSX writes a value there when done.
     uint32_t semaphoreOffset;   // VRAM byte offset for next semaphore write
+
+    // NV406E subchannel semaphore (used by cellGcmSetWriteBackEndLabel etc.)
+    uint32_t labelOffset;       // VRAM byte offset for label write
+    uint32_t labelValue;        // value to write/compare
 
     // NV0039 DMA buffer copy state (accumulated from method writes).
     struct DmaTransfer {

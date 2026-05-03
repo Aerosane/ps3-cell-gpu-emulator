@@ -343,6 +343,32 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         return;
     }
 
+    // ── NV406E subchannel semaphore (subchannels 1-2) ───────────
+    // Used by cellGcmSetWriteBackEndLabel and semaphore acquire/release.
+    // These are the label-based sync that SPUs poll via sys_rsx_context_attribute.
+    if (subchannel == 1 || subchannel == 2) {
+        if (method == NV406E_SEMAPHORE_OFFSET) {
+            state->labelOffset = data;
+        } else if (method == NV406E_SEMAPHORE_ACQUIRE) {
+            // Wait until VRAM[labelOffset] == data. In our single-threaded
+            // emulator the value is already written, so this is a no-op.
+            // A real implementation would spin-wait here.
+            state->labelValue = data;
+        } else if (method == NV406E_SEMAPHORE_RELEASE) {
+            // Write data to VRAM at labelOffset (big-endian, 4 bytes).
+            if (vram && state->labelOffset + 4 <= state->vramSize) {
+                uint32_t off = state->labelOffset;
+                vram[off + 0] = (uint8_t)(data >> 24);
+                vram[off + 1] = (uint8_t)(data >> 16);
+                vram[off + 2] = (uint8_t)(data >> 8);
+                vram[off + 3] = (uint8_t)(data);
+            }
+        } else if (method == NV406E_SET_REFERENCE) {
+            state->ref = data;
+        }
+        return;
+    }
+
     // ── NV4097 3D engine (subchannel 0) + NV0039 DMA (subchannel 3) ──
     // ── Surface setup ──────────────────────────────────────────
     switch (method) {
@@ -867,6 +893,10 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         return;
     case NV4097_SET_TRANSFORM_TIMEOUT:
     case NV4097_SET_WAIT_FOR_IDLE:
+        // Pipeline flush — all pending draws are complete before proceeding.
+        // In our single-threaded command processor, this is implicitly
+        // satisfied since draws execute synchronously. The async FIFO
+        // path handles this via cudaStreamSynchronize in the bridge.
         return;
 
     // DMA context bindings (select VRAM vs main memory for buffers)
