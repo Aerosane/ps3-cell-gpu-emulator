@@ -2244,6 +2244,233 @@ struct PpuHleDispatcher {
         } else if (e.name == "cellPhotoRegistFromFile") {
             retval = 0;
 
+        // ── cellVdec (video decoder) ─────────────────────────────────
+        } else if (e.name == "cellVdecOpen") {
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellVdecClose" || e.name == "cellVdecEndSeq") {
+            retval = 0;
+        } else if (e.name == "cellVdecStartSeq") {
+            retval = 0;
+        } else if (e.name == "cellVdecDecodeAu") {
+            retval = 0;
+        } else if (e.name == "cellVdecGetPicture" || e.name == "cellVdecGetPictureExt") {
+            retval = (int32_t)0x80610102;  // CELL_VDEC_ERROR_EMPTY
+        } else if (e.name == "cellVdecSetFrameRate") {
+            retval = 0;
+        } else if (e.name == "cellVdecQueryAttr") {
+            // r3 = type, r4 = ptr to CellVdecAttr (zero-fill with defaults)
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 32 <= memSize) {
+                std::memset(mem + ptr, 0, 32);
+                // memSize field at offset 4: 4MB default
+                uint32_t ms = __builtin_bswap32(4 * 1024 * 1024);
+                std::memcpy(mem + ptr + 4, &ms, 4);
+            }
+            retval = 0;
+
+        // ── cellSysutil extras ───────────────────────────────────────
+        } else if (e.name == "cellSysutilGetBgmPlaybackStatus" ||
+                   e.name == "cellSysutilGetBgmPlaybackStatus2") {
+            // r3 = ptr to status (0 = not playing)
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) std::memset(mem + ptr, 0, 4);
+            retval = 0;
+        } else if (e.name == "cellSysutilEnableBgmPlayback" ||
+                   e.name == "cellSysutilDisableBgmPlayback") {
+            retval = 0;
+        } else if (e.name == "cellSysutilGetSystemParamFloat") {
+            retval = 0;
+        } else if (e.name == "cellSysutilCheckCallback") {
+            retval = 0;  // no pending callbacks
+        } else if (e.name == "cellSysutilRegisterCallbackDispatcher") {
+            retval = 0;
+        } else if (e.name == "cellSysutilGetLicenseArea") {
+            retval = 1;  // area = SCEA (North America)
+
+        // ── cellGcmSys extras ────────────────────────────────────────
+        } else if (e.name == "cellGcmGetTimeStamp") {
+            retval = 0;
+        } else if (e.name == "cellGcmGetLastSecondVTime") {
+            retval = 16667;  // ~60fps
+        } else if (e.name == "cellGcmGetTiledPitchSize") {
+            retval = 0;
+        } else if (e.name == "cellGcmSetFlipImmediate") {
+            retval = 0;
+        } else if (e.name == "cellGcmSetZcull") {
+            retval = 0;
+        } else if (e.name == "cellGcmGetConfiguration") {
+            // r3 = ptr to CellGcmConfig
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 32 <= memSize) {
+                std::memset(mem + ptr, 0, 32);
+                // localAddress at offset 0, ioAddress at offset 8
+                // localSize = 256MB at offset 16
+                uint32_t localSz = __builtin_bswap32(256 * 1024 * 1024);
+                std::memcpy(mem + ptr + 16, &localSz, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellGcmGetDisplayInfo") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.name == "cellGcmSetFlipMode" ||
+                   e.name == "cellGcmSetDefaultCommandBuffer") {
+            retval = 0;
+        } else if (e.name == "cellGcmBindTile" || e.name == "cellGcmUnbindTile") {
+            retval = 0;
+        } else if (e.name == "cellGcmMapMainMemory") {
+            // r3 = ea, r4 = size, r5 = ptr to offset
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t off = __builtin_bswap32((uint32_t)st.gpr[3]);
+                std::memcpy(mem + ptr, &off, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellGcmUnmapEaIoAddress") {
+            retval = 0;
+        } else if (e.name == "cellGcmSetFlipHandler" ||
+                   e.name == "cellGcmSetVBlankHandler") {
+            retval = 0;
+
+        // ── cellSpurs extras ─────────────────────────────────────────
+        } else if (e.name == "cellSpursCreateTask" ||
+                   e.name == "cellSpursCreateTaskset2") {
+            retval = 0;
+        } else if (e.name == "cellSpursJoinTask") {
+            retval = 0;  // task already finished (stub)
+        } else if (e.name == "cellSpursShutdownTaskset") {
+            retval = 0;
+        } else if (e.name == "cellSpursGetTasksetId") {
+            retval = 0;
+        } else if (e.name == "cellSpursTasksetAttributeSetName" ||
+                   e.name == "cellSpursLookUpTasksetAddress") {
+            retval = 0;
+        } else if (e.name == "cellSpursEventFlagClear" ||
+                   e.name == "cellSpursEventFlagSet") {
+            retval = 0;
+        } else if (e.name == "cellSpursEventFlagWait" ||
+                   e.name == "cellSpursEventFlagTryWait") {
+            retval = 0;  // single-threaded: event already signaled
+        } else if (e.name == "cellSpursEventFlagAttachLv2EventQueue") {
+            retval = 0;
+
+        // ── cellGame extras ──────────────────────────────────────────
+        } else if (e.name == "cellGameGetParamString") {
+            // r3 = paramId, r4 = buf, r5 = bufSize
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            uint32_t sz  = (uint32_t)st.gpr[5];
+            if (ptr && sz > 0 && ptr + sz <= memSize) mem[ptr] = 0;
+            retval = 0;
+        } else if (e.name == "cellGameGetLocalWebContentPath") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 64 <= memSize) {
+                std::memset(mem + ptr, 0, 64);
+                std::memcpy(mem + ptr, "/dev_hdd0/game/", 15);
+            }
+            retval = 0;
+        } else if (e.name == "cellGameRegisterDiscChangeCallback") {
+            retval = 0;
+        } else if (e.name == "cellGameGetBgmPlaybackStatus") {
+            retval = 0;
+
+        // ── cellSaveData extras ──────────────────────────────────────
+        } else if (e.name == "cellSaveDataListLoad2" ||
+                   e.name == "cellSaveDataListSave2") {
+            retval = 0;
+        } else if (e.name == "cellSaveDataDelete2") {
+            retval = 0;
+        } else if (e.name == "cellSaveDataGetListItem") {
+            retval = 0;
+
+        // ── cellPad extras ───────────────────────────────────────────
+        } else if (e.name == "cellPadGetRawData") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = 0;
+        } else if (e.name == "cellPadSetActDirect") {
+            retval = 0;  // rumble — no-op
+        } else if (e.name == "cellPadPeriphGetInfo") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = 0;
+        } else if (e.name == "cellPadGetDataExtra") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = 0;
+
+        // ── cellKb (keyboard) ────────────────────────────────────────
+        } else if (e.name == "cellKbInit") {
+            retval = 0;
+        } else if (e.name == "cellKbEnd") {
+            retval = 0;
+        } else if (e.name == "cellKbGetInfo") {
+            // r3 = ptr to CellKbInfo (zero-fill = no keyboards)
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 16 <= memSize) std::memset(mem + ptr, 0, 16);
+            retval = 0;
+        } else if (e.name == "cellKbRead") {
+            // r3 = port, r4 = ptr to CellKbData
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.name == "cellKbSetCodeType" ||
+                   e.name == "cellKbSetReadMode" ||
+                   e.name == "cellKbClearBuf") {
+            retval = 0;
+
+        // ── cellMouse ────────────────────────────────────────────────
+        } else if (e.name == "cellMouseInit") {
+            retval = 0;
+        } else if (e.name == "cellMouseEnd") {
+            retval = 0;
+        } else if (e.name == "cellMouseGetInfo") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 16 <= memSize) std::memset(mem + ptr, 0, 16);
+            retval = 0;
+        } else if (e.name == "cellMouseGetData") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.name == "cellMouseClearBuf") {
+            retval = 0;
+
+        // ── cellJpgEnc ───────────────────────────────────────────────
+        } else if (e.name == "cellJpgEncOpen") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellJpgEncClose" || e.name == "cellJpgEncReset") {
+            retval = 0;
+        } else if (e.name == "cellJpgEncEncodeFully") {
+            retval = 0;
+
+        // ── cellHttp extras ──────────────────────────────────────────
+        } else if (e.name == "cellHttpCreateTransaction") {
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellHttpDestroyTransaction") {
+            retval = 0;
+        } else if (e.name == "cellHttpSendRequest") {
+            retval = (int32_t)0x80710002;  // CELL_HTTP_ERROR_NO_CONNECTION
+        } else if (e.name == "cellHttpRecvResponse") {
+            retval = (int32_t)0x80710002;
+        } else if (e.name == "cellHttpGetResponseContentLength") {
+            retval = 0;
+        } else if (e.name == "cellHttpGetStatusCode") {
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

@@ -822,6 +822,106 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0x5caa19e7, "cellPhotoUtility", "cellPhotoInitialize" },
     { 0xd46fa1f7, "cellPhotoUtility", "cellPhotoFinalize" },
     { 0x2ff6e155, "cellPhotoUtility", "cellPhotoRegistFromFile" },
+
+    // ── cellVdec (video decoder) ─────────────────────────────────
+    { 0xb6bbcd5d, "cellVdec", "cellVdecOpen" },
+    { 0x16698e83, "cellVdec", "cellVdecClose" },
+    { 0xc982a84a, "cellVdec", "cellVdecStartSeq" },
+    { 0x824433f0, "cellVdec", "cellVdecEndSeq" },
+    { 0xb1f0b3e7, "cellVdec", "cellVdecDecodeAu" },
+    { 0x807c861a, "cellVdec", "cellVdecGetPicture" },
+    { 0x17c702b9, "cellVdec", "cellVdecGetPictureExt" },
+    { 0x761b9a64, "cellVdec", "cellVdecSetFrameRate" },
+    { 0xb8ab7af2, "cellVdec", "cellVdecQueryAttr" },
+
+    // ── cellSysutil extras ───────────────────────────────────────
+    { 0x1e7bff94, "cellSysutil", "cellSysutilGetBgmPlaybackStatus" },
+    { 0x3343824c, "cellSysutil", "cellSysutilGetBgmPlaybackStatus2" },
+    { 0x40e895d3, "cellSysutil", "cellSysutilEnableBgmPlayback" },
+    { 0xa36335a5, "cellSysutil", "cellSysutilDisableBgmPlayback" },
+    { 0xf4e3caa0, "cellSysutil", "cellSysutilGetSystemParamFloat" },
+    { 0x938013a0, "cellSysutil", "cellSysutilCheckCallback" },
+    { 0x9d98afa0, "cellSysutil", "cellSysutilRegisterCallbackDispatcher" },
+    { 0xf1e5f2c0, "cellSysutil", "cellSysutilGetLicenseArea" },
+
+    // ── cellGcmSys extras ────────────────────────────────────────
+    { 0xa547adde, "cellGcmSys", "cellGcmGetTimeStamp" },
+    { 0xd01b570d, "cellGcmSys", "cellGcmGetLastSecondVTime" },
+    { 0x72a577ce, "cellGcmSys", "cellGcmGetTiledPitchSize" },
+    { 0x06edea9e, "cellGcmSys", "cellGcmSetFlipImmediate" },
+    { 0xd8f88f1a, "cellGcmSys", "cellGcmSetZcull" },
+    { 0xe315a0b2, "cellGcmSys", "cellGcmGetConfiguration" },
+    { 0x99d397ac, "cellGcmSys", "cellGcmGetDisplayInfo" },
+    { 0x2a6fba9c, "cellGcmSys", "cellGcmSetFlipMode" },
+    { 0x4524cccd, "cellGcmSys", "cellGcmBindTile" },
+    { 0xa7ede268, "cellGcmSys", "cellGcmUnbindTile" },
+    { 0x626e8518, "cellGcmSys", "cellGcmMapMainMemory" },
+    { 0xdb23b5e3, "cellGcmSys", "cellGcmUnmapEaIoAddress" },
+    { 0xe44e78ec, "cellGcmSys", "cellGcmSetDefaultCommandBuffer" },
+    { 0xfce9e764, "cellGcmSys", "cellGcmSetFlipHandler" },
+    { 0xd34a420d, "cellGcmSys", "cellGcmSetVBlankHandler" },
+
+    // ── cellSpurs extras ─────────────────────────────────────────
+    { 0x00f6a300, "cellSpurs", "cellSpursCreateTask" },
+    { 0x52cc6c82, "cellSpurs", "cellSpursJoinTask" },
+    { 0x0ef34bc5, "cellSpurs", "cellSpursShutdownTaskset" },
+    { 0xe7dd87e1, "cellSpurs", "cellSpursCreateTaskset2" },
+    { 0x39a8e757, "cellSpurs", "cellSpursGetTasksetId" },
+    { 0x7e853010, "cellSpurs", "cellSpursTasksetAttributeSetName" },
+    { 0x8b000b8a, "cellSpurs", "cellSpursLookUpTasksetAddress" },
+    { 0x53141885, "cellSpurs", "cellSpursEventFlagClear" },
+    { 0x9c08e879, "cellSpurs", "cellSpursEventFlagSet" },
+    { 0x83775282, "cellSpurs", "cellSpursEventFlagWait" },
+    { 0x61f97115, "cellSpurs", "cellSpursEventFlagTryWait" },
+    { 0xb9bc6207, "cellSpurs", "cellSpursEventFlagAttachLv2EventQueue" },
+
+    // ── cellGame extras ──────────────────────────────────────────
+    { 0x91f8fd58, "cellGame", "cellGameGetParamString" },
+    { 0x315ac861, "cellGame", "cellGameGetLocalWebContentPath" },
+    { 0x2a8e6b92, "cellGame", "cellGameRegisterDiscChangeCallback" },
+    { 0x8ade82a6, "cellGame", "cellGameGetBgmPlaybackStatus" },
+
+    // ── cellSaveData extras ──────────────────────────────────────
+    { 0x2de0d663, "cellSaveData", "cellSaveDataListLoad2" },
+    { 0x1dfbfdd6, "cellSaveData", "cellSaveDataListSave2" },
+    { 0xf6482036, "cellSaveData", "cellSaveDataDelete2" },
+    { 0x6c2975f4, "cellSaveData", "cellSaveDataGetListItem" },
+
+    // ── cellPad extras ───────────────────────────────────────────
+    { 0x0e2dfaad, "cellPad", "cellPadGetRawData" },
+    { 0x3f797dff, "cellPad", "cellPadSetActDirect" },
+    { 0x4cc9b68d, "cellPad", "cellPadPeriphGetInfo" },
+    { 0xa703a917, "cellPad", "cellPadGetDataExtra" },
+
+    // ── cellKb (keyboard) ────────────────────────────────────────
+    { 0x433f6ec0, "cellKb", "cellKbInit" },
+    { 0xbfce3285, "cellKb", "cellKbEnd" },
+    { 0x4ab1fa77, "cellKb", "cellKbGetInfo" },
+    { 0x2073b7f6, "cellKb", "cellKbRead" },
+    { 0xa5f85cb3, "cellKb", "cellKbSetCodeType" },
+    { 0x3f72c56e, "cellKb", "cellKbSetReadMode" },
+    { 0xdeefdfa7, "cellKb", "cellKbClearBuf" },
+
+    // ── cellMouse ────────────────────────────────────────────────
+    { 0xc9030138, "cellMouse", "cellMouseInit" },
+    { 0x3ef66b95, "cellMouse", "cellMouseEnd" },
+    { 0x3b0a0b95, "cellMouse", "cellMouseGetInfo" },
+    { 0xff0a21b7, "cellMouse", "cellMouseGetData" },
+    { 0xa328cc35, "cellMouse", "cellMouseClearBuf" },
+
+    // ── cellJpgEnc (JPEG encoder) ────────────────────────────────
+    { 0xa9e4e0e3, "cellJpgEnc", "cellJpgEncOpen" },
+    { 0x636dc9c2, "cellJpgEnc", "cellJpgEncClose" },
+    { 0x969fc5f7, "cellJpgEnc", "cellJpgEncEncodeFully" },
+    { 0xb81e5765, "cellJpgEnc", "cellJpgEncReset" },
+
+    // ── cellHttp extras ──────────────────────────────────────────
+    { 0xeb6a0568, "cellHttp", "cellHttpCreateTransaction" },
+    { 0xf6f6afbe, "cellHttp", "cellHttpDestroyTransaction" },
+    { 0x67254157, "cellHttp", "cellHttpSendRequest" },
+    { 0x7e3e3ab5, "cellHttp", "cellHttpRecvResponse" },
+    { 0x4d29fb5c, "cellHttp", "cellHttpGetResponseContentLength" },
+    { 0x7abb3bdf, "cellHttp", "cellHttpGetStatusCode" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {
