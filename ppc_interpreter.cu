@@ -2745,35 +2745,62 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
                 break;
             }
             // Record-form compare variants (same logic + update CR6)
-            case 198 + 1024: // vcmpequw.
-                for (int i = 0; i < 4; i++)
-                    s.vr[vd][i] = (s.vr[va][i] == s.vr[vb][i]) ? 0xFFFFFFFF : 0;
-                break;
-            case 134 + 1024: // vcmpeqfp.
-            {
-                float *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
-                for (int i = 0; i < 4; i++)
-                    s.vr[vd][i] = (a[i] == b[i]) ? 0xFFFFFFFF : 0;
+            // CR6: bit24=allTrue (every element 0xFFFFFFFF), bit26=allFalse (every element 0)
+            case 198 + 1024: { // vcmpequw.
+                uint32_t allT = 0xFFFFFFFF, allF = 0xFFFFFFFF;
+                for (int i = 0; i < 4; i++) {
+                    uint32_t r = (s.vr[va][i] == s.vr[vb][i]) ? 0xFFFFFFFF : 0;
+                    s.vr[vd][i] = r; allT &= r; allF &= ~r;
+                }
+                s.cr = (s.cr & 0xFF0FFFFF) | ((allT ? 0x8 : 0) << 20) | ((allF ? 0x2 : 0) << 20);
                 break;
             }
-            case 710 + 1024: // vcmpgtuw.
-                for (int i = 0; i < 4; i++)
-                    s.vr[vd][i] = (s.vr[va][i] > s.vr[vb][i]) ? 0xFFFFFFFF : 0;
+            case 134 + 1024: { // vcmpeqfp.
+                float *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
+                uint32_t allT = 0xFFFFFFFF, allF = 0xFFFFFFFF;
+                for (int i = 0; i < 4; i++) {
+                    uint32_t r = (a[i] == b[i]) ? 0xFFFFFFFF : 0;
+                    s.vr[vd][i] = r; allT &= r; allF &= ~r;
+                }
+                s.cr = (s.cr & 0xFF0FFFFF) | ((allT ? 0x8 : 0) << 20) | ((allF ? 0x2 : 0) << 20);
                 break;
-            case 774 + 1024: // vcmpgtsw.
-                for (int i = 0; i < 4; i++)
-                    s.vr[vd][i] = ((int32_t)s.vr[va][i] > (int32_t)s.vr[vb][i]) ? 0xFFFFFFFF : 0;
+            }
+            case 710 + 1024: { // vcmpgtuw.
+                uint32_t allT = 0xFFFFFFFF, allF = 0xFFFFFFFF;
+                for (int i = 0; i < 4; i++) {
+                    uint32_t r = (s.vr[va][i] > s.vr[vb][i]) ? 0xFFFFFFFF : 0;
+                    s.vr[vd][i] = r; allT &= r; allF &= ~r;
+                }
+                s.cr = (s.cr & 0xFF0FFFFF) | ((allT ? 0x8 : 0) << 20) | ((allF ? 0x2 : 0) << 20);
                 break;
+            }
+            case 774 + 1024: { // vcmpgtsw.
+                uint32_t allT = 0xFFFFFFFF, allF = 0xFFFFFFFF;
+                for (int i = 0; i < 4; i++) {
+                    uint32_t r = ((int32_t)s.vr[va][i] > (int32_t)s.vr[vb][i]) ? 0xFFFFFFFF : 0;
+                    s.vr[vd][i] = r; allT &= r; allF &= ~r;
+                }
+                s.cr = (s.cr & 0xFF0FFFFF) | ((allT ? 0x8 : 0) << 20) | ((allF ? 0x2 : 0) << 20);
+                break;
+            }
             case 454 + 1024: { // vcmpgtfp.
                 float *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
-                for (int i = 0; i < 4; i++)
-                    s.vr[vd][i] = (a[i] > b[i]) ? 0xFFFFFFFF : 0;
+                uint32_t allT = 0xFFFFFFFF, allF = 0xFFFFFFFF;
+                for (int i = 0; i < 4; i++) {
+                    uint32_t r = (a[i] > b[i]) ? 0xFFFFFFFF : 0;
+                    s.vr[vd][i] = r; allT &= r; allF &= ~r;
+                }
+                s.cr = (s.cr & 0xFF0FFFFF) | ((allT ? 0x8 : 0) << 20) | ((allF ? 0x2 : 0) << 20);
                 break;
             }
             case 518 + 1024: { // vcmpgefp.
                 float *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
-                for (int i = 0; i < 4; i++)
-                    s.vr[vd][i] = (a[i] >= b[i]) ? 0xFFFFFFFF : 0;
+                uint32_t allT = 0xFFFFFFFF, allF = 0xFFFFFFFF;
+                for (int i = 0; i < 4; i++) {
+                    uint32_t r = (a[i] >= b[i]) ? 0xFFFFFFFF : 0;
+                    s.vr[vd][i] = r; allT &= r; allF &= ~r;
+                }
+                s.cr = (s.cr & 0xFF0FFFFF) | ((allT ? 0x8 : 0) << 20) | ((allF ? 0x2 : 0) << 20);
                 break;
             }
 

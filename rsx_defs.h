@@ -511,6 +511,7 @@ struct RSXState {
         uint32_t format;    // type | (size << 4) | (stride << 8)
         bool     enabled;
     } vertexArrays[16];
+    uint16_t activeVAMask;  // bitmask of enabled vertex arrays
 
     // Inline vertex data (SET_VERTEX_DATA4F_M): per-attribute constant fallback
     float    vertexData4f[16][4];  // 16 attrs × 4 floats

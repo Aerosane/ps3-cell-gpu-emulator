@@ -405,8 +405,10 @@ static void decode_vertex_stream(const RSXState& s,
         decode_attr(vram, vramSize, s.vertexArrays[0], posIdx, 4, pos);
 
         // Scan remaining VAs for color (type=UB) and UV (type=F, size=2)
-        for (int va = 1; va < 16; ++va) {
-            if (!s.vertexArrays[va].enabled) continue;
+        // Use activeVAMask to skip disabled slots efficiently
+        uint16_t vaMask = s.activeVAMask >> 1; // skip VA0 (position)
+        for (int va = 1; vaMask; va++, vaMask >>= 1) {
+            if (!(vaMask & 1)) continue;
             uint32_t attrIdx = (freqDiv & (1u << va)) ? instanceId : idx;
             uint32_t type = s.vertexArrays[va].format & 0xF;
             uint32_t sz   = (s.vertexArrays[va].format >> 4) & 0xF;

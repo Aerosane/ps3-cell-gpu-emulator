@@ -1224,6 +1224,11 @@ __device__ bool fpExecute(
     return true;  // pixel not discarded
 }
 
+// Branchless float→8bit saturate: clamp [0,1] → [0,255]
+__device__ __forceinline__ uint32_t sat8(float v) {
+    return (uint32_t)min(max((int)(v * 255.0f + 0.5f), 0), 255);
+}
+
 __device__ __forceinline__ bool depthCompare(uint32_t func, float src, float dst) {
     switch (func) {
     case 0: return false;            // Never
@@ -1855,10 +1860,10 @@ __global__ void k_rasterTriangles(DrawParams dp) {
         if (flatShade) {
             r = v2.r; g = v2.g; b = v2.b; a = v2.a;
         } else {
-            r = p0 * v0.r + p1 * v1.r + p2 * v2.r;
-            g = p0 * v0.g + p1 * v1.g + p2 * v2.g;
-            b = p0 * v0.b + p1 * v1.b + p2 * v2.b;
-            a = p0 * v0.a + p1 * v1.a + p2 * v2.a;
+            r = __fmaf_rn(p0, v0.r, __fmaf_rn(p1, v1.r, p2 * v2.r));
+            g = __fmaf_rn(p0, v0.g, __fmaf_rn(p1, v1.g, p2 * v2.g));
+            b = __fmaf_rn(p0, v0.b, __fmaf_rn(p1, v1.b, p2 * v2.b));
+            a = __fmaf_rn(p0, v0.a, __fmaf_rn(p1, v1.a, p2 * v2.a));
         }
 
         // Two-sided color: swap COL0/COL1 with BFC0/BFC1 for back faces
@@ -1868,7 +1873,7 @@ __global__ void k_rasterTriangles(DrawParams dp) {
                 r = v2.backCol0[0]; g = v2.backCol0[1]; b = v2.backCol0[2]; a = v2.backCol0[3];
                 col1R = v2.backCol1[0]; col1G = v2.backCol1[1]; col1B = v2.backCol1[2]; col1A = v2.backCol1[3];
             } else {
-                #define INTERP_BFC(fld, idx) (p0*v0.fld[idx]+p1*v1.fld[idx]+p2*v2.fld[idx])
+                #define INTERP_BFC(fld, idx) __fmaf_rn(p0,v0.fld[idx],__fmaf_rn(p1,v1.fld[idx],p2*v2.fld[idx]))
                 r = INTERP_BFC(backCol0,0); g = INTERP_BFC(backCol0,1); b = INTERP_BFC(backCol0,2); a = INTERP_BFC(backCol0,3);
                 col1R = INTERP_BFC(backCol1,0); col1G = INTERP_BFC(backCol1,1); col1B = INTERP_BFC(backCol1,2); col1A = INTERP_BFC(backCol1,3);
                 #undef INTERP_BFC
@@ -1877,16 +1882,16 @@ __global__ void k_rasterTriangles(DrawParams dp) {
             if (flatShade) {
                 col1R = v2.col1[0]; col1G = v2.col1[1]; col1B = v2.col1[2]; col1A = v2.col1[3];
             } else {
-                col1R = p0*v0.col1[0]+p1*v1.col1[0]+p2*v2.col1[0];
-                col1G = p0*v0.col1[1]+p1*v1.col1[1]+p2*v2.col1[1];
-                col1B = p0*v0.col1[2]+p1*v1.col1[2]+p2*v2.col1[2];
-                col1A = p0*v0.col1[3]+p1*v1.col1[3]+p2*v2.col1[3];
+                col1R = __fmaf_rn(p0,v0.col1[0],__fmaf_rn(p1,v1.col1[0],p2*v2.col1[0]));
+                col1G = __fmaf_rn(p0,v0.col1[1],__fmaf_rn(p1,v1.col1[1],p2*v2.col1[1]));
+                col1B = __fmaf_rn(p0,v0.col1[2],__fmaf_rn(p1,v1.col1[2],p2*v2.col1[2]));
+                col1A = __fmaf_rn(p0,v0.col1[3],__fmaf_rn(p1,v1.col1[3],p2*v2.col1[3]));
             }
         }
 
         // Texcoords always interpolated with perspective correction
-        float u = p0 * v0.u + p1 * v1.u + p2 * v2.u;
-        float vv = p0 * v0.v + p1 * v1.v + p2 * v2.v;
+        float u = __fmaf_rn(p0, v0.u, __fmaf_rn(p1, v1.u, p2 * v2.u));
+        float vv = __fmaf_rn(p0, v0.v, __fmaf_rn(p1, v1.v, p2 * v2.v));
 
         if (fpInsns && fpInsnCount > 0) {
             // LOD is triangle-constant — computed once, reused for all pixels.
@@ -1897,6 +1902,7 @@ __global__ void k_rasterTriangles(DrawParams dp) {
                 float dw0dy = -(v2.x - v1.x) * invArea;
                 float dw1dx = (v0.y - v2.y) * invArea;
                 float dw1dy = -(v0.x - v2.x) * invArea;
+                #pragma unroll
                 for (int tu = 0; tu < 8; tu++) {
                     triTexLod[tu] = 0.0f;
                     if (!texBank.tex[tu] || texBank.mipLevels[tu] <= 1) continue;
@@ -1905,14 +1911,14 @@ __global__ void k_rasterTriangles(DrawParams dp) {
                     getVertTexCoord(v0, tu, s0t, t0t);
                     getVertTexCoord(v1, tu, s1t, t1t);
                     getVertTexCoord(v2, tu, s2t, t2t);
-                    float ds_dx = dw0dx * (s0t - s2t) + dw1dx * (s1t - s2t);
-                    float dt_dx = dw0dx * (t0t - t2t) + dw1dx * (t1t - t2t);
-                    float ds_dy = dw0dy * (s0t - s2t) + dw1dy * (s1t - s2t);
-                    float dt_dy = dw0dy * (t0t - t2t) + dw1dy * (t1t - t2t);
+                    float ds_dx = __fmaf_rn(dw0dx, (s0t - s2t), dw1dx * (s1t - s2t));
+                    float dt_dx = __fmaf_rn(dw0dx, (t0t - t2t), dw1dx * (t1t - t2t));
+                    float ds_dy = __fmaf_rn(dw0dy, (s0t - s2t), dw1dy * (s1t - s2t));
+                    float dt_dy = __fmaf_rn(dw0dy, (t0t - t2t), dw1dy * (t1t - t2t));
                     float tw = (float)texBank.w[tu];
                     float th = (float)texBank.h[tu];
-                    float rhoX = sqrtf(ds_dx*ds_dx*tw*tw + dt_dx*dt_dx*th*th);
-                    float rhoY = sqrtf(ds_dy*ds_dy*tw*tw + dt_dy*dt_dy*th*th);
+                    float rhoX = sqrtf(__fmaf_rn(ds_dx*tw, ds_dx*tw, dt_dx*th*dt_dx*th));
+                    float rhoY = sqrtf(__fmaf_rn(ds_dy*tw, ds_dy*tw, dt_dy*th*dt_dy*th));
                     triTexLod[tu] = __log2f(fmaxf(fmaxf(rhoX, rhoY), 1.0f));
                 }
             }
@@ -1939,10 +1945,10 @@ __global__ void k_rasterTriangles(DrawParams dp) {
             fpIn[4] = {u, vv, t0r, t0q};  // TEX0
             // TEX1-TEX7: full 4-component interpolation
             #define INTERP4(arr) { \
-                p0*v0.arr[0]+p1*v1.arr[0]+p2*v2.arr[0], \
-                p0*v0.arr[1]+p1*v1.arr[1]+p2*v2.arr[1], \
-                p0*v0.arr[2]+p1*v1.arr[2]+p2*v2.arr[2], \
-                p0*v0.arr[3]+p1*v1.arr[3]+p2*v2.arr[3]  \
+                __fmaf_rn(p0, v0.arr[0], __fmaf_rn(p1, v1.arr[0], p2*v2.arr[0])), \
+                __fmaf_rn(p0, v0.arr[1], __fmaf_rn(p1, v1.arr[1], p2*v2.arr[1])), \
+                __fmaf_rn(p0, v0.arr[2], __fmaf_rn(p1, v1.arr[2], p2*v2.arr[2])), \
+                __fmaf_rn(p0, v0.arr[3], __fmaf_rn(p1, v1.arr[3], p2*v2.arr[3]))  \
             }
             fpIn[5]  = INTERP4(tex1);
             fpIn[6]  = INTERP4(tex2);
@@ -2043,10 +2049,10 @@ __global__ void k_rasterTriangles(DrawParams dp) {
             if (bfSrcRGB == 6 && bfDstRGB == 7 && beRGB == 0 &&
                 bfSrcA == 6 && bfDstA == 7 && beA == 0) {
                 float oma = 1.0f - a;
-                r = r * a + dr * oma;
-                g = g * a + dg * oma;
-                b = b * a + db * oma;
-                a = a * a + da * oma;
+                r = __fmaf_rn(r, a, dr * oma);
+                g = __fmaf_rn(g, a, dg * oma);
+                b = __fmaf_rn(b, a, db * oma);
+                a = __fmaf_rn(a, a, da * oma);
             } else {
                 float fSr = blendFactor(bfSrcRGB, r, dr, a, da, ccR, ccA, 0);
                 float fSg = blendFactor(bfSrcRGB, g, dg, a, da, ccG, ccA, 0);
@@ -2092,12 +2098,7 @@ __global__ void k_rasterTriangles(DrawParams dp) {
             r = lin2srgb(r); g = lin2srgb(g); b = lin2srgb(b);
         }
 
-        auto sat = [](float v) -> uint32_t {
-            int i = (int)(v * 255.0f + 0.5f);
-            if (i < 0) i = 0; else if (i > 255) i = 255;
-            return (uint32_t)i;
-        };
-        uint32_t newPx = (sat(a) << 24) | (sat(r) << 16) | (sat(g) << 8) | sat(b);
+        uint32_t newPx = (sat8(a) << 24) | (sat8(r) << 16) | (sat8(g) << 8) | sat8(b);
 
         // Logic op: bitwise operation on quantized source/dest (replaces blend output)
         if (logicOpEnable) {
@@ -2123,16 +2124,16 @@ __global__ void k_rasterTriangles(DrawParams dp) {
         dstPx = newPx;
         // MRT planes — convert FP output to ARGB8
         if (mrtB) {
-            mrtPxB = (sat(mrtAccum[0].w) << 24) | (sat(mrtAccum[0].x) << 16) |
-                     (sat(mrtAccum[0].y) << 8) | sat(mrtAccum[0].z);
+            mrtPxB = (sat8(mrtAccum[0].w) << 24) | (sat8(mrtAccum[0].x) << 16) |
+                     (sat8(mrtAccum[0].y) << 8) | sat8(mrtAccum[0].z);
         }
         if (mrtC) {
-            mrtPxC = (sat(mrtAccum[1].w) << 24) | (sat(mrtAccum[1].x) << 16) |
-                     (sat(mrtAccum[1].y) << 8) | sat(mrtAccum[1].z);
+            mrtPxC = (sat8(mrtAccum[1].w) << 24) | (sat8(mrtAccum[1].x) << 16) |
+                     (sat8(mrtAccum[1].y) << 8) | sat8(mrtAccum[1].z);
         }
         if (mrtD) {
-            mrtPxD = (sat(mrtAccum[2].w) << 24) | (sat(mrtAccum[2].x) << 16) |
-                     (sat(mrtAccum[2].y) << 8) | sat(mrtAccum[2].z);
+            mrtPxD = (sat8(mrtAccum[2].w) << 24) | (sat8(mrtAccum[2].x) << 16) |
+                     (sat8(mrtAccum[2].y) << 8) | sat8(mrtAccum[2].z);
         }
         if (depthWrite) dstZ = z;
     }
@@ -2250,12 +2251,7 @@ __global__ void k_rasterLines(uint32_t* __restrict__ dst,
             a = blendEquation(beA,   a * fSa, da * fDa);
         }
 
-        auto sat = [](float v) -> uint32_t {
-            int i = (int)(v * 255.0f + 0.5f);
-            if (i < 0) i = 0; else if (i > 255) i = 255;
-            return (uint32_t)i;
-        };
-        dstPx = (sat(a) << 24) | (sat(r) << 16) | (sat(g) << 8) | sat(b);
+        dstPx = (sat8(a) << 24) | (sat8(r) << 16) | (sat8(g) << 8) | sat8(b);
         if (depthWrite) dstZ = z;
     }
 
@@ -2364,12 +2360,7 @@ __global__ void k_rasterPoints(uint32_t* __restrict__ dst,
                 b = blendEquation(beRGB, b * fSb, db * fDb);
                 a = blendEquation(beA,   a * fSa, da * fDa);
             }
-            auto sat = [](float v) -> uint32_t {
-                int i = (int)(v * 255.0f + 0.5f);
-                if (i < 0) i = 0; else if (i > 255) i = 255;
-                return (uint32_t)i;
-            };
-            dst[base] = (sat(a) << 24) | (sat(r) << 16) | (sat(g) << 8) | sat(b);
+            dst[base] = (sat8(a) << 24) | (sat8(r) << 16) | (sat8(g) << 8) | sat8(b);
             if (depth && depthWrite) depth[base] = z;
         }
     }

@@ -736,6 +736,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
             state->currentPrim = (PrimitiveType)data;
             state->inBeginEnd  = true;
             state->inlineVertexData.clear();
+            state->inlineVertexData.reserve(64);
         } else {
             // END — finalize draw batch; flush inline vertex data if any
             state->inBeginEnd = false;
@@ -963,6 +964,8 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         uint32_t slot = (method - NV4097_SET_VERTEX_DATA_ARRAY_FORMAT) / 4;
         state->vertexArrays[slot].format  = data;
         state->vertexArrays[slot].enabled = (data != 0);
+        if (data != 0) state->activeVAMask |=  (1u << slot);
+        else           state->activeVAMask &= ~(1u << slot);
         return;
     }
 
