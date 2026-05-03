@@ -3693,6 +3693,232 @@ struct PpuHleDispatcher {
         } else if (e.fnid == 0x15983389) {  // cellSpursGetNumSpuThread
             retval = 6;  // 6 SPU threads
 
+        // ── sys_lwmutex (lightweight mutex — single-threaded) ───────
+        } else if (e.fnid == 0x5b727ed6 ||  // sys_lwmutex_destroy
+                   e.fnid == 0xc3476d0c) {  // sys_lwmutex_destroy (alt)
+            retval = 0;
+        } else if (e.fnid == 0xa285fa90 ||  // sys_lwmutex_lock
+                   e.fnid == 0x1573dc3f) {  // sys_lwmutex_lock (alt/create)
+            retval = 0;
+        } else if (e.fnid == 0x1a1bc780) {  // sys_lwmutex_trylock
+            retval = 0;
+        } else if (e.fnid == 0xfba04f87 ||  // sys_lwmutex_unlock
+                   e.fnid == 0x1bc200f4) {  // sys_lwmutex_unlock (alt)
+            retval = 0;
+
+        // ── sys_ppu_thread ──────────────────────────────────────────
+        } else if (e.fnid == 0x350d454e ||  // sys_ppu_thread_get_id
+                   e.fnid == 0xaff080a4) {  // sys_ppu_thread_get_id (alt)
+            retval = 1;  // thread ID = 1 (main thread)
+
+        // ── sys_time ────────────────────────────────────────────────
+        } else if (e.fnid == 0x8461e528 ||  // sys_time_get_system_time
+                   e.fnid == 0xa1c2ec4d) {  // sys_time_get_system_time (alt)
+            retval = 0;  // returns system time in r3 (0 = epoch)
+
+        // ── cellFs extras ───────────────────────────────────────────
+        } else if (e.fnid == 0xef3efa34) {  // cellFsFstat
+            // r3 = fd, r4 = ptr to stat_buf
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 128 <= memSize) {
+                std::memset(mem + ptr, 0, 128);
+                uint32_t mode = __builtin_bswap32(0100777);
+                std::memcpy(mem + ptr, &mode, 4);
+            }
+            retval = 0;
+
+        // ── cellKb (keyboard — no keyboard connected) ───────────────
+        } else if (e.fnid == 0x85656de9 ||  // cellKbInit
+                   e.fnid == 0x433f6ec0) {  // cellKbInit (alt)
+            retval = 0;
+        } else if (e.fnid == 0x8fe7f827 ||  // cellKbEnd
+                   e.fnid == 0xbfce3285) {  // cellKbEnd (alt)
+            retval = 0;
+        } else if (e.fnid == 0xead11ae9 ||  // cellKbGetInfo
+                   e.fnid == 0x4ab1fa77) {  // cellKbGetInfo (alt)
+            // r3 = ptr to CellKbInfo — zero means no keyboard
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.fnid == 0xda870fc8 ||  // cellKbRead
+                   e.fnid == 0x2073b7f6) {  // cellKbRead (alt)
+            retval = 0;  // no keys pressed
+        } else if (e.fnid == 0xa5f85cb3 ||  // cellKbSetCodeType
+                   e.fnid == 0x3f72c56e ||  // cellKbSetReadMode
+                   e.fnid == 0xdeefdfa7) {  // cellKbClearBuf
+            retval = 0;
+
+        // ── cellMouse (no mouse connected) ──────────────────────────
+        } else if (e.fnid == 0x890c9fb8 ||  // cellMouseInit
+                   e.fnid == 0xc9030138) {  // cellMouseInit (alt)
+            retval = 0;
+        } else if (e.fnid == 0x67c67673 ||  // cellMouseEnd
+                   e.fnid == 0x3ef66b95) {  // cellMouseEnd (alt)
+            retval = 0;
+        } else if (e.fnid == 0xb4086711 ||  // cellMouseGetInfo
+                   e.fnid == 0x3b0a0b95) {  // cellMouseGetInfo (alt)
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.fnid == 0xff0a21b7 ||  // cellMouseGetData
+                   e.fnid == 0xa328cc35) {  // cellMouseClearBuf
+            retval = 0;
+
+        // ── cellPad extras ──────────────────────────────────────────
+        } else if (e.fnid == 0xa703a51d ||  // cellPadGetInfo2
+                   e.fnid == 0x1be2bbee) {  // cellPadGetInfo2 (alt)
+            // r3 = ptr to CellPadInfo2 — report 1 pad connected
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 64 <= memSize) {
+                std::memset(mem + ptr, 0, 64);
+                uint32_t maxConnect = __builtin_bswap32(7);
+                uint32_t numConnect = __builtin_bswap32(1);
+                uint32_t sysInfo    = __builtin_bswap32(0);
+                std::memcpy(mem + ptr + 0, &maxConnect, 4);
+                std::memcpy(mem + ptr + 4, &numConnect, 4);
+                std::memcpy(mem + ptr + 8, &sysInfo, 4);
+            }
+            retval = 0;
+        } else if (e.fnid == 0x1573dc3f ||  // cellPadSetActDirect (old)
+                   e.fnid == 0x23ef9b61 ||  // cellPadSetActDirect
+                   e.fnid == 0x3f797dff) {  // cellPadSetActDirect (alt)
+            retval = 0;
+
+        // ── cellSaveData extras ─────────────────────────────────────
+        } else if (e.fnid == 0xd739cc4b ||  // cellSaveDataListLoad2
+                   e.fnid == 0x2de0d663 ||  // cellSaveDataListLoad2 (alt)
+                   e.fnid == 0x3604d4f4 ||  // cellSaveDataListSave2
+                   e.fnid == 0x1dfbfdd6 ||  // cellSaveDataListSave2 (alt)
+                   e.fnid == 0x38a0f7d2 ||  // cellSaveDataFixedSave2
+                   e.fnid == 0x2ea09ae8 ||  // cellSaveDataFixedSave2 (alt)
+                   e.fnid == 0x7b5e041a ||  // cellSaveDataFixedLoad2
+                   e.fnid == 0x27cb8bc2) {  // cellSaveDataFixedLoad2 (alt)
+            retval = 0;  // success (no actual save/load)
+
+        // ── cellVideoOut extras ─────────────────────────────────────
+        } else if (e.fnid == 0xe558748d ||  // cellVideoOutGetResolution (orig name: Availability)
+                   e.fnid == 0xe26c97de) {  // cellVideoOutGetResolution
+            // r3 = resolutionId, r4 = ptr to CellVideoOutResolution
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 8 <= memSize) {
+                // Default: 1920x1080
+                uint16_t w = __builtin_bswap16(1920);
+                uint16_t h = __builtin_bswap16(1080);
+                std::memcpy(mem + ptr + 0, &w, 2);
+                std::memcpy(mem + ptr + 2, &h, 2);
+            }
+            retval = 0;
+        } else if (e.fnid == 0x938013a0 ||  // cellVideoOutGetResolutionAvailability (orig)
+                   e.fnid == 0x75bbb672) {  // cellVideoOutGetResolutionAvailability (ext)
+            retval = 1;  // resolution is available
+
+        // ── cellSysutil BGM playback ────────────────────────────────
+        } else if (e.fnid == 0xfc6fe574 ||  // cellSysutilGetBgmPlaybackStatus
+                   e.fnid == 0x1e7bff94 ||  // cellSysutilGetBgmPlaybackStatus (alt)
+                   e.fnid == 0x38ecda87 ||  // cellSysutilGetBgmPlaybackStatus2
+                   e.fnid == 0x3343824c) {  // cellSysutilGetBgmPlaybackStatus2 (alt)
+            // r3 = ptr to status struct — report not playing
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 16 <= memSize) std::memset(mem + ptr, 0, 16);
+            retval = 0;
+        } else if (e.fnid == 0xda004916 ||  // cellSysutilDisableBgmPlayback
+                   e.fnid == 0xa36335a5 ||  // cellSysutilDisableBgmPlayback (alt)
+                   e.fnid == 0x78410b3f ||  // cellSysutilDisableBgmPlaybackEx
+                   e.fnid == 0x799b5fae ||  // cellSysutilEnableBgmPlayback
+                   e.fnid == 0x40e895d3 ||  // cellSysutilEnableBgmPlayback (alt)
+                   e.fnid == 0x6ae48aa9) {  // cellSysutilEnableBgmPlaybackEx
+            retval = 0;
+
+        // ── cellRtc extras ──────────────────────────────────────────
+        } else if (e.fnid == 0x9c1aa28d ||  // cellRtcGetTick
+                   e.fnid == 0x7f1086e6) {  // cellRtcGetTick (alt)
+            retval = 0;
+        } else if (e.fnid == 0x7767eeb3 ||  // cellRtcSetTick
+                   e.fnid == 0x0498b78c) {  // cellRtcSetTick (alt)
+            retval = 0;
+        } else if (e.fnid == 0x17947909 ||  // cellRtcTickAddMinutes
+                   e.fnid == 0xe7086f05 ||  // cellRtcTickAddMinutes (alt)
+                   e.fnid == 0x26f2c987 ||  // cellRtcTickAddHours (alt)
+                   e.fnid == 0x42b9316f ||  // cellRtcTickAddDays (alt)
+                   e.fnid == 0xc2d8cf95 ||  // cellRtcTickAddWeeks (alt)
+                   e.fnid == 0x5316b4a6 ||  // cellRtcTickAddMonths (alt)
+                   e.fnid == 0xd41d3bd2) {  // cellRtcTickAddYears (alt)
+            retval = 0;
+        } else if (e.fnid == 0x18466b0e ||  // cellRtcConvertLocalTimeToUtc
+                   e.fnid == 0x1b2c39d0 ||  // cellRtcConvertLocalTimeToUtc (alt)
+                   e.fnid == 0xead86714 ||  // cellRtcConvertUtcToLocalTime
+                   e.fnid == 0xc7bdb7eb) {  // cellRtcConvertUtcToLocalTime (alt)
+            retval = 0;
+
+        // ── cellMsgDialog extra ─────────────────────────────────────
+        } else if (e.fnid == 0x6df96f85 ||  // cellMsgDialogProgressBarSetMsg
+                   e.fnid == 0xf2b3e8bb) {  // cellMsgDialogProgressBarSetMsg (alt)
+            retval = 0;
+
+        // ── cellGame extras ─────────────────────────────────────────
+        } else if (e.fnid == 0xde9c0881 ||  // cellGameGetParamString
+                   e.fnid == 0x91f8fd58) {  // cellGameGetParamString (alt)
+            // r3 = id, r4 = ptr to buf, r5 = bufsize
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            uint32_t sz  = (uint32_t)st.gpr[5];
+            if (ptr && sz && ptr + sz <= memSize) {
+                std::memset(mem + ptr, 0, sz);
+                if (sz >= 8) std::memcpy(mem + ptr, "PS3Game", 7);
+            }
+            retval = 0;
+
+        // ── cellVpost (video post-processing) ───────────────────────
+        } else if (e.fnid == 0xce247a9c ||  // cellVpostOpen
+                   e.fnid == 0xab8c4fb8 ||  // cellVpostOpen (alt)
+                   e.fnid == 0xd28c4359 ||  // cellVpostOpenEx
+                   e.fnid == 0xef7f1860) {  // cellVpostOpenEx (alt)
+            // r4 = ptr to handle
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.fnid == 0x292d1115 ||  // cellVpostClose
+                   e.fnid == 0x131a1db6) {  // cellVpostClose (alt)
+            retval = 0;
+        } else if (e.fnid == 0xf62c6004 ||  // cellVpostExec
+                   e.fnid == 0x3d18c884) {  // cellVpostExec (alt)
+            retval = 0;
+
+        // ── cellAdec extras ─────────────────────────────────────────
+        } else if (e.fnid == 0x382b0cf4 ||  // cellAdecGetPcmItem
+                   e.fnid == 0xe2ea9fde) {  // cellAdecGetPcmItem (alt)
+            retval = (int32_t)0x80610103;  // CELL_ADEC_ERROR_EMPTY
+        } else if (e.fnid == 0xf07a2ec7 ||  // cellAdecQueryAttr
+                   e.fnid == 0x1b0fc008) {  // cellAdecQueryAttr (alt)
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = 0;
+        } else if (e.fnid == 0xcc534abe ||  // cellAdecStartSeq
+                   e.fnid == 0xc82a4e71) {  // cellAdecStartSeq (alt)
+            retval = 0;
+        } else if (e.fnid == 0xccfeefc2 ||  // cellAdecEndSeq
+                   e.fnid == 0xb3dc0089) {  // cellAdecEndSeq (alt)
+            retval = 0;
+
+        // ── cellPamf (media container reader) ───────────────────────
+        } else if (e.fnid == 0xb13dac24 ||  // cellPamfReaderInitialize
+                   e.fnid == 0x90fc9a36) {  // cellPamfReaderInitialize (alt)
+            retval = 0;
+        } else if (e.fnid == 0x484cfb6f ||  // cellPamfReaderGetNumberOfStreams
+                   e.fnid == 0xd1a40ef4) {  // cellPamfReaderGetNumberOfStreams (alt)
+            retval = 1;  // 1 stream
+        } else if (e.fnid == 0x79df04e4 ||  // cellPamfReaderGetStreamTypeCoding
+                   e.fnid == 0x041a5c89) {  // cellPamfReaderGetStreamTypeCoding (alt)
+            retval = 0;
+
+        // ── cellDmux extra ──────────────────────────────────────────
+        } else if (e.fnid == 0x1b8a5c6a) {  // cellDmuxQueryAttr (guess)
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;
