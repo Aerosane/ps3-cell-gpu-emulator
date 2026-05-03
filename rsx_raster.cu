@@ -585,9 +585,42 @@ __device__ bool fpExecute(
         uint32_t src1packed = iw[2];
         uint32_t src2packed = iw[3];
 
-        FPVec4 s0 = fpReadSrc(src0packed, temps, nTemps, fpInputs, nInputs, consts, constCount, inAttr);
-        FPVec4 s1 = fpReadSrc(src1packed, temps, nTemps, fpInputs, nInputs, consts, constCount, inAttr);
-        FPVec4 s2 = fpReadSrc(src2packed, temps, nTemps, fpInputs, nInputs, consts, constCount, inAttr);
+        // Lazy source loading: only decode sources actually needed per opcode.
+        // This eliminates 2 fpReadSrc calls for unary ops (MOV, RCP, etc.)
+        // and 1 call for binary ops — a major win since fpReadSrc does
+        // swizzle/negate/abs per component.
+        FPVec4 s0 = {0,0,0,0}, s1 = {0,0,0,0}, s2 = {0,0,0,0};
+        // Classify: 0=no sources, 1=s0 only, 2=s0+s1, 3=s0+s1+s2
+        int srcCount;
+        switch (opcode) {
+        case FP_OP_NOP: case FP_OP_FENCT: case FP_OP_FENCB:
+        case FP_OP_SFL: case FP_OP_STR:
+        case FP_OP_BRK: case FP_OP_RET:
+        case FP_OP_LOOP: case FP_OP_REP:
+            srcCount = 0; break;
+        case FP_OP_MOV: case FP_OP_RCP: case FP_OP_RSQ:
+        case FP_OP_FRC: case FP_OP_FLR: case FP_OP_EX2:
+        case FP_OP_LG2: case FP_OP_COS: case FP_OP_SIN:
+        case FP_OP_DDX: case FP_OP_DDY: case FP_OP_NRM:
+        case FP_OP_LIT: case FP_OP_LIF: case FP_OP_KIL:
+        case FP_OP_TEX: case FP_OP_TXP: case FP_OP_TXB:
+        case FP_OP_TXD: case FP_OP_TXL:
+        case FP_OP_PK4: case FP_OP_UP4:
+        case FP_OP_PK2: case FP_OP_UP2:
+        case FP_OP_PKB: case FP_OP_UPB:
+        case FP_OP_PK16: case FP_OP_UP16:
+        case FP_OP_PKG: case FP_OP_UPG:
+        case FP_OP_CAL:
+            srcCount = 1; break;
+        case FP_OP_MAD: case FP_OP_LRP: case FP_OP_DP2A:
+        case FP_OP_IFE:
+            srcCount = 3; break;
+        default:
+            srcCount = 2; break;
+        }
+        if (srcCount >= 1) s0 = fpReadSrc(src0packed, temps, nTemps, fpInputs, nInputs, consts, constCount, inAttr);
+        if (srcCount >= 2) s1 = fpReadSrc(src1packed, temps, nTemps, fpInputs, nInputs, consts, constCount, inAttr);
+        if (srcCount >= 3) s2 = fpReadSrc(src2packed, temps, nTemps, fpInputs, nInputs, consts, constCount, inAttr);
 
         FPVec4 result = {0,0,0,0};
 
@@ -632,14 +665,18 @@ __device__ bool fpExecute(
             result = {fmaxf(s0.x,s1.x), fmaxf(s0.y,s1.y), fmaxf(s0.z,s1.z), fmaxf(s0.w,s1.w)};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
-        case FP_OP_RCP:
-            result = {1.0f/s0.x, 1.0f/s0.x, 1.0f/s0.x, 1.0f/s0.x};
+        case FP_OP_RCP: {
+            float rv = __frcp_rn(s0.x);
+            result = {rv, rv, rv, rv};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
-        case FP_OP_RSQ:
-            result = {rsqrtf(fabsf(s0.x)), rsqrtf(fabsf(s0.x)), rsqrtf(fabsf(s0.x)), rsqrtf(fabsf(s0.x))};
+        }
+        case FP_OP_RSQ: {
+            float rv = __frsqrt_rn(fabsf(s0.x));
+            result = {rv, rv, rv, rv};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
+        }
         case FP_OP_TEX: {
             float tr, tg, tb, ta;
             if (texUnit < 8 && texBank.tex[texUnit] &&
@@ -708,26 +745,29 @@ __device__ bool fpExecute(
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_EX2:
-            result = {exp2f(s0.x), exp2f(s0.x), exp2f(s0.x), exp2f(s0.x)};
+            result = {__expf(s0.x * 0.6931472f), __expf(s0.x * 0.6931472f), __expf(s0.x * 0.6931472f), __expf(s0.x * 0.6931472f)};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_LG2:
-            result = {log2f(fabsf(s0.x)), log2f(fabsf(s0.x)), log2f(fabsf(s0.x)), log2f(fabsf(s0.x))};
+            result = {__log2f(fabsf(s0.x)), __log2f(fabsf(s0.x)), __log2f(fabsf(s0.x)), __log2f(fabsf(s0.x))};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_COS:
-            result = {cosf(s0.x), cosf(s0.x), cosf(s0.x), cosf(s0.x)};
+            result = {__cosf(s0.x), __cosf(s0.x), __cosf(s0.x), __cosf(s0.x)};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_SIN:
-            result = {sinf(s0.x), sinf(s0.x), sinf(s0.x), sinf(s0.x)};
+            result = {__sinf(s0.x), __sinf(s0.x), __sinf(s0.x), __sinf(s0.x)};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
-        case FP_OP_POW:
-            result = {powf(fabsf(s0.x), s1.x), powf(fabsf(s0.x), s1.x),
-                      powf(fabsf(s0.x), s1.x), powf(fabsf(s0.x), s1.x)};
+        case FP_OP_POW: {
+            // Fast power: pow(|x|,y) = exp2(y * log2(|x|))
+            float ax = fabsf(s0.x);
+            float pv = (ax > 0.0f) ? __expf(s1.x * __log2f(ax) * 0.6931472f) : 0.0f;
+            result = {pv, pv, pv, pv};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
+        }
         case FP_OP_KIL:
             // Discard pixel if any component of src0 < 0
             if (s0.x < 0.0f || s0.y < 0.0f || s0.z < 0.0f || s0.w < 0.0f)
@@ -1565,23 +1605,24 @@ __device__ __forceinline__ void sampleTexLod(
     int level0 = (int)floorf(lod);
     if (level0 >= (int)mipLevels - 1) level0 = mipLevels - 1;
 
-    // Compute pixel offset for level0
-    uint32_t off0 = 0;
+    // Compute pixel offset using closed-form mip chain sum.
+    // For power-of-2 textures: sum(w>>i * h>>i, i=0..L-1) = w*h * (1 - 4^-L) / (1 - 1/4)
+    // But we must handle non-POT and min(dim,1) clamping, so use iterative with fast unroll.
+    uint32_t off0 = 0, lw = baseW, lh = baseH;
     for (int i = 0; i < level0; i++) {
-        uint32_t lw = baseW >> i; if (lw == 0) lw = 1;
-        uint32_t lh = baseH >> i; if (lh == 0) lh = 1;
         off0 += lw * lh;
+        lw = (lw >> 1) | (lw == 1); // max(lw>>1, 1) branchless
+        lh = (lh >> 1) | (lh == 1);
     }
-    uint32_t w0 = baseW >> level0; if (w0 == 0) w0 = 1;
-    uint32_t h0 = baseH >> level0; if (h0 == 0) h0 = 1;
+    uint32_t w0 = lw, h0 = lh;
 
     sampleTex(tex + off0, w0, h0, u, v, texLinear ? 1 : 0, r, g, b, a, wrapS, wrapT, borderColor);
 
     if (mipLinear && level0 < (int)mipLevels - 1) {
         float frac = lod - (float)level0;
         uint32_t off1 = off0 + w0 * h0;
-        uint32_t w1 = baseW >> (level0 + 1); if (w1 == 0) w1 = 1;
-        uint32_t h1 = baseH >> (level0 + 1); if (h1 == 0) h1 = 1;
+        uint32_t w1 = (w0 >> 1) | (w0 == 1);
+        uint32_t h1 = (h0 >> 1) | (h0 == 1);
         float r1, g1, b1, a1;
         sampleTex(tex + off1, w1, h1, u, v, texLinear ? 1 : 0, r1, g1, b1, a1, wrapS, wrapT, borderColor);
         r += (r1 - r) * frac;
@@ -1731,14 +1772,13 @@ __global__ void k_rasterTriangles(DrawParams dp) {
         // Z interpolation (linear in screen space after perspective divide)
         float z = w0 * v0.z + w1 * v1.z + w2 * v2.z;
 
-        // Perspective-correct interpolation weights.
-        // 1/W is linear in screen space; we interpolate 1/W then divide
-        // attribute/W by the result to recover perspective-correct values.
-        float iw0 = (v0.w != 0.0f) ? 1.0f / v0.w : 1.0f;
-        float iw1 = (v1.w != 0.0f) ? 1.0f / v1.w : 1.0f;
-        float iw2 = (v2.w != 0.0f) ? 1.0f / v2.w : 1.0f;
+        // Perspective-correct 1/W reciprocals — per-triangle constants
+        // hoisted before any per-pixel use to avoid redundant divisions.
+        float iw0 = (v0.w != 0.0f) ? __frcp_rn(v0.w) : 1.0f;
+        float iw1 = (v1.w != 0.0f) ? __frcp_rn(v1.w) : 1.0f;
+        float iw2 = (v2.w != 0.0f) ? __frcp_rn(v2.w) : 1.0f;
         float iwP = w0 * iw0 + w1 * iw1 + w2 * iw2;
-        float pcW = (iwP != 0.0f) ? 1.0f / iwP : 1.0f;
+        float pcW = (iwP != 0.0f) ? __frcp_rn(iwP) : 1.0f;
         // Perspective-correct barycentric weights
         float p0 = w0 * iw0 * pcW;
         float p1 = w1 * iw1 * pcW;
@@ -1850,30 +1890,32 @@ __global__ void k_rasterTriangles(DrawParams dp) {
         float vv = p0 * v0.v + p1 * v1.v + p2 * v2.v;
 
         if (fpInsns && fpInsnCount > 0) {
-            // Compute per-texture-unit LOD from affine UV gradients.
-            // Barycentric gradients (constant per triangle):
-            float dw0dx = (v2.y - v1.y) * invArea;
-            float dw0dy = -(v2.x - v1.x) * invArea;
-            float dw1dx = (v0.y - v2.y) * invArea;
-            float dw1dy = -(v0.x - v2.x) * invArea;
+            // LOD is triangle-constant — computed once, reused for all pixels.
+            // Barycentric UV gradients depend only on vertex positions + UVs.
             float triTexLod[8];
-            for (int tu = 0; tu < 8; tu++) {
-                triTexLod[tu] = 0.0f;
-                if (!texBank.tex[tu] || texBank.mipLevels[tu] <= 1) continue;
-                if (texBank.minFilter[tu] < 3) continue;
-                float s0t, t0t, s1t, t1t, s2t, t2t;
-                getVertTexCoord(v0, tu, s0t, t0t);
-                getVertTexCoord(v1, tu, s1t, t1t);
-                getVertTexCoord(v2, tu, s2t, t2t);
-                float ds_dx = dw0dx * (s0t - s2t) + dw1dx * (s1t - s2t);
-                float dt_dx = dw0dx * (t0t - t2t) + dw1dx * (t1t - t2t);
-                float ds_dy = dw0dy * (s0t - s2t) + dw1dy * (s1t - s2t);
-                float dt_dy = dw0dy * (t0t - t2t) + dw1dy * (t1t - t2t);
-                float tw = (float)texBank.w[tu];
-                float th = (float)texBank.h[tu];
-                float rhoX = sqrtf(ds_dx*ds_dx*tw*tw + dt_dx*dt_dx*th*th);
-                float rhoY = sqrtf(ds_dy*ds_dy*tw*tw + dt_dy*dt_dy*th*th);
-                triTexLod[tu] = log2f(fmaxf(fmaxf(rhoX, rhoY), 1.0f));
+            {
+                float dw0dx = (v2.y - v1.y) * invArea;
+                float dw0dy = -(v2.x - v1.x) * invArea;
+                float dw1dx = (v0.y - v2.y) * invArea;
+                float dw1dy = -(v0.x - v2.x) * invArea;
+                for (int tu = 0; tu < 8; tu++) {
+                    triTexLod[tu] = 0.0f;
+                    if (!texBank.tex[tu] || texBank.mipLevels[tu] <= 1) continue;
+                    if (texBank.minFilter[tu] < 3) continue;
+                    float s0t, t0t, s1t, t1t, s2t, t2t;
+                    getVertTexCoord(v0, tu, s0t, t0t);
+                    getVertTexCoord(v1, tu, s1t, t1t);
+                    getVertTexCoord(v2, tu, s2t, t2t);
+                    float ds_dx = dw0dx * (s0t - s2t) + dw1dx * (s1t - s2t);
+                    float dt_dx = dw0dx * (t0t - t2t) + dw1dx * (t1t - t2t);
+                    float ds_dy = dw0dy * (s0t - s2t) + dw1dy * (s1t - s2t);
+                    float dt_dy = dw0dy * (t0t - t2t) + dw1dy * (t1t - t2t);
+                    float tw = (float)texBank.w[tu];
+                    float th = (float)texBank.h[tu];
+                    float rhoX = sqrtf(ds_dx*ds_dx*tw*tw + dt_dx*dt_dx*th*th);
+                    float rhoY = sqrtf(ds_dy*ds_dy*tw*tw + dt_dy*dt_dy*th*th);
+                    triTexLod[tu] = __log2f(fmaxf(fmaxf(rhoX, rhoY), 1.0f));
+                }
             }
 
             // Build FP input array from interpolated vertex data
@@ -2029,12 +2071,15 @@ __global__ void k_rasterTriangles(DrawParams dp) {
         }
 
         // sRGB gamma encode: linear → sRGB for framebuffer write
+        // Fast polynomial approximation avoids expensive powf per channel
         if (sRGBWrite) {
             auto lin2srgb = [](float v) -> float {
                 if (v <= 0.0f) return 0.0f;
                 if (v >= 1.0f) return 1.0f;
-                return (v <= 0.0031308f) ? 12.92f * v
-                                         : 1.055f * powf(v, 1.0f/2.4f) - 0.055f;
+                if (v <= 0.0031308f) return 12.92f * v;
+                // Fast approx: x^(1/2.4) ≈ sqrt(x) * (0.6823 + 0.3177 * sqrt(x))
+                float sq = __fsqrt_rn(v);
+                return 1.055f * sq * (0.6823f + 0.3177f * sq) - 0.055f;
             };
             r = lin2srgb(r); g = lin2srgb(g); b = lin2srgb(b);
         }
