@@ -212,8 +212,49 @@ __device__ static int spuExecOne(SPUState& s, uint8_t* ls, uint8_t* mainMem,
     uint32_t inst = ls_fetch_inst(ls, s.pc);
     s.npc = (s.pc + 4) & (SPU_LS_SIZE - 1);
 
-    // Decode: widest opcode first (11 > 9 > 8 > 7 > 4 bits)
+    // Decode: SPU ISA priority order — narrower opcodes first
+    // RI8 (10-bit) must be checked BEFORE RR (11-bit) to avoid collision
+    // between CFLTS/CSFLT/CUFLT/CFLTU and ROTQBI/ROTQBY
     uint32_t o11 = spu_op11(inst);
+    { // RI8 (10-bit opcode) — float<->int conversions
+        uint32_t o10 = (inst >> 22) & 0x3FF;
+        uint32_t rT_  = inst & 0x7F;
+        uint32_t rA_  = (inst >> 7) & 0x7F;
+        uint32_t i8   = (inst >> 14) & 0xFF;
+        switch (o10) {
+        case 0xED: { // CSFLT: convert signed int to float
+            float div = (i8 < 32) ? (float)(1u << i8) : 4294967296.0f;
+            for (int i = 0; i < 4; i++) s.gpr[rT_].f32[i] = (float)s.gpr[rA_].s32[i] / div;
+            goto done;
+        }
+        case 0xEC: { // CFLTS: convert float to signed int
+            float mul = (i8 < 32) ? (float)(1u << i8) : 4294967296.0f;
+            for (int i = 0; i < 4; i++) {
+                float v = s.gpr[rA_].f32[i] * mul;
+                if (v >= 2147483648.0f) s.gpr[rT_].s32[i] = 0x7FFFFFFF;
+                else if (v < -2147483648.0f) s.gpr[rT_].s32[i] = (int32_t)0x80000000;
+                else s.gpr[rT_].s32[i] = (int32_t)v;
+            }
+            goto done;
+        }
+        case 0xEE: { // CUFLT: convert unsigned int to float
+            float div = (i8 < 32) ? (float)(1u << i8) : 4294967296.0f;
+            for (int i = 0; i < 4; i++) s.gpr[rT_].f32[i] = (float)s.gpr[rA_].u32[i] / div;
+            goto done;
+        }
+        case 0xEF: { // CFLTU: convert float to unsigned int
+            float mul = (i8 < 32) ? (float)(1u << i8) : 4294967296.0f;
+            for (int i = 0; i < 4; i++) {
+                float v = s.gpr[rA_].f32[i] * mul;
+                if (v >= 4294967296.0f) s.gpr[rT_].u32[i] = 0xFFFFFFFF;
+                else if (v < 0.0f) s.gpr[rT_].u32[i] = 0;
+                else s.gpr[rT_].u32[i] = (uint32_t)v;
+            }
+            goto done;
+        }
+        default: break;
+        }
+    }
     { // RR (11-bit)
         uint32_t rT=spu_rT_rr(inst),rA=spu_rA_rr(inst),rB=spu_rB_rr(inst);
         switch(o11){
@@ -281,6 +322,28 @@ __device__ static int spuExecOne(SPUState& s, uint8_t* ls, uint8_t* mainMem,
         case op11::RDCH:  { s.gpr[rT].u32[0]=channel_read(s,rA);s.gpr[rT].u32[1]=s.gpr[rT].u32[2]=s.gpr[rT].u32[3]=0; goto done; }
         case op11::RCHCNT:{ uint32_t cnt=1;if(rA==SPU_RdInMbox)cnt=s.inMboxValid?1:0;else if(rA==SPU_WrOutMbox)cnt=s.outMboxValid?0:1;s.gpr[rT].u32[0]=cnt;s.gpr[rT].u32[1]=s.gpr[rT].u32[2]=s.gpr[rT].u32[3]=0; goto done; }
         case op11::WRCH:  { channel_write(s,rA,s.gpr[rT].u32[0],ls,mainMem,mailboxOut); goto done; }
+        // Sign extension
+        case op11::XSBH:  { for(int i=0;i<16;i+=2){int8_t b=s.gpr[rA].u8[i+1];s.gpr[rT].u8[i]=(b<0)?0xFF:0x00;s.gpr[rT].u8[i+1]=b;} goto done; }
+        case op11::XSHW:  { for(int i=0;i<4;i++){int16_t h=s.gpr[rA].s16[i*2+1];s.gpr[rT].s32[i]=(int32_t)h;} goto done; }
+        case op11::XSWD:  { s.gpr[rT].s32[0]=(s.gpr[rA].s32[0]<0)?-1:0;s.gpr[rT].s32[1]=s.gpr[rA].s32[0];s.gpr[rT].s32[2]=(s.gpr[rA].s32[2]<0)?-1:0;s.gpr[rT].s32[3]=s.gpr[rA].s32[2]; goto done; }
+        // Load/Store indexed
+        case op11::LQX:   { uint32_t ea=(s.gpr[rA].u32[0]+s.gpr[rB].u32[0])&(SPU_LS_SIZE-1)&~0xF;s.gpr[rT]=ls_read_qw(ls,ea); goto done; }
+        case op11::STQX:  { uint32_t ea=(s.gpr[rA].u32[0]+s.gpr[rB].u32[0])&(SPU_LS_SIZE-1)&~0xF;ls_write_qw(ls,ea,s.gpr[rT]); goto done; }
+        // Floating interpolate (rare, treat as NOP — result in rT stays)
+        case op11::FI:    { goto done; }
+        // Multiply high-high
+        case op11::MPYHH:  { for(int i=0;i<4;i++){int16_t a=(int16_t)(s.gpr[rA].u32[i]>>16),b=(int16_t)(s.gpr[rB].u32[i]>>16);s.gpr[rT].s32[i]=(int32_t)a*(int32_t)b;} goto done; }
+        case op11::MPYHHU: { for(int i=0;i<4;i++){uint16_t a=(uint16_t)(s.gpr[rA].u32[i]>>16),b=(uint16_t)(s.gpr[rB].u32[i]>>16);s.gpr[rT].u32[i]=(uint32_t)a*(uint32_t)b;} goto done; }
+        // Extended carry/borrow
+        case op11::CGX:  { for(int i=0;i<4;i++){uint64_t sm=(uint64_t)s.gpr[rA].u32[i]+(uint64_t)s.gpr[rB].u32[i]+(uint64_t)(s.gpr[rT].u32[i]&1);s.gpr[rT].u32[i]=(uint32_t)(sm>>32);} goto done; }
+        case op11::BGX:  { for(int i=0;i<4;i++){int64_t d=(int64_t)(uint64_t)s.gpr[rB].u32[i]-(int64_t)(uint64_t)s.gpr[rA].u32[i]-(int64_t)(1-(s.gpr[rT].u32[i]&1));s.gpr[rT].u32[i]=(d>=0)?1:0;} goto done; }
+        // Branch indirect halfword variants
+        case op11::BIHZ:  { if((s.gpr[rT].u32[0]&0xFFFF)==0) s.npc=s.gpr[rA].u32[0]&(SPU_LS_SIZE-1)&~0x3; goto done; }
+        case op11::BIHNZ: { if((s.gpr[rT].u32[0]&0xFFFF)!=0) s.npc=s.gpr[rA].u32[0]&(SPU_LS_SIZE-1)&~0x3; goto done; }
+        // Quadword shift/rotate with byte+bit count
+        case op11::SHLQBYBI:{ uint32_t sh=(s.gpr[rB].u32[0]>>3)&0x1F;for(int i=0;i<16;i++) s.gpr[rT].u8[i]=(i+sh<16)?s.gpr[rA].u8[i+sh]:0; goto done; }
+        case op11::ROTQBYBI:{ uint32_t sh=(s.gpr[rB].u32[0]>>3)&0xF;QWord tmp=s.gpr[rA];for(int i=0;i<16;i++) s.gpr[rT].u8[i]=tmp.u8[(i+sh)&0xF]; goto done; }
+        case op11::ROTQMBYBI:{ uint32_t sh=((-(int32_t)(s.gpr[rB].u32[0]>>3)))&0x1F;for(int i=0;i<16;i++){int src=i-(int)sh;s.gpr[rT].u8[i]=(src>=0)?s.gpr[rA].u8[src]:0;} goto done; }
         case op11::NOP: case op11::LNOP: case op11::SYNC: case op11::DSYNC: goto done;
         case op11::STOP: case op11::STOPD: s.halted=1; return 1;
         default: break;
@@ -320,8 +383,14 @@ __device__ static int spuExecOne(SPUState& s, uint8_t* ls, uint8_t* mainMem,
         case op8::ORI:   { for(int i=0;i<4;i++) s.gpr[rT].s32[i]=s.gpr[rA].s32[i]|i10; goto done; }
         case op8::XORI:  { for(int i=0;i<4;i++) s.gpr[rT].s32[i]=s.gpr[rA].s32[i]^i10; goto done; }
         case op8::CEQI:  { for(int i=0;i<4;i++) s.gpr[rT].u32[i]=(s.gpr[rA].s32[i]==i10)?0xFFFFFFFF:0; goto done; }
+        case op8::CEQHI: { int16_t imm=(int16_t)(i10&0xFFFF);for(int i=0;i<8;i++) s.gpr[rT].u16[i]=(s.gpr[rA].s16[i]==imm)?0xFFFF:0; goto done; }
+        case op8::CEQBI: { int8_t imm=(int8_t)(i10&0xFF);for(int i=0;i<16;i++) s.gpr[rT].u8[i]=(s.gpr[rA].s8[i]==imm)?0xFF:0; goto done; }
         case op8::CGTI:  { for(int i=0;i<4;i++) s.gpr[rT].u32[i]=(s.gpr[rA].s32[i]>i10)?0xFFFFFFFF:0; goto done; }
+        case op8::CGTHI: { int16_t imm=(int16_t)(i10&0xFFFF);for(int i=0;i<8;i++) s.gpr[rT].u16[i]=(s.gpr[rA].s16[i]>imm)?0xFFFF:0; goto done; }
+        case op8::CGTBI: { int8_t imm=(int8_t)(i10&0xFF);for(int i=0;i<16;i++) s.gpr[rT].u8[i]=(s.gpr[rA].s8[i]>imm)?0xFF:0; goto done; }
         case op8::CLGTI: { uint32_t uimm=(uint32_t)i10;for(int i=0;i<4;i++) s.gpr[rT].u32[i]=(s.gpr[rA].u32[i]>uimm)?0xFFFFFFFF:0; goto done; }
+        case op8::CLGTHI:{ uint16_t uimm=(uint16_t)(i10&0xFFFF);for(int i=0;i<8;i++) s.gpr[rT].u16[i]=(s.gpr[rA].u16[i]>uimm)?0xFFFF:0; goto done; }
+        case op8::CLGTBI:{ uint8_t uimm=(uint8_t)(i10&0xFF);for(int i=0;i<16;i++) s.gpr[rT].u8[i]=(s.gpr[rA].u8[i]>uimm)?0xFF:0; goto done; }
         case op8::LQD:   { uint32_t ea=((s.gpr[rA].u32[0]+(i10<<4))&(SPU_LS_SIZE-1))&~0xF;s.gpr[rT]=ls_read_qw(ls,ea); goto done; }
         case op8::STQD:  { uint32_t ea=((s.gpr[rA].u32[0]+(i10<<4))&(SPU_LS_SIZE-1))&~0xF;ls_write_qw(ls,ea,s.gpr[rT]); goto done; }
         case op8::MPYI:  { for(int i=0;i<4;i++){int16_t a=(int16_t)(s.gpr[rA].u32[i]&0xFFFF);s.gpr[rT].s32[i]=(int32_t)a*i10;} goto done; }

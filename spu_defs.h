@@ -283,7 +283,7 @@ namespace op11 {
     constexpr uint32_t CSFLT    = 0x1DA;  // Convert Signed Int to Float
     constexpr uint32_t CFLTS    = 0x1D8;  // Convert Float to Signed Int
     constexpr uint32_t CUFLT    = 0x1DC;  // Convert Unsigned Int to Float  
-    constexpr uint32_t CFLTU    = 0x1DA;  // Convert Float to Unsigned Int
+    constexpr uint32_t CFLTU    = 0x1DE;  // Convert Float to Unsigned Int
 
     // Double precision
     constexpr uint32_t DFA      = 0x2CC;  // Double Floating Add
