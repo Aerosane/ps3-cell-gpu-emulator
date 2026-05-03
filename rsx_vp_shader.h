@@ -643,10 +643,37 @@ inline void vp_write_dst(float value[4],
     if (mw) dst[3] = value[3];
 }
 
+// Texture bank for VP TXL (vertex texture fetch)
+struct VPTexInfo {
+    const uint32_t* data;  // RGBA8 texels (host memory)
+    uint32_t w, h;
+};
+
+inline void vp_sample_tex(const VPTexInfo& tex, float u, float v, float out[4]) {
+    if (!tex.data || tex.w == 0 || tex.h == 0) {
+        out[0] = out[1] = out[2] = out[3] = 1.0f;
+        return;
+    }
+    // Clamp UV to [0,1], sample nearest
+    u = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
+    v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+    uint32_t px = (uint32_t)(u * (tex.w - 1) + 0.5f);
+    uint32_t py = (uint32_t)(v * (tex.h - 1) + 0.5f);
+    if (px >= tex.w) px = tex.w - 1;
+    if (py >= tex.h) py = tex.h - 1;
+    uint32_t rgba = tex.data[py * tex.w + px];
+    out[0] = ((rgba >> 16) & 0xFF) / 255.0f;  // R
+    out[1] = ((rgba >>  8) & 0xFF) / 255.0f;  // G
+    out[2] = ((rgba)       & 0xFF) / 255.0f;  // B
+    out[3] = ((rgba >> 24) & 0xFF) / 255.0f;  // A
+}
+
 inline void vp_execute(const uint32_t* vpData, uint32_t vpLen, uint32_t vpStart,
                        const VPFloat4 inputs[16],
                        const VPFloat4 constants[256],
-                       VPFloat4 outputs[16]) {
+                       VPFloat4 outputs[16],
+                       const VPTexInfo* vpTex = nullptr,
+                       uint32_t vpTexCount = 0) {
     VPFloat4 temps[48] = {};
     int32_t addrReg[4] = {0, 0, 0, 0};
     uint32_t numInsns = vpLen / 4;
@@ -761,11 +788,16 @@ inline void vp_execute(const uint32_t* vpData, uint32_t vpLen, uint32_t vpStart,
                     r[k] = src0[k] > 0.0f ? 1.0f : (src0[k] < 0.0f ? -1.0f : 0.0f);
                 }
                 break;
-            case VP_VEC_TXL:
-                // Vertex texture fetch stub — returns white (1,1,1,1)
-                // Real implementation would sample vtx texture at src0.xy with LOD=src0.w
-                for (int k = 0; k < 4; ++k) r[k] = 1.0f;
+            case VP_VEC_TXL: {
+                // Vertex texture fetch: sample texture unit from insn at src0.xy
+                uint32_t texUnit = insn.inputIdx & 0x3;  // texture unit 0-3
+                if (vpTex && texUnit < vpTexCount && vpTex[texUnit].data) {
+                    vp_sample_tex(vpTex[texUnit], src0[0], src0[1], r);
+                } else {
+                    for (int k = 0; k < 4; ++k) r[k] = 1.0f;
+                }
                 break;
+            }
             case VP_VEC_ARL:
                 for (int k = 0; k < 4; ++k) {
                     addrReg[k] = (int32_t)__builtin_floorf(src0[k]);
