@@ -301,13 +301,14 @@ static inline bool decode_attr(const uint8_t* vram, uint32_t vramSize,
     case VERTEX_UB: {
         // D3DCOLOR byte order: stored BGRA in memory, emit as RGBA.
         // When size == 4 and we're reading a color slot, remap.
+        constexpr float INV255 = 1.0f / 255.0f;
         if (size == 4 && maxChannels == 4) {
-            out[2] = p[0] / 255.0f;  // B
-            out[1] = p[1] / 255.0f;  // G
-            out[0] = p[2] / 255.0f;  // R
-            out[3] = p[3] ? (p[3] / 255.0f) : 1.0f;  // A (default 1.0 if unset)
+            out[2] = p[0] * INV255;  // B
+            out[1] = p[1] * INV255;  // G
+            out[0] = p[2] * INV255;  // R
+            out[3] = p[3] ? (p[3] * INV255) : 1.0f;  // A (default 1.0 if unset)
         } else {
-            for (int i = 0; i < channels; ++i) out[i] = p[i] / 255.0f;
+            for (int i = 0; i < channels; ++i) out[i] = p[i] * INV255;
         }
         return true;
     }
@@ -319,7 +320,7 @@ static inline bool decode_attr(const uint8_t* vram, uint32_t vramSize,
             uint16_t le = __builtin_bswap16(be);
             int16_t s16;
             std::memcpy(&s16, &le, 2);
-            out[i] = s16 / 32767.0f;
+            out[i] = s16 * (1.0f / 32767.0f);
         }
         return true;
     }
@@ -375,9 +376,9 @@ static inline bool decode_attr(const uint8_t* vram, uint32_t vramSize,
         int32_t ix = (int32_t)(w << 21) >> 21;
         int32_t iy = (int32_t)(w << 10) >> 21;
         int32_t iz = (int32_t)(w)       >> 22;
-        out[0] = ix / 1023.0f;
-        out[1] = iy / 1023.0f;
-        out[2] = iz / 511.0f;
+        out[0] = ix * (1.0f / 1023.0f);
+        out[1] = iy * (1.0f / 1023.0f);
+        out[2] = iz * (1.0f / 511.0f);
         if (channels > 3) out[3] = 1.0f;
         return true;
     }
