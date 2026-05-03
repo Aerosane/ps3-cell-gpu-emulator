@@ -114,6 +114,53 @@ __device__ static uint32_t hle_alloc_id() {
     return atomicAdd(&g_hle_next_id, 1);
 }
 
+// ─── On-device filesystem descriptor table ───────────────────
+// Maps FDs to guest-memory file regions for read/write/seek.
+// PS3 games read files loaded via ELF segments into sandbox memory.
+struct FsDescriptor {
+    uint32_t inUse;       // 0 = free, 1 = open file, 2 = open directory
+    uint64_t dataAddr;    // guest address of file data (0 if virtual/empty)
+    uint64_t fileSize;    // total file size in bytes
+    uint64_t seekPos;     // current read/write position
+    uint32_t flags;       // open flags (CELL_FS_O_RDONLY=0, O_WRONLY=1, O_RDWR=2)
+};
+
+#define FS_MAX_FDS 64
+static __device__ FsDescriptor g_fds[FS_MAX_FDS];
+
+// Allocate a file descriptor, return slot index or -1
+__device__ static int fs_alloc_fd() {
+    for (int i = 3; i < FS_MAX_FDS; i++) {  // skip 0,1,2 (stdin/stdout/stderr)
+        if (atomicCAS(&g_fds[i].inUse, 0, 1) == 0) return i;
+    }
+    return -1;
+}
+
+// Read a null-terminated string from guest memory (max 255 chars)
+__device__ static int fs_read_path(const uint8_t* mem, uint64_t addr, char* out, int maxLen) {
+    if (addr == 0 || addr >= PS3_SANDBOX_SIZE) return 0;
+    int len = 0;
+    for (int i = 0; i < maxLen - 1 && (addr + i) < PS3_SANDBOX_SIZE; i++) {
+        char c = (char)mem[addr + i];
+        out[i] = c;
+        if (c == 0) { len = i; break; }
+        len = i + 1;
+    }
+    out[len] = 0;
+    return len;
+}
+
+// Check if path matches a known virtual device (/dev_hdd0, /dev_flash, etc)
+// Returns true if the file is a "virtual empty" file (no backing data)
+__device__ static bool fs_is_dev_path(const char* path) {
+    // PS3 virtual paths: /dev_hdd0/, /dev_flash/, /dev_usb000/, /app_home/, /host_root/
+    return (path[0] == '/' && (
+        (path[1] == 'd' && path[2] == 'e' && path[3] == 'v') ||
+        (path[1] == 'a' && path[2] == 'p' && path[3] == 'p') ||
+        (path[1] == 'h' && path[2] == 'o' && path[3] == 's' && path[4] == 't')
+    ));
+}
+
 __device__ static void handleSyscall(PPEState& s, uint8_t* mem, uint32_t* hle_log,
                                       volatile uint32_t* hle_signal) {
     uint32_t sc_num = (uint32_t)s.gpr[11]; // r11 = syscall number on CellOS
@@ -527,43 +574,135 @@ __device__ static void handleSyscall(PPEState& s, uint8_t* mem, uint32_t* hle_lo
         s.gpr[3] = 0;
         break;
 
-    // ─── Filesystem (stubs) ──────────────────────────────────────
+    // ─── Filesystem (implemented with on-device FD table) ─────────
     case SYS_FS_OPEN: {
-        uint32_t fd = hle_alloc_id();
-        // r5 = fd_ptr
+        // r3 = path_ptr, r4 = flags, r5 = fd_out_ptr, r6 = mode, r7 = arg_ptr
+        char path[256];
+        fs_read_path(mem, s.gpr[3], path, 256);
+        int fd = fs_alloc_fd();
+        if (fd < 0) {
+            s.gpr[3] = 0x80010002; // CELL_FS_EMFILE (too many open files)
+            break;
+        }
+        g_fds[fd].dataAddr = 0;    // no backing data by default
+        g_fds[fd].fileSize = 0;
+        g_fds[fd].seekPos  = 0;
+        g_fds[fd].flags    = (uint32_t)s.gpr[4];
+        // Write FD to output pointer
         if (s.gpr[5] && s.gpr[5] < PS3_SANDBOX_SIZE - 4)
-            mem_write32(mem, s.gpr[5], fd);
+            mem_write32(mem, s.gpr[5], (uint32_t)fd);
+        s.gpr[3] = 0; // CELL_OK
+        break;
+    }
+    case SYS_FS_CLOSE: {
+        // r3 = fd
+        uint32_t fd = (uint32_t)s.gpr[3];
+        if (fd < FS_MAX_FDS && g_fds[fd].inUse) {
+            g_fds[fd].inUse = 0;
+            g_fds[fd].dataAddr = 0;
+            g_fds[fd].fileSize = 0;
+            g_fds[fd].seekPos  = 0;
+            s.gpr[3] = 0;
+        } else {
+            s.gpr[3] = 0x80010009; // CELL_FS_EBADF
+        }
+        break;
+    }
+    case SYS_FS_READ: {
+        // r3 = fd, r4 = buf_ptr, r5 = nbytes, r6 = nread_out_ptr
+        uint32_t fd = (uint32_t)s.gpr[3];
+        uint64_t bufAddr = s.gpr[4];
+        uint64_t nbytes  = s.gpr[5];
+        uint64_t nreadPtr = s.gpr[6];
+        if (fd >= FS_MAX_FDS || !g_fds[fd].inUse) {
+            s.gpr[3] = 0x80010009; // EBADF
+            break;
+        }
+        uint64_t pos  = g_fds[fd].seekPos;
+        uint64_t size = g_fds[fd].fileSize;
+        uint64_t addr = g_fds[fd].dataAddr;
+        uint64_t avail = (pos < size) ? (size - pos) : 0;
+        uint64_t toRead = (nbytes < avail) ? nbytes : avail;
+        // Copy from guest file data to guest buffer
+        if (toRead > 0 && addr != 0 && bufAddr != 0 &&
+            (addr + pos + toRead) <= PS3_SANDBOX_SIZE &&
+            (bufAddr + toRead) <= PS3_SANDBOX_SIZE) {
+            for (uint64_t i = 0; i < toRead; i++)
+                mem[bufAddr + i] = mem[addr + pos + i];
+        }
+        g_fds[fd].seekPos += toRead;
+        if (nreadPtr && nreadPtr < PS3_SANDBOX_SIZE - 8)
+            mem_write64(mem, nreadPtr, toRead);
         s.gpr[3] = 0;
         break;
     }
-    case SYS_FS_CLOSE:
+    case SYS_FS_WRITE: {
+        // r3 = fd, r4 = buf_ptr, r5 = nbytes, r6 = nwritten_out_ptr
+        uint32_t fd = (uint32_t)s.gpr[3];
+        uint64_t nbytes = s.gpr[5];
+        uint64_t nwritePtr = s.gpr[6];
+        if (fd >= FS_MAX_FDS || !g_fds[fd].inUse) {
+            s.gpr[3] = 0x80010009;
+            break;
+        }
+        // For writes to stdout/stderr (fd 1,2) or virtual files, just advance position
+        g_fds[fd].seekPos += nbytes;
+        if (nwritePtr && nwritePtr < PS3_SANDBOX_SIZE - 8)
+            mem_write64(mem, nwritePtr, nbytes);
         s.gpr[3] = 0;
         break;
-    case SYS_FS_READ:
+    }
+    case SYS_FS_LSEEK: {
+        // r3 = fd, r4 = offset, r5 = whence, r6 = pos_out_ptr
+        uint32_t fd = (uint32_t)s.gpr[3];
+        int64_t offset = (int64_t)s.gpr[4];
+        uint32_t whence = (uint32_t)s.gpr[5];
+        uint64_t posPtr = s.gpr[6];
+        if (fd >= FS_MAX_FDS || !g_fds[fd].inUse) {
+            s.gpr[3] = 0x80010009;
+            break;
+        }
+        uint64_t newPos;
+        switch (whence) {
+        case 0: newPos = (uint64_t)offset; break;                      // SEEK_SET
+        case 1: newPos = g_fds[fd].seekPos + (uint64_t)offset; break;  // SEEK_CUR
+        case 2: newPos = g_fds[fd].fileSize + (uint64_t)offset; break; // SEEK_END
+        default: newPos = g_fds[fd].seekPos; break;
+        }
+        g_fds[fd].seekPos = newPos;
+        if (posPtr && posPtr < PS3_SANDBOX_SIZE - 8)
+            mem_write64(mem, posPtr, newPos);
         s.gpr[3] = 0;
-        // r5 = nread_ptr → 0 bytes read
-        if (s.gpr[5] && s.gpr[5] < PS3_SANDBOX_SIZE - 8)
-            mem_write64(mem, s.gpr[5], 0);
         break;
-    case SYS_FS_WRITE:
-        s.gpr[3] = 0;
-        if (s.gpr[5] && s.gpr[5] < PS3_SANDBOX_SIZE - 8)
-            mem_write64(mem, s.gpr[5], s.gpr[4]); // pretend all bytes written
-        break;
-    case SYS_FS_LSEEK:
-        s.gpr[3] = 0;
-        if (s.gpr[4] && s.gpr[4] < PS3_SANDBOX_SIZE - 8)
-            mem_write64(mem, s.gpr[4], 0);
-        break;
-    case SYS_FS_STAT:
-    case SYS_FS_FSTAT:
-        // Zero-fill stat buffer (r4 = buf_ptr)
-        if (s.gpr[4] && s.gpr[4] < PS3_SANDBOX_SIZE - 128) {
+    }
+    case SYS_FS_STAT: {
+        // r3 = path_ptr, r4 = stat_buf_ptr
+        // CellFsStat: mode(4) uid(4) gid(4) atime(8) mtime(8) ctime(8) size(8) blksize(8)
+        uint64_t bufPtr = s.gpr[4];
+        if (bufPtr && bufPtr < PS3_SANDBOX_SIZE - 128) {
             for (int i = 0; i < 128; i += 8)
-                mem_write64(mem, s.gpr[4] + i, 0);
+                mem_write64(mem, bufPtr + i, 0);
+            // mode: regular file + all permissions (0100777)
+            mem_write32(mem, bufPtr + 0, 0100777);
         }
         s.gpr[3] = 0;
         break;
+    }
+    case SYS_FS_FSTAT: {
+        // r3 = fd, r4 = stat_buf_ptr
+        uint32_t fd = (uint32_t)s.gpr[3];
+        uint64_t bufPtr = s.gpr[4];
+        if (bufPtr && bufPtr < PS3_SANDBOX_SIZE - 128) {
+            for (int i = 0; i < 128; i += 8)
+                mem_write64(mem, bufPtr + i, 0);
+            mem_write32(mem, bufPtr + 0, 0100777);
+            // Write file size at offset 48 (CellFsStat.st_size)
+            if (fd < FS_MAX_FDS && g_fds[fd].inUse)
+                mem_write64(mem, bufPtr + 48, g_fds[fd].fileSize);
+        }
+        s.gpr[3] = 0;
+        break;
+    }
     case SYS_FS_MKDIR:
     case SYS_FS_RENAME:
     case SYS_FS_RMDIR:
@@ -571,18 +710,39 @@ __device__ static void handleSyscall(PPEState& s, uint8_t* mem, uint32_t* hle_lo
         s.gpr[3] = 0;
         break;
     case SYS_FS_OPENDIR: {
-        uint32_t fd = hle_alloc_id();
+        int fd = fs_alloc_fd();
+        if (fd < 0) {
+            s.gpr[3] = 0x80010002;
+            break;
+        }
+        g_fds[fd].inUse = 2;  // directory type
+        g_fds[fd].seekPos = 0;
         if (s.gpr[4] && s.gpr[4] < PS3_SANDBOX_SIZE - 4)
-            mem_write32(mem, s.gpr[4], fd);
+            mem_write32(mem, s.gpr[4], (uint32_t)fd);
         s.gpr[3] = 0;
         break;
     }
-    case SYS_FS_READDIR:
-        s.gpr[3] = -1; // CELL_FS_ENOENT (end of directory)
+    case SYS_FS_READDIR: {
+        // r3 = fd, r4 = dirent_ptr
+        uint32_t fd = (uint32_t)s.gpr[3];
+        if (fd < FS_MAX_FDS && g_fds[fd].inUse == 2) {
+            // Return ENOENT on first read (empty directory)
+            s.gpr[3] = (uint64_t)(int64_t)-1; // CELL_FS_ENOENT
+        } else {
+            s.gpr[3] = 0x80010009; // EBADF
+        }
         break;
-    case SYS_FS_CLOSEDIR:
-        s.gpr[3] = 0;
+    }
+    case SYS_FS_CLOSEDIR: {
+        uint32_t fd = (uint32_t)s.gpr[3];
+        if (fd < FS_MAX_FDS && g_fds[fd].inUse == 2) {
+            g_fds[fd].inUse = 0;
+            s.gpr[3] = 0;
+        } else {
+            s.gpr[3] = 0x80010009;
+        }
         break;
+    }
 
     // ─── RSX (GPU) management ────────────────────────────────────
     case SYS_RSX_DEVICE_MAP:
