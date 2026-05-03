@@ -2114,13 +2114,16 @@ __global__ void k_rasterPoints(uint32_t* __restrict__ dst,
             float r = v.r, g = v.g, b = v.b, a = v.a;
 
             // Point sprites: generate UV coords as interpolated [0,1]
-            // across the point quad. Override vertex texcoords for FP.
+            // across the point quad for per-pixel tex coord in k_rasterPoints.
+            // Note: when pointSpriteEnable_ is set on CudaRasterizer, large
+            // points are expanded to quads via drawTriangles() instead, so
+            // this path only runs for the non-sprite fallback.
             if (pointSpriteEnable && ps > 1.0f) {
-                float u = (float)(px - x0 + 0.5f) / ps;
-                float vv = (float)(py - y0 + 0.5f) / ps;
-                // Modulate color with texture if tex unit 0 is bound
-                // (simplified — full FP path handles general case)
-                (void)u; (void)vv; // Reserved for FP tex coord injection
+                float sprU = (float)(px - x0 + 0.5f) / ps;
+                float sprV = (float)(py - y0 + 0.5f) / ps;
+                // Override color with simple gradient for basic sprite vis
+                r = sprU;
+                g = sprV;
             }
 
             if (alphaTest) {

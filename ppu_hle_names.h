@@ -1346,6 +1346,46 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0x42281240, "sceNpManager", "sceNpManagerSubSignin" },
 };
 
+// Sorted FNID table for binary search. Built once at startup.
+struct PpuHleFnidIndex {
+    struct Slot { uint32_t fnid; uint16_t idx; };
+    Slot*  slots{nullptr};
+    size_t count{0};
+    bool   built{false};
+
+    void build() {
+        if (built) return;
+        constexpr size_t N = sizeof(PPU_HLE_NAMES) / sizeof(PpuHleEntry);
+        count = N;
+        slots = new Slot[N];
+        for (size_t i = 0; i < N; ++i)
+            slots[i] = { PPU_HLE_NAMES[i].fnid, (uint16_t)i };
+        // Sort by fnid for binary search
+        for (size_t i = 1; i < N; ++i) {
+            Slot key = slots[i];
+            size_t j = i;
+            while (j > 0 && slots[j-1].fnid > key.fnid) {
+                slots[j] = slots[j-1];
+                --j;
+            }
+            slots[j] = key;
+        }
+        built = true;
+    }
+
+    const PpuHleEntry* lookup(uint32_t fnid) const {
+        if (!built || !slots) return nullptr;
+        size_t lo = 0, hi = count;
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            if (slots[mid].fnid == fnid) return &PPU_HLE_NAMES[slots[mid].idx];
+            if (slots[mid].fnid < fnid) lo = mid + 1; else hi = mid;
+        }
+        return nullptr;
+    }
+};
+
+// Legacy linear scan (still works, but prefer PpuHleFnidIndex for hot paths)
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {
     constexpr size_t N = sizeof(PPU_HLE_NAMES) / sizeof(PpuHleEntry);
     for (size_t i = 0; i < N; ++i) {

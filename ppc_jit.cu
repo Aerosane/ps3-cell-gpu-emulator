@@ -458,6 +458,10 @@ int ppc_jit_emit_source(const PPCBasicBlock* block, char* buf, size_t bufSize) {
         "__device__ __forceinline__ bool getCRBit(uint32_t cr, int bit) {\n"
         "    return (cr >> (31 - bit)) & 1;\n"
         "}\n"
+        "__device__ __forceinline__ void setCRBit(uint32_t& cr, int bit, bool val) {\n"
+        "    uint32_t m = 1u << (31 - bit);\n"
+        "    cr = val ? (cr | m) : (cr & ~m);\n"
+        "}\n"
         "__device__ __forceinline__ bool getCA(uint64_t xer) { return (xer >> 29) & 1; }\n"
         "__device__ __forceinline__ void setCA(uint64_t& xer, bool ca) {\n"
         "    xer = ca ? (xer | (1ULL << 29)) : (xer & ~(1ULL << 29));\n"
@@ -758,9 +762,37 @@ int ppc_jit_emit_source(const PPCBasicBlock* block, char* buf, size_t bufSize) {
                 break;
             }
             default:
-                emit(buf, bufSize, &pos, "    // unhandled grp19 xo=%u → fallback\n", di.xo);
-                emit(buf, bufSize, &pos, "    nextPC = 0x%llxULL; spr[4] = 2;\n",
-                     (unsigned long long)di.pc);
+                // ── CR logical ops (group 19) ─────────────────────
+                // crbD = bits 6-10, crbA = bits 11-15, crbB = bits 16-20
+                if (di.xo == XO_MCRF) {
+                    // Move CR field: crfD = crfS
+                    uint32_t crfD = (di.rd >> 2) & 7;
+                    uint32_t crfS = (di.ra >> 2) & 7;
+                    emit(buf, bufSize, &pos, "    {uint32_t _f=(cr>>(%uu*4))&0xFu; cr=(cr&~(0xFu<<(%uu*4)))|(_f<<(%uu*4));}\n",
+                         (7 - crfS), (7 - crfD), (7 - crfD));
+                } else if (di.xo == XO_CROR) {
+                    emit(buf, bufSize, &pos, "    {bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,_a||_b);}\n", di.ra, di.rb, di.rd);
+                } else if (di.xo == XO_CRXOR) {
+                    emit(buf, bufSize, &pos, "    {bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,_a^_b);}\n", di.ra, di.rb, di.rd);
+                } else if (di.xo == XO_CRAND) {
+                    emit(buf, bufSize, &pos, "    {bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,_a&&_b);}\n", di.ra, di.rb, di.rd);
+                } else if (di.xo == XO_CRNOR) {
+                    emit(buf, bufSize, &pos, "    {bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,!(_a||_b));}\n", di.ra, di.rb, di.rd);
+                } else if (di.xo == XO_CRANDC) {
+                    emit(buf, bufSize, &pos, "    {bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,_a&&!_b);}\n", di.ra, di.rb, di.rd);
+                } else if (di.xo == XO_CREQV) {
+                    emit(buf, bufSize, &pos, "    {bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,_a==_b);}\n", di.ra, di.rb, di.rd);
+                } else if (di.xo == XO_CRNAND) {
+                    emit(buf, bufSize, &pos, "    {bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,!(_a&&_b));}\n", di.ra, di.rb, di.rd);
+                } else if (di.xo == XO_CRORC) {
+                    emit(buf, bufSize, &pos, "    {bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,_a||!_b);}\n", di.ra, di.rb, di.rd);
+                } else if (di.xo == XO_ISYNC) {
+                    emit(buf, bufSize, &pos, "    // isync (no-op in emulator)\n");
+                } else {
+                    emit(buf, bufSize, &pos, "    // unhandled grp19 xo=%u → fallback\n", di.xo);
+                    emit(buf, bufSize, &pos, "    nextPC = 0x%llxULL; spr[4] = 2;\n",
+                         (unsigned long long)di.pc);
+                }
                 break;
             }
             break;
@@ -1720,6 +1752,7 @@ int ppc_jit_run_fast(PPCJITState* state, ppc::PPEState* h_state,
         "    if(xer&(1ULL<<31)) val|=0x1; int shift=(7-field)*4; cr=(cr&~(0xFu<<shift))|(val<<shift);\n"
         "}\n"
         "__device__ __forceinline__ bool getCRBit(uint32_t cr, int bit) { return (cr>>(31-bit))&1; }\n"
+        "__device__ __forceinline__ void setCRBit(uint32_t& cr, int bit, bool val) { uint32_t m=1u<<(31-bit); cr=val?(cr|m):(cr&~m); }\n"
         "__device__ __forceinline__ bool getCA(uint64_t xer) { return (xer>>29)&1; }\n"
         "__device__ __forceinline__ void setCA(uint64_t& xer, bool ca) { xer=ca?(xer|(1ULL<<29)):(xer&~(1ULL<<29)); }\n"
         "__device__ __forceinline__ uint32_t rotl32(uint32_t v, uint32_t n) { n&=31; return (v<<n)|(v>>(32-n)); }\n"
@@ -2108,6 +2141,28 @@ static int emit_insn(char* buf, size_t bufSize, size_t* pos,
             emit(buf, bufSize, pos, "%s    else nextPC = 0x%llxULL;\n", I, (unsigned long long)(di.pc + 4));
             if (di.lk) emit(buf, bufSize, pos, "%s    lr = 0x%llxULL;\n", I, (unsigned long long)(di.pc + 4));
             emit(buf, bufSize, pos, "%s}\n", I);
+        } else if (di.xo == XO_MCRF) {
+            uint32_t crfD = (di.rd >> 2) & 7, crfS = (di.ra >> 2) & 7;
+            emit(buf, bufSize, pos, "%s{uint32_t _f=(cr>>(%uu*4))&0xFu; cr=(cr&~(0xFu<<(%uu*4)))|(_f<<(%uu*4));}\n",
+                 I, (7 - crfS), (7 - crfD), (7 - crfD));
+        } else if (di.xo == XO_CROR) {
+            emit(buf, bufSize, pos, "%s{bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,_a||_b);}\n", I, di.ra, di.rb, di.rd);
+        } else if (di.xo == XO_CRXOR) {
+            emit(buf, bufSize, pos, "%s{bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,_a^_b);}\n", I, di.ra, di.rb, di.rd);
+        } else if (di.xo == XO_CRAND) {
+            emit(buf, bufSize, pos, "%s{bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,_a&&_b);}\n", I, di.ra, di.rb, di.rd);
+        } else if (di.xo == XO_CRNOR) {
+            emit(buf, bufSize, pos, "%s{bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,!(_a||_b));}\n", I, di.ra, di.rb, di.rd);
+        } else if (di.xo == XO_CRANDC) {
+            emit(buf, bufSize, pos, "%s{bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,_a&&!_b);}\n", I, di.ra, di.rb, di.rd);
+        } else if (di.xo == XO_CREQV) {
+            emit(buf, bufSize, pos, "%s{bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,_a==_b);}\n", I, di.ra, di.rb, di.rd);
+        } else if (di.xo == XO_CRNAND) {
+            emit(buf, bufSize, pos, "%s{bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,!(_a&&_b));}\n", I, di.ra, di.rb, di.rd);
+        } else if (di.xo == XO_CRORC) {
+            emit(buf, bufSize, pos, "%s{bool _a=getCRBit(cr,%uu),_b=getCRBit(cr,%uu);setCRBit(cr,%uu,_a||!_b);}\n", I, di.ra, di.rb, di.rd);
+        } else if (di.xo == XO_ISYNC) {
+            emit(buf, bufSize, pos, "%s// isync\n", I);
         } else {
             emit(buf, bufSize, pos, "%s// unhandled grp19 xo=%u → exit\n%sgoto done;\n", I, di.xo, I);
         }
@@ -2659,6 +2714,7 @@ int ppc_jit_run_warp(PPCJITState* state, ppc::PPEState* h_state,
         "    if(xer&(1ULL<<31)) val|=0x1; int shift=(7-field)*4; cr=(cr&~(0xFu<<shift))|(val<<shift);\n"
         "}\n"
         "__device__ __forceinline__ bool getCRBit(uint32_t cr, int bit) { return (cr>>(31-bit))&1; }\n"
+        "__device__ __forceinline__ void setCRBit(uint32_t& cr, int bit, bool val) { uint32_t m=1u<<(31-bit); cr=val?(cr|m):(cr&~m); }\n"
         "__device__ __forceinline__ bool getCA(uint64_t xer) { return (xer>>29)&1; }\n"
         "__device__ __forceinline__ void setCA(uint64_t& xer, bool ca) { xer=ca?(xer|(1ULL<<29)):(xer&~(1ULL<<29)); }\n"
         "__device__ __forceinline__ uint32_t rotl32(uint32_t v, uint32_t n) { n&=31; return (v<<n)|(v>>(32-n)); }\n"

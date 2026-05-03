@@ -24,9 +24,9 @@
 using namespace spu;
 
 // Convenience aliases — RR-format register extraction (most common in op11 decode)
-inline uint32_t spu_rA(uint32_t inst) { return spu_rA_rr(inst); }
-inline uint32_t spu_rB(uint32_t inst) { return spu_rB_rr(inst); }
-inline uint32_t spu_rT(uint32_t inst) { return spu_rT_rr(inst); }
+__forceinline__ uint32_t spu_rA(uint32_t inst) { return spu_rA_rr(inst); }
+__forceinline__ uint32_t spu_rB(uint32_t inst) { return spu_rB_rr(inst); }
+__forceinline__ uint32_t spu_rT(uint32_t inst) { return spu_rT_rr(inst); }
 
 // ═══════════════════════════════════════════════════════════════
 // Helpers
@@ -442,10 +442,10 @@ static void emit_hyper_insn(const uint8_t* ls, uint32_t pc, const HyperAnalysis*
         case op11::CLGTH:emitf(buf,bufSize,pos,"      for(int i=0;i<8;i++) r%d.u16[i]=(r%d.u16[i]>r%d.u16[i])?0xFFFFu:0u;\n",rT,rA,rB); return;
         case op11::CLGTB:emitf(buf,bufSize,pos,"      for(int i=0;i<16;i++) r%d.u8[i]=(r%d.u8[i]>r%d.u8[i])?0xFFu:0u;\n",rT,rA,rB); return;
 
-        case op11::CLZ:  emitf(buf,bufSize,pos,"      r%d.u32[0]=__clz(r%d.u32[0]);r%d.u32[1]=__clz(r%d.u32[1]);r%d.u32[2]=__clz(r%d.u32[2]);r%d.u32[3]=__clz(r%d.u32[3]);\n",rT,rA,rT,rA,rT,rA,rT,rA); return;
+        case op11::CLZ:  emitf(buf,bufSize,pos,"      r%d.u32[0]=r%d.u32[0]?__clz(r%d.u32[0]):32u;r%d.u32[1]=r%d.u32[1]?__clz(r%d.u32[1]):32u;r%d.u32[2]=r%d.u32[2]?__clz(r%d.u32[2]):32u;r%d.u32[3]=r%d.u32[3]?__clz(r%d.u32[3]):32u;\n",rT,rA,rA,rT,rA,rA,rT,rA,rA,rT,rA,rA); return;
         case op11::XSBH: emitf(buf,bufSize,pos,"      for(int i=0;i<8;i++) r%d.s16[i]=(int16_t)(int8_t)r%d.u8[i*2+1];\n",rT,rA); return;
         case op11::XSHW: emitf(buf,bufSize,pos,"      for(int i=0;i<4;i++) r%d.s32[i]=(int32_t)(int16_t)r%d.u16[i*2+1];\n",rT,rA); return;
-        case op11::XSWD: emitf(buf,bufSize,pos,"      r%d.s32[0]=r%d.s32[1];r%d.s32[2]=r%d.s32[3];\n",rT,rA,rT,rA); return;
+        case op11::XSWD: emitf(buf,bufSize,pos,"      {int64_t _d0=(int64_t)r%d.s32[1];int64_t _d1=(int64_t)r%d.s32[3];r%d.u32[0]=(uint32_t)(_d0>>32);r%d.u32[1]=(uint32_t)_d0;r%d.u32[2]=(uint32_t)(_d1>>32);r%d.u32[3]=(uint32_t)_d1;}\n",rA,rA,rT,rT,rT,rT); return;
         case op11::CNTB: emitf(buf,bufSize,pos,"      for(int i=0;i<16;i++) r%d.u8[i]=__popc(r%d.u8[i]);\n",rT,rA); return;
         case op11::AVGB: emitf(buf,bufSize,pos,"      for(int i=0;i<16;i++) r%d.u8[i]=(uint8_t)(((uint32_t)r%d.u8[i]+r%d.u8[i]+1u)>>1);\n",rT,rA,rB); return;
         case op11::ABSDB:emitf(buf,bufSize,pos,"      for(int i=0;i<16;i++){int _d=(int)r%d.u8[i]-(int)r%d.u8[i];r%d.u8[i]=(uint8_t)(_d<0?-_d:_d);}\n",rA,rB,rT); return;
