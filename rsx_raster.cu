@@ -560,6 +560,7 @@ __device__ bool fpExecute(
         bool condMask[4] = {true, true, true, true};
         if (condActive) {
             uint32_t cSwz[4] = {cSwzX, cSwzY, cSwzZ, cSwzW};
+            #pragma unroll
             for (int k = 0; k < 4; ++k) {
                 uint8_t cv = cc[condReg][cSwz[k]];
                 condMask[k] = (cv == 2 && execLT) ||
@@ -1183,6 +1184,7 @@ __device__ bool fpExecute(
         // CC values: 0=GT (>0), 1=EQ (==0), 2=LT (<0), 3=UN (NaN)
         if (setCond) {
             float rv[4] = {result.x, result.y, result.z, result.w};
+            #pragma unroll
             for (int k = 0; k < 4; ++k) {
                 if (isnan(rv[k]))    cc[condModReg][k] = 3;  // UN
                 else if (rv[k] > 0)  cc[condModReg][k] = 0;  // GT
@@ -1451,7 +1453,7 @@ __device__ __forceinline__ void sampleTexCube(const uint32_t* tex,
     uint32_t c10 = cubeTexelFetch(tex, faceW, faceH, face, ix+1, iy);
     uint32_t c01 = cubeTexelFetch(tex, faceW, faceH, face, ix,   iy+1);
     uint32_t c11 = cubeTexelFetch(tex, faceW, faceH, face, ix+1, iy+1);
-    auto lerp2 = [] __device__ (float a, float b, float t) { return a + (b - a) * t; };
+    auto lerp2 = [] __device__ (float a, float b, float t) { return __fmaf_rn(b - a, t, a); };
     constexpr float INV255c = 1.0f / 255.0f;
     auto ch2 = [&](int shift) {
         float v00 = ((c00>>shift)&0xFF)*INV255c;
@@ -1526,7 +1528,7 @@ __device__ __forceinline__ void sampleTex3D(const uint32_t* tex,
         };
         uint32_t c00 = fetch2(ix, iy), c10 = fetch2(ix+1, iy);
         uint32_t c01 = fetch2(ix, iy+1), c11 = fetch2(ix+1, iy+1);
-        auto lerp3 = [] __device__ (float a, float b, float t) { return a + (b - a) * t; };
+        auto lerp3 = [] __device__ (float a, float b, float t) { return __fmaf_rn(b - a, t, a); };
         auto ch3 = [&](int shift) {
             float v00 = ((c00>>shift)&0xFF)*(1.0f/255.0f);
             float v10 = ((c10>>shift)&0xFF)*(1.0f/255.0f);
@@ -1574,7 +1576,7 @@ __device__ __forceinline__ void sampleTex(const uint32_t* tex,
     uint32_t c10 = texFetch(tex, tw, th, ix+1, iy,   wrapS, wrapT, borderColor);
     uint32_t c01 = texFetch(tex, tw, th, ix,   iy+1, wrapS, wrapT, borderColor);
     uint32_t c11 = texFetch(tex, tw, th, ix+1, iy+1, wrapS, wrapT, borderColor);
-    auto lerp = [] __device__ (float a, float b, float t) { return a + (b - a) * t; };
+    auto lerp = [] __device__ (float a, float b, float t) { return __fmaf_rn(b - a, t, a); };
     constexpr float INV255 = 1.0f / 255.0f;
     auto ch = [&](int shift) {
         float v00 = ((c00>>shift)&0xFF)*INV255;
