@@ -116,6 +116,62 @@ __global__ void k_cullTriangles(const RasterVertex* __restrict__ in,
     }
 }
 
+// ─── GPU tile binning kernel ─────────────────────────────────
+// Bins triangles into 16×16 pixel tiles. Each thread processes one
+// triangle and atomically appends its index to every tile it overlaps.
+// tileCountX/Y = ceil(fbWidth/16), ceil(fbHeight/16).
+// tileBins[tile_y * tileCountX + tile_x] = list of triangle indices.
+// binCounts[tile_idx] = number of triangles in that tile.
+// maxPerTile caps each bin to prevent overflow.
+static constexpr uint32_t TILE_SIZE = 16;
+static constexpr uint32_t MAX_TRIS_PER_TILE = 256;
+
+__global__ void k_binTriangles(const RasterVertex* __restrict__ verts,
+                               uint32_t triCount,
+                               uint32_t* __restrict__ binCounts,
+                               uint32_t* __restrict__ tileBins,
+                               uint32_t tileCountX, uint32_t tileCountY,
+                               uint32_t fbWidth, uint32_t fbHeight) {
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= triCount) return;
+
+    const RasterVertex& v0 = verts[tid * 3 + 0];
+    const RasterVertex& v1 = verts[tid * 3 + 1];
+    const RasterVertex& v2 = verts[tid * 3 + 2];
+
+    // Triangle AABB in pixels
+    float minX = fminf(fminf(v0.x, v1.x), v2.x);
+    float maxX = fmaxf(fmaxf(v0.x, v1.x), v2.x);
+    float minY = fminf(fminf(v0.y, v1.y), v2.y);
+    float maxY = fmaxf(fmaxf(v0.y, v1.y), v2.y);
+
+    // Clamp to framebuffer
+    if (minX < 0) minX = 0;
+    if (minY < 0) minY = 0;
+    if (maxX >= (float)fbWidth)  maxX = (float)(fbWidth - 1);
+    if (maxY >= (float)fbHeight) maxY = (float)(fbHeight - 1);
+    if (minX > maxX || minY > maxY) return;
+
+    // Convert to tile range
+    uint32_t tx0 = (uint32_t)minX / TILE_SIZE;
+    uint32_t ty0 = (uint32_t)minY / TILE_SIZE;
+    uint32_t tx1 = (uint32_t)maxX / TILE_SIZE;
+    uint32_t ty1 = (uint32_t)maxY / TILE_SIZE;
+    if (tx1 >= tileCountX) tx1 = tileCountX - 1;
+    if (ty1 >= tileCountY) ty1 = tileCountY - 1;
+
+    // Append triangle index to each overlapping tile
+    for (uint32_t ty = ty0; ty <= ty1; ++ty) {
+        for (uint32_t tx = tx0; tx <= tx1; ++tx) {
+            uint32_t tileIdx = ty * tileCountX + tx;
+            uint32_t slot = atomicAdd(&binCounts[tileIdx], 1);
+            if (slot < MAX_TRIS_PER_TILE) {
+                tileBins[tileIdx * MAX_TRIS_PER_TILE + slot] = tid;
+            }
+        }
+    }
+}
+
 // ─── MSAA box-filter resolve kernel ───────────────────────────
 // filter. scaleX/scaleY are integer (1, 2, or 4).
 __global__ void k_resolveAA(const uint32_t* __restrict__ src,
@@ -1495,6 +1551,14 @@ __global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
         const RasterVertex v0 = verts[t*3 + 0];
         const RasterVertex v1 = verts[t*3 + 1];
         const RasterVertex v2 = verts[t*3 + 2];
+
+        // Per-triangle bounding box early reject — skip edge function
+        // computation for pixels clearly outside the triangle's AABB.
+        float minX = fminf(fminf(v0.x, v1.x), v2.x);
+        float maxX = fmaxf(fmaxf(v0.x, v1.x), v2.x);
+        float minY = fminf(fminf(v0.y, v1.y), v2.y);
+        float maxY = fmaxf(fmaxf(v0.y, v1.y), v2.y);
+        if (px < minX || px > maxX || py < minY || py > maxY) continue;
 
         float area = (v2.x - v0.x) * (v1.y - v0.y)
                    - (v2.y - v0.y) * (v1.x - v0.x);
