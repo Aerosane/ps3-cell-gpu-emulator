@@ -3,6 +3,7 @@
 #include "rsx_raster.h"
 
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -367,6 +368,74 @@ struct TexBank {
     uint8_t mipLevels[8];        // number of mip levels stored (1=base only)
     uint8_t minFilter[8];        // RSX min filter: 1=NEAREST, 2=LINEAR, 3-6=mipmap modes
     float   lodBias[8];          // per-unit LOD bias from TEXTURE_FILTER register
+};
+
+// Packed draw parameters for k_rasterTriangles — reduces kernel arg count
+// from 60+ scalars to a single struct passed by value (fits in constant memory).
+struct DrawParams {
+    // Framebuffer targets
+    uint32_t* dst;
+    float*    depth;
+    uint8_t*  stencil;
+    uint32_t  width, height;
+    const RasterVertex* verts;
+    uint32_t  triangleCount;
+
+    // Depth/blend/alpha
+    int blendEnable, depthTest, depthWrite;
+    uint32_t depthFunc;
+    int scX, scY;
+    uint32_t scW, scH;
+    int alphaTest;
+    uint32_t alphaRef, alphaFunc, colorMask;
+    float polyOffsetFactor, polyOffsetUnits;
+    int depthClip;
+
+    // Stencil
+    int stencilTest;
+    uint32_t stencilFunc, stencilRef, stencilMask, stencilWriteMask;
+    uint32_t opSFail, opZFail, opZPass;
+
+    // Blend factors
+    uint32_t bfSrcRGB, bfDstRGB, bfSrcA, bfDstA;
+    uint32_t beRGB, beA;
+    float ccR, ccG, ccB, ccA;
+
+    // Fragment program
+    const uint32_t* fpInsns;
+    uint32_t fpInsnCount;
+    const float* fpConsts;
+    uint32_t fpConstCount;
+
+    // MRT
+    uint32_t* mrtB;
+    uint32_t* mrtC;
+    uint32_t* mrtD;
+
+    // Misc state
+    int flatShade, logicOpEnable;
+    uint32_t logicOp;
+    int ditherEnable;
+
+    // Two-sided stencil
+    int twoSidedStencil;
+    uint32_t backStencilFunc, backStencilRef, backStencilMask, backStencilWriteMask;
+    uint32_t backOpSFail, backOpZFail, backOpZPass;
+
+    // Face/fog/depth-bounds
+    int frontFaceCCW;
+    uint32_t fogMode;
+    float fogParam0, fogParam1;
+    int depthBoundsTest;
+    float depthBoundsMin, depthBoundsMax;
+    int twoSidedColor, fpDepthReplace;
+    int shaderWindowOrigin;
+    float shaderWindowHeight;
+    uint32_t clipPlaneControl;
+    int sRGBWrite;
+
+    // Texture bank (embedded)
+    TexBank texBank;
 };
 
 // Read a source operand with swizzle and negate
@@ -813,9 +882,14 @@ __device__ bool fpExecute(
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_DDX:
+            // Screen-space X derivative: approximate as small non-zero values
+            // for shader correctness (no 2x2 quad differencing available)
+            result = {s0.x * 0.001f, s0.y * 0.001f, s0.z * 0.001f, s0.w * 0.001f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
+            break;
         case FP_OP_DDY:
-            // Screen-space derivatives: approximate as zero (no quad-level differencing)
-            result = {0.f, 0.f, 0.f, 0.f};
+            // Screen-space Y derivative: approximate as small non-zero values
+            result = {s0.x * 0.001f, s0.y * 0.001f, s0.z * 0.001f, s0.w * 0.001f};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         case FP_OP_NRM: {
@@ -967,20 +1041,101 @@ __device__ bool fpExecute(
                 pc = callStack[--callDepth];
             }
             break;
-        // Pack/unpack — rare, treat as MOV for now
-        case FP_OP_PK4:
-        case FP_OP_UP4:
-        case FP_OP_PK2:
-        case FP_OP_UP2:
-        case FP_OP_PKB:
-        case FP_OP_UPB:
-        case FP_OP_PK16:
-        case FP_OP_UP16:
-        case FP_OP_PKG:
-        case FP_OP_UPG:
-            result = s0;
+        // Pack/unpack — proper implementations
+        case FP_OP_PK4: {
+            // PK4UB: pack 4 floats [0,1] → 4 unsigned bytes in .x
+            uint32_t r = (uint32_t)fminf(fmaxf(s0.x * 255.0f + 0.5f, 0.0f), 255.0f);
+            uint32_t g = (uint32_t)fminf(fmaxf(s0.y * 255.0f + 0.5f, 0.0f), 255.0f);
+            uint32_t b = (uint32_t)fminf(fmaxf(s0.z * 255.0f + 0.5f, 0.0f), 255.0f);
+            uint32_t a = (uint32_t)fminf(fmaxf(s0.w * 255.0f + 0.5f, 0.0f), 255.0f);
+            uint32_t packed = (a << 24) | (b << 16) | (g << 8) | r;
+            result = {__uint_as_float(packed), 0.f, 0.f, 0.f};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
+        }
+        case FP_OP_UP4: {
+            // UP4UB: unpack 4 unsigned bytes from .x → 4 floats [0,1]
+            uint32_t packed = __float_as_uint(s0.x);
+            result = {(packed & 0xFF) / 255.0f,
+                      ((packed >> 8) & 0xFF) / 255.0f,
+                      ((packed >> 16) & 0xFF) / 255.0f,
+                      ((packed >> 24) & 0xFF) / 255.0f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
+            break;
+        }
+        case FP_OP_PK2: {
+            // PK2H: pack 2 half-floats into .x
+            uint32_t lo = __half_as_ushort(__float2half_rn(s0.x));
+            uint32_t hi = __half_as_ushort(__float2half_rn(s0.y));
+            result = {__uint_as_float((hi << 16) | lo), 0.f, 0.f, 0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
+            break;
+        }
+        case FP_OP_UP2: {
+            // UP2H: unpack 2 half-floats from .x
+            uint32_t packed = __float_as_uint(s0.x);
+            float lo = __half2float(__ushort_as_half(packed & 0xFFFF));
+            float hi = __half2float(__ushort_as_half((packed >> 16) & 0xFFFF));
+            result = {lo, hi, 0.f, 0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
+            break;
+        }
+        case FP_OP_PKB: {
+            // PK4B: pack 4 signed bytes [-128,127] mapped from [-1,1]
+            auto clampB = [](float v) -> uint8_t {
+                int i = (int)(v * 127.0f + 0.5f);
+                return (uint8_t)max(-128, min(127, i));
+            };
+            uint32_t packed = ((uint32_t)(uint8_t)clampB(s0.w) << 24) |
+                              ((uint32_t)(uint8_t)clampB(s0.z) << 16) |
+                              ((uint32_t)(uint8_t)clampB(s0.y) <<  8) |
+                              ((uint32_t)(uint8_t)clampB(s0.x));
+            result = {__uint_as_float(packed), 0.f, 0.f, 0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
+            break;
+        }
+        case FP_OP_UPB: {
+            // UP4B: unpack 4 signed bytes → [-1,1]
+            uint32_t packed = __float_as_uint(s0.x);
+            result = {(int8_t)(packed & 0xFF) / 127.0f,
+                      (int8_t)((packed >> 8) & 0xFF) / 127.0f,
+                      (int8_t)((packed >> 16) & 0xFF) / 127.0f,
+                      (int8_t)((packed >> 24) & 0xFF) / 127.0f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
+            break;
+        }
+        case FP_OP_PK16: {
+            // PK16: pack 2 floats [0,1] → 2 unsigned 16-bit in .x
+            uint32_t lo = (uint32_t)fminf(fmaxf(s0.x * 65535.0f + 0.5f, 0.0f), 65535.0f);
+            uint32_t hi = (uint32_t)fminf(fmaxf(s0.y * 65535.0f + 0.5f, 0.0f), 65535.0f);
+            result = {__uint_as_float((hi << 16) | lo), 0.f, 0.f, 0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
+            break;
+        }
+        case FP_OP_UP16: {
+            // UP16: unpack 2 unsigned 16-bit from .x → [0,1]
+            uint32_t packed = __float_as_uint(s0.x);
+            result = {(packed & 0xFFFF) / 65535.0f,
+                      ((packed >> 16) & 0xFFFF) / 65535.0f, 0.f, 0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
+            break;
+        }
+        case FP_OP_PKG: {
+            // PKG: pack 2 floats [0,1] → 2 unsigned 11-bit in .x (simplified as 16-bit)
+            uint32_t lo = (uint32_t)fminf(fmaxf(s0.x * 2047.0f + 0.5f, 0.0f), 2047.0f);
+            uint32_t hi = (uint32_t)fminf(fmaxf(s0.y * 2047.0f + 0.5f, 0.0f), 2047.0f);
+            result = {__uint_as_float((hi << 16) | lo), 0.f, 0.f, 0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
+            break;
+        }
+        case FP_OP_UPG: {
+            // UPG: unpack 2 11-bit from .x → [0,1]
+            uint32_t packed = __float_as_uint(s0.x);
+            result = {(packed & 0x7FF) / 2047.0f,
+                      ((packed >> 16) & 0x7FF) / 2047.0f, 0.f, 0.f};
+            fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
+            break;
+        }
         default:
             break;
         }
@@ -1464,67 +1619,63 @@ __device__ __forceinline__ void getVertTexCoord(
 // edges, > 0 for others) — we approximate with >= 0 which is acceptable
 // for colored triangles; textured paths will tighten this.
 
-__global__ void k_rasterTriangles(uint32_t* __restrict__ dst,
-                                  float*    __restrict__ depth,
-                                  uint8_t*  __restrict__ stencil,
-                                  uint32_t width, uint32_t height,
-                                  const RasterVertex* __restrict__ verts,
-                                  uint32_t triangleCount,
-                                  int blendEnable,
-                                  int depthTest,
-                                  int depthWrite,
-                                  uint32_t depthFunc,
-                                  TexBank texBank,
-                                  int scX, int scY, uint32_t scW, uint32_t scH,
-                                  int alphaTest, uint32_t alphaRef,
-                                  uint32_t alphaFunc,
-                                  uint32_t colorMask,
-                                  float polyOffsetFactor, float polyOffsetUnits,
-                                  int   depthClip,
-                                  int   stencilTest,
-                                  uint32_t stencilFunc,
-                                  uint32_t stencilRef,
-                                  uint32_t stencilMask,
-                                  uint32_t stencilWriteMask,
-                                  uint32_t opSFail,
-                                  uint32_t opZFail,
-                                  uint32_t opZPass,
-                                  uint32_t bfSrcRGB, uint32_t bfDstRGB,
-                                  uint32_t bfSrcA,   uint32_t bfDstA,
-                                  uint32_t beRGB,    uint32_t beA,
-                                  float    ccR, float ccG, float ccB, float ccA,
-                                  const uint32_t* __restrict__ fpInsns,
-                                  uint32_t fpInsnCount,
-                                  const float* __restrict__ fpConsts,
-                                  uint32_t fpConstCount,
-                                  uint32_t* __restrict__ mrtB,
-                                  uint32_t* __restrict__ mrtC,
-                                  uint32_t* __restrict__ mrtD,
-                                  int flatShade,
-                                  int logicOpEnable,
-                                  uint32_t logicOp,
-                                  int ditherEnable,
-                                  int twoSidedStencil,
-                                  uint32_t backStencilFunc,
-                                  uint32_t backStencilRef,
-                                  uint32_t backStencilMask,
-                                  uint32_t backStencilWriteMask,
-                                  uint32_t backOpSFail,
-                                  uint32_t backOpZFail,
-                                  uint32_t backOpZPass,
-                                  int frontFaceCCW,
-                                  uint32_t fogMode,
-                                  float fogParam0,
-                                  float fogParam1,
-                                  int depthBoundsTest,
-                                  float depthBoundsMin,
-                                  float depthBoundsMax,
-                                  int twoSidedColor,
-                                  int fpDepthReplace,
-                                  int shaderWindowOrigin,
-                                  float shaderWindowHeight,
-                                  uint32_t clipPlaneControl,
-                                  int sRGBWrite) {
+__global__ void k_rasterTriangles(DrawParams dp) {
+    // Unpack all fields into locals for readability
+    uint32_t* __restrict__ dst = dp.dst;
+    float*    __restrict__ depth = dp.depth;
+    uint8_t*  __restrict__ stencil = dp.stencil;
+    const uint32_t width = dp.width, height = dp.height;
+    const RasterVertex* __restrict__ verts = dp.verts;
+    const uint32_t triangleCount = dp.triangleCount;
+    const TexBank& texBank = dp.texBank;
+    const int scX = dp.scX, scY = dp.scY;
+    const uint32_t scW = dp.scW, scH = dp.scH;
+    const int blendEnable = dp.blendEnable, depthTest = dp.depthTest;
+    const int depthWrite = dp.depthWrite, depthClip = dp.depthClip;
+    const uint32_t depthFunc = dp.depthFunc;
+    const int alphaTest = dp.alphaTest;
+    const uint32_t alphaRef = dp.alphaRef, alphaFunc = dp.alphaFunc;
+    const uint32_t colorMask = dp.colorMask;
+    const float polyOffsetFactor = dp.polyOffsetFactor;
+    const float polyOffsetUnits = dp.polyOffsetUnits;
+    const int stencilTest = dp.stencilTest;
+    const uint32_t stencilFunc = dp.stencilFunc, stencilRef = dp.stencilRef;
+    const uint32_t stencilMask = dp.stencilMask, stencilWriteMask = dp.stencilWriteMask;
+    const uint32_t opSFail = dp.opSFail, opZFail = dp.opZFail, opZPass = dp.opZPass;
+    const uint32_t bfSrcRGB = dp.bfSrcRGB, bfDstRGB = dp.bfDstRGB;
+    const uint32_t bfSrcA = dp.bfSrcA, bfDstA = dp.bfDstA;
+    const uint32_t beRGB = dp.beRGB, beA = dp.beA;
+    const float ccR = dp.ccR, ccG = dp.ccG, ccB = dp.ccB, ccA = dp.ccA;
+    const uint32_t* __restrict__ fpInsns = dp.fpInsns;
+    const uint32_t fpInsnCount = dp.fpInsnCount;
+    const float* __restrict__ fpConsts = dp.fpConsts;
+    const uint32_t fpConstCount = dp.fpConstCount;
+    uint32_t* __restrict__ mrtB = dp.mrtB;
+    uint32_t* __restrict__ mrtC = dp.mrtC;
+    uint32_t* __restrict__ mrtD = dp.mrtD;
+    const int flatShade = dp.flatShade, logicOpEnable = dp.logicOpEnable;
+    const uint32_t logicOp = dp.logicOp;
+    const int ditherEnable = dp.ditherEnable;
+    const int twoSidedStencil = dp.twoSidedStencil;
+    const uint32_t backStencilFunc = dp.backStencilFunc;
+    const uint32_t backStencilRef = dp.backStencilRef;
+    const uint32_t backStencilMask = dp.backStencilMask;
+    const uint32_t backStencilWriteMask = dp.backStencilWriteMask;
+    const uint32_t backOpSFail = dp.backOpSFail;
+    const uint32_t backOpZFail = dp.backOpZFail;
+    const uint32_t backOpZPass = dp.backOpZPass;
+    const int frontFaceCCW = dp.frontFaceCCW;
+    const uint32_t fogMode = dp.fogMode;
+    const float fogParam0 = dp.fogParam0, fogParam1 = dp.fogParam1;
+    const int depthBoundsTest = dp.depthBoundsTest;
+    const float depthBoundsMin = dp.depthBoundsMin, depthBoundsMax = dp.depthBoundsMax;
+    const int twoSidedColor = dp.twoSidedColor;
+    const int fpDepthReplace = dp.fpDepthReplace;
+    const int shaderWindowOrigin = dp.shaderWindowOrigin;
+    const float shaderWindowHeight = dp.shaderWindowHeight;
+    const uint32_t clipPlaneControl = dp.clipPlaneControl;
+    const int sRGBWrite = dp.sRGBWrite;
+
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
@@ -2492,6 +2643,69 @@ uint32_t CudaRasterizer::drawIndexed(const RasterVertex* verts,
     return drawTriangles(expanded.data(), (uint32_t)expanded.size());
 }
 
+DrawParams CudaRasterizer::buildDrawParams(const RasterVertex* d_v, uint32_t tris) {
+    DrawParams dp;
+    memset(&dp, 0, sizeof(dp));
+    dp.dst = fb_.d_color; dp.depth = fb_.d_depth; dp.stencil = fb_.d_stencil;
+    dp.width = fb_.width; dp.height = fb_.height;
+    dp.verts = d_v; dp.triangleCount = tris;
+    dp.blendEnable = blendEnable_ ? 1 : 0;
+    dp.depthTest = depthTest_ ? 1 : 0;
+    dp.depthWrite = depthWrite_ ? 1 : 0;
+    dp.depthFunc = uint32_t(depthFunc_);
+    dp.scX = scX_; dp.scY = scY_; dp.scW = scW_; dp.scH = scH_;
+    dp.alphaTest = alphaTestEnable_ ? 1 : 0;
+    dp.alphaRef = uint32_t(alphaRef_); dp.alphaFunc = uint32_t(alphaFunc_);
+    dp.colorMask = colorMask_;
+    dp.polyOffsetFactor = polyOffsetFactor_; dp.polyOffsetUnits = polyOffsetUnits_;
+    dp.depthClip = depthClip_ ? 1 : 0;
+    dp.stencilTest = stencilTest_ ? 1 : 0;
+    dp.stencilFunc = uint32_t(stencilFunc_); dp.stencilRef = uint32_t(stencilRef_);
+    dp.stencilMask = uint32_t(stencilMask_); dp.stencilWriteMask = uint32_t(stencilWriteMask_);
+    dp.opSFail = uint32_t(stencilSFail_); dp.opZFail = uint32_t(stencilZFail_);
+    dp.opZPass = uint32_t(stencilZPass_);
+    dp.bfSrcRGB = uint32_t(bfSrcRGB_); dp.bfDstRGB = uint32_t(bfDstRGB_);
+    dp.bfSrcA = uint32_t(bfSrcA_); dp.bfDstA = uint32_t(bfDstA_);
+    dp.beRGB = uint32_t(beRGB_); dp.beA = uint32_t(beA_);
+    dp.ccR = blendConstR_; dp.ccG = blendConstG_;
+    dp.ccB = blendConstB_; dp.ccA = blendConstA_;
+    dp.fpInsns = d_fpInsns_; dp.fpInsnCount = fpInsnCount_;
+    dp.fpConsts = d_fpConsts_; dp.fpConstCount = fpConstCount_;
+    dp.mrtB = d_colorB_; dp.mrtC = d_colorC_; dp.mrtD = d_colorD_;
+    dp.flatShade = flatShade_ ? 1 : 0;
+    dp.logicOpEnable = logicOpEnable_ ? 1 : 0; dp.logicOp = logicOp_;
+    dp.ditherEnable = ditherEnable_ ? 1 : 0;
+    dp.twoSidedStencil = twoSidedStencil_ ? 1 : 0;
+    dp.backStencilFunc = uint32_t(backStencilFunc_);
+    dp.backStencilRef = uint32_t(backStencilRef_);
+    dp.backStencilMask = uint32_t(backStencilMask_);
+    dp.backStencilWriteMask = uint32_t(backStencilWriteMask_);
+    dp.backOpSFail = uint32_t(backStencilSFail_);
+    dp.backOpZFail = uint32_t(backStencilZFail_);
+    dp.backOpZPass = uint32_t(backStencilZPass_);
+    dp.frontFaceCCW = (frontFace_ == FrontFace::CCW) ? 1 : 0;
+    dp.fogMode = fogMode_; dp.fogParam0 = fogParam0_; dp.fogParam1 = fogParam1_;
+    dp.depthBoundsTest = depthBoundsTestEnable_ ? 1 : 0;
+    dp.depthBoundsMin = depthBoundsMin_; dp.depthBoundsMax = depthBoundsMax_;
+    dp.twoSidedColor = twoSidedColor_ ? 1 : 0;
+    dp.fpDepthReplace = fpDepthReplace_ ? 1 : 0;
+    dp.shaderWindowOrigin = shaderWindowOrigin_;
+    dp.shaderWindowHeight = shaderWindowHeight_;
+    dp.clipPlaneControl = clipPlaneControl_;
+    dp.sRGBWrite = sRGBWrite_ ? 1 : 0;
+    // Texture bank
+    memset(&dp.texBank, 0, sizeof(dp.texBank));
+    for (int i = 0; i < MAX_TEX_UNITS; ++i) {
+        dp.texBank.tex[i] = d_tex_[i]; dp.texBank.w[i] = texW_[i]; dp.texBank.h[i] = texH_[i];
+        dp.texBank.depth[i] = texDepth_[i]; dp.texBank.remap[i] = texRemap_[i];
+        dp.texBank.wrapS[i] = wrapS_[i]; dp.texBank.wrapT[i] = wrapT_[i]; dp.texBank.wrapR[i] = wrapR_[i];
+        dp.texBank.magFilter[i] = magFilter_[i]; dp.texBank.borderColor[i] = borderColor_[i];
+        dp.texBank.dimension[i] = texDimension_[i]; dp.texBank.mipLevels[i] = (uint8_t)texMipLevels_[i];
+        dp.texBank.minFilter[i] = minFilter_[i]; dp.texBank.lodBias[i] = texLodBias_[i];
+    }
+    return dp;
+}
+
 uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                        uint32_t count) {
     if (!fb_.d_color || count < 3) return 0;
@@ -2656,75 +2870,9 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     dim3 bs(16, 16);
     dim3 gs((fb_.width + bs.x - 1) / bs.x,
             (fb_.height + bs.y - 1) / bs.y);
-    TexBank tb;
-    memset(&tb, 0, sizeof(tb));
-    for (int i = 0; i < MAX_TEX_UNITS; ++i) {
-        tb.tex[i] = d_tex_[i]; tb.w[i] = texW_[i]; tb.h[i] = texH_[i];
-        tb.depth[i] = texDepth_[i];
-        tb.remap[i] = texRemap_[i];
-        tb.wrapS[i] = wrapS_[i]; tb.wrapT[i] = wrapT_[i]; tb.wrapR[i] = wrapR_[i];
-        tb.magFilter[i] = magFilter_[i];
-        tb.borderColor[i] = borderColor_[i];
-        tb.dimension[i] = texDimension_[i];
-        tb.mipLevels[i] = (uint8_t)texMipLevels_[i];
-        tb.minFilter[i] = minFilter_[i];
-        tb.lodBias[i] = texLodBias_[i];
-    }
+    DrawParams dp = buildDrawParams(d_v, tris);
     cudaStream_t launchStream = (asyncFifo_ && stream_) ? stream_ : nullptr;
-    k_rasterTriangles<<<gs, bs, 0, launchStream>>>(fb_.d_color, fb_.d_depth, fb_.d_stencil,
-                                   fb_.width, fb_.height,
-                                   d_v, tris,
-                                   blendEnable_ ? 1 : 0,
-                                   depthTest_ ? 1 : 0,
-                                   depthWrite_ ? 1 : 0,
-                                   uint32_t(depthFunc_),
-                                   tb,
-                                   scX_, scY_, scW_, scH_,
-                                   alphaTestEnable_ ? 1 : 0,
-                                   uint32_t(alphaRef_),
-                                   uint32_t(alphaFunc_),
-                                   colorMask_,
-                                   polyOffsetFactor_, polyOffsetUnits_,
-                                   depthClip_ ? 1 : 0,
-                                   stencilTest_ ? 1 : 0,
-                                   uint32_t(stencilFunc_),
-                                   uint32_t(stencilRef_),
-                                   uint32_t(stencilMask_),
-                                   uint32_t(stencilWriteMask_),
-                                   uint32_t(stencilSFail_),
-                                   uint32_t(stencilZFail_),
-                                   uint32_t(stencilZPass_),
-                                   uint32_t(bfSrcRGB_), uint32_t(bfDstRGB_),
-                                   uint32_t(bfSrcA_),   uint32_t(bfDstA_),
-                                   uint32_t(beRGB_),    uint32_t(beA_),
-                                   blendConstR_, blendConstG_,
-                                   blendConstB_, blendConstA_,
-                                   d_fpInsns_, fpInsnCount_,
-                                   d_fpConsts_, fpConstCount_,
-                                   d_colorB_, d_colorC_, d_colorD_,
-                                   flatShade_ ? 1 : 0,
-                                   logicOpEnable_ ? 1 : 0,
-                                   logicOp_,
-                                   ditherEnable_ ? 1 : 0,
-                                   twoSidedStencil_ ? 1 : 0,
-                                   uint32_t(backStencilFunc_),
-                                   uint32_t(backStencilRef_),
-                                   uint32_t(backStencilMask_),
-                                   uint32_t(backStencilWriteMask_),
-                                   uint32_t(backStencilSFail_),
-                                   uint32_t(backStencilZFail_),
-                                   uint32_t(backStencilZPass_),
-                                   (frontFace_ == FrontFace::CCW) ? 1 : 0,
-                                   fogMode_,
-                                   fogParam0_, fogParam1_,
-                                   depthBoundsTestEnable_ ? 1 : 0,
-                                   depthBoundsMin_, depthBoundsMax_,
-                                   twoSidedColor_ ? 1 : 0,
-                                   fpDepthReplace_ ? 1 : 0,
-                                   shaderWindowOrigin_,
-                                   shaderWindowHeight_,
-                                   clipPlaneControl_,
-                                   sRGBWrite_ ? 1 : 0);
+    k_rasterTriangles<<<gs, bs, 0, launchStream>>>(dp);
     // d_v from scratch pool — just sync, no free
     if (!(asyncFifo_ && stream_)) {
         cudaDeviceSynchronize();
@@ -2802,71 +2950,9 @@ uint32_t CudaRasterizer::drawTrianglesDevice(RasterVertex* d_v, uint32_t tris,
 
     dim3 bs(16, 16);
     dim3 gs((fb_.width + bs.x - 1) / bs.x, (fb_.height + bs.y - 1) / bs.y);
-    TexBank tb;
-    memset(&tb, 0, sizeof(tb));
-    for (int i = 0; i < MAX_TEX_UNITS; ++i) {
-        tb.tex[i] = d_tex_[i]; tb.w[i] = texW_[i]; tb.h[i] = texH_[i];
-        tb.depth[i] = texDepth_[i]; tb.remap[i] = texRemap_[i];
-        tb.wrapS[i] = wrapS_[i]; tb.wrapT[i] = wrapT_[i]; tb.wrapR[i] = wrapR_[i];
-        tb.magFilter[i] = magFilter_[i]; tb.borderColor[i] = borderColor_[i];
-        tb.dimension[i] = texDimension_[i]; tb.mipLevels[i] = (uint8_t)texMipLevels_[i];
-        tb.minFilter[i] = minFilter_[i]; tb.lodBias[i] = texLodBias_[i];
-    }
+    DrawParams dp = buildDrawParams(d_v, tris);
     cudaStream_t launchStream = (asyncFifo_ && stream_) ? stream_ : nullptr;
-    k_rasterTriangles<<<gs, bs, 0, launchStream>>>(fb_.d_color, fb_.d_depth, fb_.d_stencil,
-                                   fb_.width, fb_.height,
-                                   d_v, tris,
-                                   blendEnable_ ? 1 : 0,
-                                   depthTest_ ? 1 : 0,
-                                   depthWrite_ ? 1 : 0,
-                                   uint32_t(depthFunc_),
-                                   tb,
-                                   scX_, scY_, scW_, scH_,
-                                   alphaTestEnable_ ? 1 : 0,
-                                   uint32_t(alphaRef_),
-                                   uint32_t(alphaFunc_),
-                                   colorMask_,
-                                   polyOffsetFactor_, polyOffsetUnits_,
-                                   depthClip_ ? 1 : 0,
-                                   stencilTest_ ? 1 : 0,
-                                   uint32_t(stencilFunc_),
-                                   uint32_t(stencilRef_),
-                                   uint32_t(stencilMask_),
-                                   uint32_t(stencilWriteMask_),
-                                   uint32_t(stencilSFail_),
-                                   uint32_t(stencilZFail_),
-                                   uint32_t(stencilZPass_),
-                                   uint32_t(bfSrcRGB_), uint32_t(bfDstRGB_),
-                                   uint32_t(bfSrcA_),   uint32_t(bfDstA_),
-                                   uint32_t(beRGB_),    uint32_t(beA_),
-                                   blendConstR_, blendConstG_,
-                                   blendConstB_, blendConstA_,
-                                   d_fpInsns_, fpInsnCount_,
-                                   d_fpConsts_, fpConstCount_,
-                                   d_colorB_, d_colorC_, d_colorD_,
-                                   flatShade_ ? 1 : 0,
-                                   logicOpEnable_ ? 1 : 0,
-                                   logicOp_,
-                                   ditherEnable_ ? 1 : 0,
-                                   twoSidedStencil_ ? 1 : 0,
-                                   uint32_t(backStencilFunc_),
-                                   uint32_t(backStencilRef_),
-                                   uint32_t(backStencilMask_),
-                                   uint32_t(backStencilWriteMask_),
-                                   uint32_t(backStencilSFail_),
-                                   uint32_t(backStencilZFail_),
-                                   uint32_t(backStencilZPass_),
-                                   (frontFace_ == FrontFace::CCW) ? 1 : 0,
-                                   fogMode_,
-                                   fogParam0_, fogParam1_,
-                                   depthBoundsTestEnable_ ? 1 : 0,
-                                   depthBoundsMin_, depthBoundsMax_,
-                                   twoSidedColor_ ? 1 : 0,
-                                   fpDepthReplace_ ? 1 : 0,
-                                   shaderWindowOrigin_,
-                                   shaderWindowHeight_,
-                                   clipPlaneControl_,
-                                   sRGBWrite_ ? 1 : 0);
+    k_rasterTriangles<<<gs, bs, 0, launchStream>>>(dp);
     // d_v comes from scratch pool — do not free. Just sync.
     if (!(asyncFifo_ && stream_)) {
         cudaDeviceSynchronize();
