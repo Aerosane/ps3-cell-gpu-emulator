@@ -88,6 +88,12 @@ PPE_HD inline int64_t SIMM16(uint32_t inst) {
 }
 PPE_HD inline uint64_t UIMM16(uint32_t inst) { return inst & 0xFFFF; }
 
+// D-form effective address: (rA|0) + SIMM16
+// rA=0 means literal 0 (not GPR[0]), per PowerPC ISA.
+#define EA_D(s, inst) (SIMM16(inst) + ((RA(inst) == 0) ? (uint64_t)0 : s.gpr[RA(inst)]))
+// D-form effective address with update (rA must be nonzero): rA + SIMM16
+#define EA_DU(s, inst) (SIMM16(inst) + s.gpr[RA(inst)])
+
 // I-form branch displacement (26-bit, sign-extended, shifted left 2)
 PPE_HD inline int64_t LI26(uint32_t inst) {
     int32_t raw = (int32_t)(inst & 0x03FFFFFC);
