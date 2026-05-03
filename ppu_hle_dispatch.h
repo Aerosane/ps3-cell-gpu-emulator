@@ -2744,6 +2744,231 @@ struct PpuHleDispatcher {
                    e.name == "sys_mmapper_free_shared_memory") {
             retval = 0;
 
+        // ── sys_mutex ────────────────────────────────────────────────
+        } else if (e.name == "sys_mutex_create") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_mutex_destroy") {
+            retval = 0;
+        } else if (e.name == "sys_mutex_lock" || e.name == "sys_mutex_trylock") {
+            retval = 0;
+        } else if (e.name == "sys_mutex_unlock") {
+            retval = 0;
+
+        // ── sys_cond ─────────────────────────────────────────────────
+        } else if (e.name == "sys_cond_create") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_cond_destroy") {
+            retval = 0;
+        } else if (e.name == "sys_cond_wait") {
+            retval = 0;
+        } else if (e.name == "sys_cond_signal" || e.name == "sys_cond_signal_all") {
+            retval = 0;
+
+        // ── sys_spu ──────────────────────────────────────────────────
+        } else if (e.name == "sys_spu_thread_group_create") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_spu_thread_group_destroy") {
+            retval = 0;
+        } else if (e.name == "sys_spu_thread_group_start") {
+            retval = 0;
+        } else if (e.name == "sys_spu_thread_group_join") {
+            retval = 0;  // group finished (stub)
+        } else if (e.name == "sys_spu_thread_initialize") {
+            // r3 = ptr to thread id
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_spu_thread_set_argument" ||
+                   e.name == "sys_spu_thread_write_snr") {
+            retval = 0;
+        } else if (e.name == "sys_spu_thread_get_exit_status") {
+            // r3 = thread, r4 = ptr to status
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t s = 0;
+                std::memcpy(mem + ptr, &s, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_spu_image_open" ||
+                   e.name == "sys_spu_image_close") {
+            retval = 0;
+
+        // ── sys_prx ──────────────────────────────────────────────────
+        } else if (e.name == "sys_prx_load_module") {
+            retval = nextHandleId++;  // module id
+        } else if (e.name == "sys_prx_start_module" ||
+                   e.name == "sys_prx_stop_module" ||
+                   e.name == "sys_prx_unload_module") {
+            retval = 0;
+        } else if (e.name == "sys_prx_get_module_list") {
+            // r3 = flags, r4 = ptr to list — zero-fill
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.name == "sys_prx_get_module_id_by_name") {
+            retval = 1;  // dummy module id
+        } else if (e.name == "sys_prx_register_library" ||
+                   e.name == "sys_prx_unregister_library") {
+            retval = 0;
+
+        // ── cellMsgDialog ────────────────────────────────────────────
+        } else if (e.name == "cellMsgDialogOpen2" ||
+                   e.name == "cellMsgDialogOpenErrorCode") {
+            retval = 0;  // dialog opens (stub — no UI)
+        } else if (e.name == "cellMsgDialogClose" ||
+                   e.name == "cellMsgDialogAbort") {
+            retval = 0;
+        } else if (e.name == "cellMsgDialogProgressBarInc" ||
+                   e.name == "cellMsgDialogProgressBarSetMsg") {
+            retval = 0;
+
+        // ── cellOskDialog ────────────────────────────────────────────
+        } else if (e.name == "cellOskDialogLoadAsync" ||
+                   e.name == "cellOskDialogUnloadAsync") {
+            retval = 0;
+        } else if (e.name == "cellOskDialogGetSize") {
+            retval = 0;
+        } else if (e.name == "cellOskDialogAbort" ||
+                   e.name == "cellOskDialogSetDeviceMask") {
+            retval = 0;
+
+        // ── cellVideoOut extras ──────────────────────────────────────
+        } else if (e.name == "cellVideoOutGetResolution") {
+            // r3 = resolutionId, r4 = ptr to CellVideoOutResolution
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 8 <= memSize) {
+                // 720p: 1280×720
+                uint16_t w = __builtin_bswap16(1280);
+                uint16_t h = __builtin_bswap16(720);
+                std::memcpy(mem + ptr, &w, 2);
+                std::memcpy(mem + ptr + 2, &h, 2);
+            }
+            retval = 0;
+        } else if (e.name == "cellVideoOutGetConf") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 16 <= memSize) std::memset(mem + ptr, 0, 16);
+            retval = 0;
+        } else if (e.name == "cellVideoOutDebugSetMonitorType") {
+            retval = 0;
+        } else if (e.name == "cellVideoOutGetScreenSize") {
+            // r3 = videoOut, r4 = ptr to float (screen size in inches)
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                float sz = 40.0f;  // 40 inch default
+                std::memcpy(mem + ptr, &sz, 4);
+            }
+            retval = 0;
+
+        // ── cellSysutilAvc ───────────────────────────────────────────
+        } else if (e.name == "cellSysutilAvcSetAttribute" ||
+                   e.name == "cellSysutilAvcJoinRequest" ||
+                   e.name == "cellSysutilAvcLeaveRequest" ||
+                   e.name == "cellSysutilAvcLoadAsync" ||
+                   e.name == "cellSysutilAvcUnloadAsync") {
+            retval = 0;
+
+        // ── cellNetAoi ───────────────────────────────────────────────
+        } else if (e.name == "cellNetAoiInit" || e.name == "cellNetAoiEnd") {
+            retval = 0;
+        } else if (e.name == "cellNetAoiCreateHandle") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellNetAoiDestroyHandle") {
+            retval = 0;
+
+        // ── cellVpost extras ─────────────────────────────────────────
+        } else if (e.name == "cellVpostOpen" || e.name == "cellVpostOpenEx") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellVpostClose") {
+            retval = 0;
+        } else if (e.name == "cellVpostExec") {
+            retval = 0;
+
+        // ── sceNpCommerce2 extras ────────────────────────────────────
+        } else if (e.name == "sceNpCommerce2CreateCtx") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sceNpCommerce2DestroyCtx") {
+            retval = 0;
+        } else if (e.name == "sceNpCommerce2GetProductInfoStart") {
+            retval = 0;
+        } else if (e.name == "sceNpCommerce2GetProductInfoGetResult") {
+            retval = (int32_t)0x80550407;  // not ready
+
+        // ── sceNpMatching2 extras ────────────────────────────────────
+        } else if (e.name == "sceNpMatching2SearchRoom" ||
+                   e.name == "sceNpMatching2JoinRoom" ||
+                   e.name == "sceNpMatching2LeaveRoom" ||
+                   e.name == "sceNpMatching2SendRoomMessage") {
+            retval = 0;
+        } else if (e.name == "sceNpMatching2GetRoomDataExternalList" ||
+                   e.name == "sceNpMatching2SetRoomDataExternal") {
+            retval = 0;
+        } else if (e.name == "sceNpMatching2GetWorldInfoList") {
+            retval = 0;
+
+        // ── sys_dbg ──────────────────────────────────────────────────
+        } else if (e.name == "sys_dbg_read_process_memory" ||
+                   e.name == "sys_dbg_write_process_memory") {
+            retval = 0;
+        } else if (e.name == "sys_dbg_get_thread_list") {
+            // r3 = ptr to list, r4 = num — zero-fill
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = 0;
+
+        // ── sys_ss ───────────────────────────────────────────────────
+        } else if (e.name == "sys_ss_random_number_generator") {
+            // r3 = ptr to buf, r4 = size — fill with pseudo-random
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            uint32_t sz  = (uint32_t)st.gpr[4];
+            if (ptr && sz > 0 && ptr + sz <= memSize) {
+                for (uint32_t i = 0; i < sz; ++i)
+                    mem[ptr + i] = (uint8_t)(nextHandleId * 7 + i * 13);
+            }
+            retval = 0;
+        } else if (e.name == "sys_ss_get_console_id") {
+            // r3 = ptr to 16-byte console id
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                mem[ptr] = 0x01;  // type = retail
+            }
+            retval = 0;
+        } else if (e.name == "sys_ss_access_control_engine") {
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

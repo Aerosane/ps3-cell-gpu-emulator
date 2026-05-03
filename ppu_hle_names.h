@@ -1032,6 +1032,107 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0x7215b800, "sys_mmapper", "sys_mmapper_map_shared_memory" },
     { 0x93f3c9a5, "sys_mmapper", "sys_mmapper_unmap_shared_memory" },
     { 0x59d4584b, "sys_mmapper", "sys_mmapper_free_shared_memory" },
+
+    // ── sys_mutex ────────────────────────────────────────────────
+    { 0xa85b74c4, "sys_mutex", "sys_mutex_create" },
+    { 0x1b27de0c, "sys_mutex", "sys_mutex_destroy" },
+    { 0xa2a90534, "sys_mutex", "sys_mutex_lock" },
+    { 0x1a1bc780, "sys_mutex", "sys_mutex_trylock" },
+    { 0xba14c54e, "sys_mutex", "sys_mutex_unlock" },
+
+    // ── sys_cond ─────────────────────────────────────────────────
+    { 0xb429a16e, "sys_cond", "sys_cond_create" },
+    { 0x5e37e3b4, "sys_cond", "sys_cond_destroy" },
+    { 0xa95e10fa, "sys_cond", "sys_cond_wait" },
+    { 0x1e82ee27, "sys_cond", "sys_cond_signal" },
+    { 0x08148c52, "sys_cond", "sys_cond_signal_all" },
+
+    // ── sys_spu ──────────────────────────────────────────────────
+    { 0x9f85b88b, "sys_spu", "sys_spu_thread_group_create" },
+    { 0x21438f23, "sys_spu", "sys_spu_thread_group_destroy" },
+    { 0x5ef1b6dd, "sys_spu", "sys_spu_thread_group_start" },
+    { 0x79da05f7, "sys_spu", "sys_spu_thread_group_join" },
+    { 0x52421b2c, "sys_spu", "sys_spu_thread_initialize" },
+    { 0xa7a709f1, "sys_spu", "sys_spu_thread_set_argument" },
+    { 0x1b1d5125, "sys_spu", "sys_spu_thread_get_exit_status" },
+    { 0x90da2c0a, "sys_spu", "sys_spu_image_open" },
+    { 0x2ead4547, "sys_spu", "sys_spu_image_close" },
+    { 0xa4ab5fbe, "sys_spu", "sys_spu_thread_write_snr" },
+
+    // ── sys_prx (PRX module loading) ─────────────────────────────
+    { 0x26090058, "sys_prx", "sys_prx_load_module" },
+    { 0xef68c17c, "sys_prx", "sys_prx_start_module" },
+    { 0xd5b4f13d, "sys_prx", "sys_prx_stop_module" },
+    { 0xae9e3e74, "sys_prx", "sys_prx_unload_module" },
+    { 0x34b15cc4, "sys_prx", "sys_prx_get_module_list" },
+    { 0x98ef68a9, "sys_prx", "sys_prx_get_module_id_by_name" },
+    { 0xd04c52ff, "sys_prx", "sys_prx_register_library" },
+    { 0x7d7fc79f, "sys_prx", "sys_prx_unregister_library" },
+
+    // ── cellMsgDialog ────────────────────────────────────────────
+    { 0xb0fceca5, "cellMsgDialog", "cellMsgDialogOpen2" },
+    { 0x62b0f803, "cellMsgDialog", "cellMsgDialogClose" },
+    { 0x7603d3db, "cellMsgDialog", "cellMsgDialogAbort" },
+    { 0xcb4f9ac8, "cellMsgDialog", "cellMsgDialogProgressBarInc" },
+    { 0xf2b3e8bb, "cellMsgDialog", "cellMsgDialogProgressBarSetMsg" },
+    { 0xf81abf09, "cellMsgDialog", "cellMsgDialogOpenErrorCode" },
+
+    // ── cellOskDialog (on-screen keyboard) ───────────────────────
+    { 0x7f9a95e9, "cellOskDialog", "cellOskDialogLoadAsync" },
+    { 0x3d1e17e0, "cellOskDialog", "cellOskDialogUnloadAsync" },
+    { 0xb6174ee6, "cellOskDialog", "cellOskDialogGetSize" },
+    { 0x0cc4e3be, "cellOskDialog", "cellOskDialogAbort" },
+    { 0xa5bdef02, "cellOskDialog", "cellOskDialogSetDeviceMask" },
+
+    // ── cellVideoOut extras ──────────────────────────────────────
+    { 0xe26c97de, "cellVideoOut", "cellVideoOutGetResolution" },
+    { 0x15ae62f5, "cellVideoOut", "cellVideoOutGetConf" },
+    { 0x4f488b9a, "cellVideoOut", "cellVideoOutDebugSetMonitorType" },
+    { 0xa322db75, "cellVideoOut", "cellVideoOutGetScreenSize" },
+
+    // ── cellSysutilAvc — video chat ──────────────────────────────
+    { 0xc8f3e84f, "cellSysutilAvc", "cellSysutilAvcSetAttribute" },
+    { 0xbd52cde0, "cellSysutilAvc", "cellSysutilAvcJoinRequest" },
+    { 0xb5ee2c29, "cellSysutilAvc", "cellSysutilAvcLeaveRequest" },
+    { 0xee6f2fa5, "cellSysutilAvc", "cellSysutilAvcLoadAsync" },
+    { 0x71cfedfa, "cellSysutilAvc", "cellSysutilAvcUnloadAsync" },
+
+    // ── cellNetAoi — network AoI ─────────────────────────────────
+    { 0x48b2f1a8, "cellNetAoi", "cellNetAoiInit" },
+    { 0xa8a2b92e, "cellNetAoi", "cellNetAoiEnd" },
+    { 0xfa710304, "cellNetAoi", "cellNetAoiCreateHandle" },
+    { 0x7a16b85c, "cellNetAoi", "cellNetAoiDestroyHandle" },
+
+    // ── cellVpost extras (video post-processing) ─────────────────
+    { 0xab8c4fb8, "cellVpost", "cellVpostOpen" },
+    { 0x131a1db6, "cellVpost", "cellVpostClose" },
+    { 0x3d18c884, "cellVpost", "cellVpostExec" },
+    { 0xef7f1860, "cellVpost", "cellVpostOpenEx" },
+
+    // ── sceNpCommerce2 extras ────────────────────────────────────
+    { 0x62023cf5, "sceNpCommerce2", "sceNpCommerce2CreateCtx" },
+    { 0x7370d4b4, "sceNpCommerce2", "sceNpCommerce2DestroyCtx" },
+    { 0x0e10476b, "sceNpCommerce2", "sceNpCommerce2GetProductInfoStart" },
+    { 0x1fa1b2e8, "sceNpCommerce2", "sceNpCommerce2GetProductInfoGetResult" },
+
+    // ── sceNpMatching2 extras ────────────────────────────────────
+    { 0x0ea3d356, "sceNpMatching2", "sceNpMatching2GetRoomDataExternalList" },
+    { 0x4e4a5bca, "sceNpMatching2", "sceNpMatching2SetRoomDataExternal" },
+    { 0x0b282cb1, "sceNpMatching2", "sceNpMatching2SearchRoom" },
+    { 0x1a16e826, "sceNpMatching2", "sceNpMatching2JoinRoom" },
+    { 0x54f1b23f, "sceNpMatching2", "sceNpMatching2LeaveRoom" },
+    { 0x3b89b01b, "sceNpMatching2", "sceNpMatching2SendRoomMessage" },
+    { 0x8b14b92b, "sceNpMatching2", "sceNpMatching2GetWorldInfoList" },
+
+    // ── sys_dbg (debugging) ──────────────────────────────────────
+    { 0xeb52a81c, "sys_dbg", "sys_dbg_read_process_memory" },
+    { 0x71fba7a9, "sys_dbg", "sys_dbg_write_process_memory" },
+    { 0x1ab4c9f2, "sys_dbg", "sys_dbg_get_thread_list" },
+
+    // ── sys_ss — security/crypto ─────────────────────────────────
+    { 0x33195de0, "sys_ss", "sys_ss_random_number_generator" },
+    { 0xa1c9f3e3, "sys_ss", "sys_ss_get_console_id" },
+    { 0x8a4f7605, "sys_ss", "sys_ss_access_control_engine" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {
