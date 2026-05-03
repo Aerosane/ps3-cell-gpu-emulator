@@ -111,8 +111,13 @@ static bool compileVPKernel(const rsx::RSXState& s, GPUVPCache& cache) {
 
 // Ensure GPU VP kernel is compiled and up-to-date for current microcode
 static bool ensureGPUVP(const rsx::RSXState& s, GPUVPCache& cache) {
+    // Skip expensive hash if VP hasn't been modified
+    if (!s.vpDirty && cache.func != nullptr) return true;
     uint64_t h = fnv1a_hash(s.vpData, 512 * 4);
-    if (h == cache.hash && cache.func != nullptr) return true;
+    if (h == cache.hash && cache.func != nullptr) {
+        const_cast<rsx::RSXState&>(s).vpDirty = false;
+        return true;
+    }
 
     if (!compileVPKernel(s, cache)) {
         cache.hash = 0;
@@ -120,6 +125,7 @@ static bool ensureGPUVP(const rsx::RSXState& s, GPUVPCache& cache) {
         return false;
     }
     cache.hash = h;
+    const_cast<rsx::RSXState&>(s).vpDirty = false;
     return true;
 }
 

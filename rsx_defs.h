@@ -521,6 +521,7 @@ struct RSXState {
     uint32_t vpData[512 * 4];  // up to 512 instructions × 4 words each
     uint32_t vpLoadOffset;      // current program upload offset (word index)
     uint32_t vpValid;           // set when a vertex program has been uploaded
+    bool     vpDirty;           // set when VP data or start changes
 
     // Fragment program
     uint32_t fpOffset;   // VRAM offset of fragment program

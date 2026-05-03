@@ -681,6 +681,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     // ── Shader programs ────────────────────────────────────────
     case NV4097_SET_TRANSFORM_PROGRAM_START:
         state->vpStart = data;
+        state->vpDirty = true;
         return;
     case NV4097_SET_TRANSFORM_PROGRAM_LOAD:
         // Sets the word-index into vpData[] where the next 0x0B80 window
@@ -1075,6 +1076,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         if (idx < 512 * 4) {
             state->vpData[idx] = data;
             state->vpValid = 1;
+            state->vpDirty = true;
         }
         return;
     }
