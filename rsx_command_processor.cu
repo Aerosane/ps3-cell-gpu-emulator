@@ -20,6 +20,7 @@ void rsx_emitter_onClearSurface(void* emitter, const rsx::RSXState* s, uint32_t 
 void rsx_emitter_onBeginEnd   (void* emitter, const rsx::RSXState* s, uint32_t prim)  __attribute__((weak));
 void rsx_emitter_onDrawArrays (void* emitter, const rsx::RSXState* s, uint32_t first, uint32_t count) __attribute__((weak));
 void rsx_emitter_onDrawIndexed(void* emitter, const rsx::RSXState* s, uint32_t first, uint32_t count, uint32_t fmt) __attribute__((weak));
+void rsx_emitter_onDrawInline (void* emitter, const rsx::RSXState* s, const uint32_t* data, uint32_t words) __attribute__((weak));
 void rsx_emitter_onFlip       (void* emitter, const rsx::RSXState* s, uint32_t surfaceOffset) __attribute__((weak));
 }
 
@@ -725,15 +726,26 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     case NV4097_SET_FREQUENCY_DIVIDER_OPERATION:
         state->freqDividerOp = data;
         return;
+    case NV4097_SET_BEGIN_END_INSTANCE_CNT:
+        state->instanceCount = data;
+        return;
 
     // ── Draw ───────────────────────────────────────────────────
     case NV4097_SET_BEGIN_END:
         if (data != 0) {
             state->currentPrim = (PrimitiveType)data;
             state->inBeginEnd  = true;
+            state->inlineVertexData.clear();
         } else {
-            // END — finalize draw batch
+            // END — finalize draw batch; flush inline vertex data if any
             state->inBeginEnd = false;
+            if (!state->inlineVertexData.empty()) {
+                uint32_t words = (uint32_t)state->inlineVertexData.size();
+                state->drawCallCount++;
+                RSX_EMIT(onDrawInline, state,
+                         state->inlineVertexData.data(), words);
+                state->inlineVertexData.clear();
+            }
         }
         RSX_EMIT(onBeginEnd, state, data);
         return;
@@ -757,6 +769,12 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         RSX_EMIT(onDrawIndexed, state, first, count, 0u);
         return;
     }
+    case NV4097_DRAW_INLINE_ARRAY:
+        // Inline vertex data pushed one word at a time. Games pack
+        // position/color per-word for small immediate geometry (UI quads).
+        // We accumulate into the inline buffer; flushed at END.
+        state->inlineVertexData.push_back(data);
+        return;
 
     // ── Flip (present) ─────────────────────────────────────────
     case NV4097_SET_SURFACE_COLOR_AOFFSET_FLIP:
@@ -1099,18 +1117,49 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         state->dmaTransfer.lineCount = data;
         return;
     }
+    if (method == NV0039_FORMAT) {
+        state->dmaTransfer.format = data;
+        return;
+    }
+    if (method == NV0039_SET_CONTEXT_DMA_BUFFER_IN) {
+        state->dmaTransfer.ctxIn = data;
+        return;
+    }
+    if (method == NV0039_SET_CONTEXT_DMA_BUFFER_OUT) {
+        state->dmaTransfer.ctxOut = data;
+        return;
+    }
     if (method == NV0039_BUFFER_NOTIFY) {
         // Execute the DMA transfer: copy lineCount rows of lineLength bytes
-        // from offsetIn to offsetOut within VRAM.
+        // from offsetIn to offsetOut within VRAM. Supports byte-swap via FORMAT.
         auto& d = state->dmaTransfer;
         if (vram && d.lineLength > 0 && d.lineCount > 0) {
             uint32_t vramSz = state->vramSize;
+            uint32_t inFmt  = d.format & 0xFF;         // 1=byte, 2=LE16, 4=LE32
+            uint32_t outFmt = (d.format >> 8) & 0xFF;
+            bool needSwap = (inFmt != outFmt && inFmt > 1 && outFmt > 1);
+
             for (uint32_t row = 0; row < d.lineCount; ++row) {
                 uint32_t srcOff = d.offsetIn  + row * d.pitchIn;
                 uint32_t dstOff = d.offsetOut + row * d.pitchOut;
                 if (srcOff + d.lineLength <= vramSz &&
                     dstOff + d.lineLength <= vramSz) {
                     std::memmove(vram + dstOff, vram + srcOff, d.lineLength);
+                    // Byte-swap if format conversion required (LE↔BE)
+                    if (needSwap && outFmt == 4) {
+                        uint32_t* p = reinterpret_cast<uint32_t*>(vram + dstOff);
+                        for (uint32_t w = 0; w < d.lineLength / 4; ++w) {
+                            uint32_t v = p[w];
+                            p[w] = ((v >> 24) & 0xFF) | ((v >> 8) & 0xFF00) |
+                                   ((v << 8) & 0xFF0000) | ((v << 24) & 0xFF000000u);
+                        }
+                    } else if (needSwap && outFmt == 2) {
+                        uint16_t* p = reinterpret_cast<uint16_t*>(vram + dstOff);
+                        for (uint32_t w = 0; w < d.lineLength / 2; ++w) {
+                            uint16_t v = p[w];
+                            p[w] = (v >> 8) | (v << 8);
+                        }
+                    }
                 }
             }
         }

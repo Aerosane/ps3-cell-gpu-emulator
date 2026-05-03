@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 namespace rsx {
 
@@ -187,6 +188,10 @@ static constexpr uint32_t NV4097_DRAW_ARRAYS                 = 0x00001814;
 static constexpr uint32_t NV4097_SET_INDEX_ARRAY_ADDRESS     = 0x0000181C;
 static constexpr uint32_t NV4097_SET_INDEX_ARRAY_DMA         = 0x00001820;
 static constexpr uint32_t NV4097_DRAW_INDEX_ARRAY            = 0x00001824;
+static constexpr uint32_t NV4097_DRAW_INLINE_ARRAY           = 0x00001818;
+
+// Instanced draw
+static constexpr uint32_t NV4097_SET_BEGIN_END_INSTANCE_CNT  = 0x00001844;
 
 // Cull face / polygon mode
 static constexpr uint32_t NV4097_SET_FRONT_POLYGON_MODE      = 0x00001828;
@@ -299,7 +304,10 @@ static constexpr uint32_t NV0039_PITCH_IN                      = 0x00000314;
 static constexpr uint32_t NV0039_PITCH_OUT                     = 0x00000318;
 static constexpr uint32_t NV0039_LINE_LENGTH_IN                = 0x0000031C;
 static constexpr uint32_t NV0039_LINE_COUNT                    = 0x00000320;
+static constexpr uint32_t NV0039_FORMAT                        = 0x00000324;
 static constexpr uint32_t NV0039_BUFFER_NOTIFY                 = 0x00000104;
+static constexpr uint32_t NV0039_SET_CONTEXT_DMA_BUFFER_IN     = 0x00000184;
+static constexpr uint32_t NV0039_SET_CONTEXT_DMA_BUFFER_OUT    = 0x00000188;
 
 // ── Occlusion query / ZCULL ──────────────────────────────────────
 static constexpr uint32_t NV4097_SET_ZPASS_PIXEL_COUNT_ENABLE  = 0x00001D78;
@@ -527,6 +535,7 @@ struct RSXState {
     uint32_t colorMaskMrt;         // per-MRT (1-3) color write masks
     uint32_t vpAttribOutputMask;   // which VP outputs are active
     uint32_t freqDividerOp;        // vertex attrib instancing dividers
+    uint32_t instanceCount;        // instanced draw repeat count (0=disabled)
     bool     sRGBWrite;            // gamma encode on FB write
 
     // Anti-aliasing / smoothing
@@ -565,6 +574,7 @@ struct RSXState {
     // Draw state
     PrimitiveType currentPrim;
     bool          inBeginEnd;
+    std::vector<uint32_t> inlineVertexData;  // NV4097_DRAW_INLINE_ARRAY accumulator
 
     // Statistics
     uint32_t drawCallCount;
@@ -596,6 +606,9 @@ struct RSXState {
         uint32_t pitchOut;
         uint32_t lineLength;
         uint32_t lineCount;
+        uint32_t format;       // bits [7:0]=in, [15:8]=out (1=byte, 2=LE16, 4=LE32)
+        uint32_t ctxIn;        // context DMA for source (0xFEED0000=VRAM, 0xFEED0001=main)
+        uint32_t ctxOut;       // context DMA for destination
     } dmaTransfer;
 
     // NV3062 destination surface for 2D blit.

@@ -3045,6 +3045,41 @@ uint32_t CudaRasterizer::drawPoints(const RasterVertex* verts, uint32_t count) {
     for (uint32_t i = 0; i < count; ++i)
         xf[i] = xformOne(verts[i], useMVP_, mvp_, vpX, vpY, vpW, vpH);
 
+    // ── Point sprite → quad expansion ───────────────────────────
+    // When point sprites are enabled, expand each point into a
+    // screen-aligned quad (2 triangles) with UV coords [0,1]×[0,1].
+    // This lets the fragment program texture the sprite properly.
+    if (pointSpriteEnable_ && pointSize_ > 1.0f) {
+        std::vector<RasterVertex> quads;
+        quads.reserve(count * 6);  // 2 tris × 3 verts per point
+        for (uint32_t i = 0; i < count; ++i) {
+            const RasterVertex& v = xf[i];
+            float ps = (v.pointSize > 0.0f) ? v.pointSize : pointSize_;
+            float half = ps * 0.5f;
+            float x0 = v.x - half, y0 = v.y - half;
+            float x1 = v.x + half, y1 = v.y + half;
+
+            // Build 4 corners, copy all vertex attributes from center
+            RasterVertex tl = v, tr = v, bl = v, br = v;
+            tl.x = x0; tl.y = y0; tl.u = 0; tl.v = 0;
+            tr.x = x1; tr.y = y0; tr.u = 1; tr.v = 0;
+            bl.x = x0; bl.y = y1; bl.u = 0; bl.v = 1;
+            br.x = x1; br.y = y1; br.u = 1; br.v = 1;
+
+            // Triangle 1: TL, TR, BR
+            quads.push_back(tl);
+            quads.push_back(tr);
+            quads.push_back(br);
+            // Triangle 2: TL, BR, BL
+            quads.push_back(tl);
+            quads.push_back(br);
+            quads.push_back(bl);
+        }
+        // Render as triangles — gets full FP, depth, blend pipeline
+        return drawTriangles(quads.data(), (uint32_t)quads.size());
+    }
+
+    // Non-sprite path: rasterize points directly with point kernel
     size_t bytes = xf.size() * sizeof(RasterVertex);
     RasterVertex* d_v = nullptr;
     if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
