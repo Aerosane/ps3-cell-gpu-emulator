@@ -2471,6 +2471,279 @@ struct PpuHleDispatcher {
         } else if (e.name == "cellHttpGetStatusCode") {
             retval = 0;
 
+        // ── cellFiber ────────────────────────────────────────────────
+        } else if (e.name == "cellFiberPpuInitialize" ||
+                   e.name == "cellFiberPpuFinalize" ||
+                   e.name == "cellFiberPpuSchedulerFinalize") {
+            retval = 0;
+        } else if (e.name == "cellFiberPpuCreateFiber") {
+            retval = 0;
+        } else if (e.name == "cellFiberPpuJoinFiber") {
+            retval = 0;  // fiber completed (stub)
+        } else if (e.name == "cellFiberPpuSelf") {
+            retval = 1;  // dummy fiber id
+        } else if (e.name == "cellFiberPpuYield") {
+            retval = 0;
+
+        // ── cellSubDisplay ───────────────────────────────────────────
+        } else if (e.name == "cellSubDisplayInit" ||
+                   e.name == "cellSubDisplayEnd") {
+            retval = 0;
+        } else if (e.name == "cellSubDisplayGetRequiredMemory") {
+            retval = 0;
+        } else if (e.name == "cellSubDisplayStart" ||
+                   e.name == "cellSubDisplayStop") {
+            retval = 0;
+
+        // ── cellStorageData ──────────────────────────────────────────
+        } else if (e.name == "cellStorageDataImport" ||
+                   e.name == "cellStorageDataExport") {
+            retval = 0;
+        } else if (e.name == "cellStorageDataGetPath") {
+            // r3 = ptr to path buf
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 64 <= memSize) {
+                std::memset(mem + ptr, 0, 64);
+                std::memcpy(mem + ptr, "/dev_hdd0/", 10);
+            }
+            retval = 0;
+
+        // ── cellSysmodule extras ─────────────────────────────────────
+        } else if (e.name == "cellSysmoduleLoadModule" ||
+                   e.name == "cellSysmoduleUnloadModule") {
+            retval = 0;  // always succeed
+        } else if (e.name == "cellSysmoduleIsLoaded") {
+            retval = 0;  // CELL_SYSMODULE_LOADED
+        } else if (e.name == "cellSysmoduleInitialize" ||
+                   e.name == "cellSysmoduleFinalize" ||
+                   e.name == "cellSysmoduleSetResumeHandler") {
+            retval = 0;
+
+        // ── cellAudio extras ─────────────────────────────────────────
+        } else if (e.name == "cellAudioPortOpen") {
+            // r3 = ptr to config, r4 = ptr to portNum
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t p = __builtin_bswap32(0);  // port 0
+                std::memcpy(mem + ptr, &p, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellAudioPortClose" ||
+                   e.name == "cellAudioPortStart" ||
+                   e.name == "cellAudioPortStop") {
+            retval = 0;
+        } else if (e.name == "cellAudioGetPortConfig") {
+            // r3 = portNum, r4 = ptr to CellAudioPortConfig
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 32 <= memSize) {
+                std::memset(mem + ptr, 0, 32);
+                // nChannel=2 at offset 4, nBlock=8 at offset 8
+                uint32_t ch = __builtin_bswap32(2);
+                uint32_t bl = __builtin_bswap32(8);
+                std::memcpy(mem + ptr + 4, &ch, 4);
+                std::memcpy(mem + ptr + 8, &bl, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellAudioSetPortLevel") {
+            retval = 0;
+        } else if (e.name == "cellAudioCreateNotifyEventQueue") {
+            // r3 = ptr to event queue id, r4 = ptr to key
+            uint32_t pq = (uint32_t)st.gpr[3];
+            uint32_t pk = (uint32_t)st.gpr[4];
+            if (pq && pq + 4 <= memSize) {
+                uint32_t q = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + pq, &q, 4);
+            }
+            if (pk && pk + 8 <= memSize) std::memset(mem + pk, 0, 8);
+            retval = 0;
+        } else if (e.name == "cellAudioSetNotifyEventQueue" ||
+                   e.name == "cellAudioRemoveNotifyEventQueue") {
+            retval = 0;
+
+        // ── sys_timer ────────────────────────────────────────────────
+        } else if (e.name == "sys_timer_create") {
+            // r3 = ptr to timer_id
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_timer_destroy" ||
+                   e.name == "sys_timer_start" ||
+                   e.name == "sys_timer_stop") {
+            retval = 0;
+        } else if (e.name == "sys_timer_connect_event_queue") {
+            retval = 0;
+        } else if (e.name == "sys_timer_usleep" ||
+                   e.name == "sys_timer_sleep") {
+            retval = 0;  // return immediately (no actual sleep)
+
+        // ── sys_event ────────────────────────────────────────────────
+        } else if (e.name == "sys_event_queue_create") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_event_queue_destroy") {
+            retval = 0;
+        } else if (e.name == "sys_event_queue_receive") {
+            // r3 = queue id, r4 = ptr to event, r5 = timeout
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.name == "sys_event_queue_tryreceive") {
+            retval = (int32_t)0x80010005;  // EAGAIN — no events
+        } else if (e.name == "sys_event_port_create") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_event_port_destroy" ||
+                   e.name == "sys_event_port_connect_local" ||
+                   e.name == "sys_event_port_send") {
+            retval = 0;
+        } else if (e.name == "sys_event_flag_create") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_event_flag_destroy") {
+            retval = 0;
+        } else if (e.name == "sys_event_flag_wait" ||
+                   e.name == "sys_event_flag_trywait") {
+            retval = 0;  // single-threaded: flag set
+        } else if (e.name == "sys_event_flag_set" ||
+                   e.name == "sys_event_flag_clear") {
+            retval = 0;
+
+        // ── sys_semaphore ────────────────────────────────────────────
+        } else if (e.name == "sys_semaphore_create") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_semaphore_destroy") {
+            retval = 0;
+        } else if (e.name == "sys_semaphore_wait" ||
+                   e.name == "sys_semaphore_trywait") {
+            retval = 0;  // single-threaded
+        } else if (e.name == "sys_semaphore_post") {
+            retval = 0;
+
+        // ── sys_lwcond ───────────────────────────────────────────────
+        } else if (e.name == "sys_lwcond_create") {
+            retval = 0;
+        } else if (e.name == "sys_lwcond_destroy") {
+            retval = 0;
+        } else if (e.name == "sys_lwcond_wait") {
+            retval = 0;  // single-threaded
+        } else if (e.name == "sys_lwcond_signal" ||
+                   e.name == "sys_lwcond_signal_all") {
+            retval = 0;
+
+        // ── sys_lwmutex ──────────────────────────────────────────────
+        } else if (e.name == "sys_lwmutex_create") {
+            retval = 0;
+        } else if (e.name == "sys_lwmutex_destroy") {
+            retval = 0;
+        } else if (e.name == "sys_lwmutex_lock" ||
+                   e.name == "sys_lwmutex_trylock") {
+            retval = 0;  // single-threaded
+        } else if (e.name == "sys_lwmutex_unlock") {
+            retval = 0;
+
+        // ── sys_ppu_thread ───────────────────────────────────────────
+        } else if (e.name == "sys_ppu_thread_create") {
+            // r3 = ptr to thread_id
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 8 <= memSize) {
+                uint64_t tid = nextHandleId++;
+                for (int i = 0; i < 8; ++i)
+                    mem[ptr + i] = (uint8_t)(tid >> (56 - 8*i));
+            }
+            retval = 0;
+        } else if (e.name == "sys_ppu_thread_exit") {
+            retval = 0;
+        } else if (e.name == "sys_ppu_thread_join") {
+            retval = 0;  // thread already finished
+        } else if (e.name == "sys_ppu_thread_get_id") {
+            retval = 1;  // main thread id
+        } else if (e.name == "sys_ppu_thread_yield") {
+            retval = 0;
+        } else if (e.name == "sys_ppu_thread_set_priority" ||
+                   e.name == "sys_ppu_thread_get_priority") {
+            retval = 0;
+        } else if (e.name == "sys_ppu_thread_get_stack_information") {
+            // r3 = ptr to stack info struct
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                // addr at 0, size at 8 (64KB default)
+                uint64_t sz = 64 * 1024;
+                for (int i = 0; i < 8; ++i)
+                    mem[ptr + 8 + i] = (uint8_t)(sz >> (56 - 8*i));
+            }
+            retval = 0;
+
+        // ── sys_memory extras ────────────────────────────────────────
+        } else if (e.name == "sys_memory_container_create") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_memory_container_destroy") {
+            retval = 0;
+        } else if (e.name == "sys_memory_container_get_size") {
+            // r3 = container, r4 = ptr to CellSysMemInfo
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                uint32_t total = __builtin_bswap32(64 * 1024 * 1024);
+                uint32_t avail = __builtin_bswap32(32 * 1024 * 1024);
+                std::memcpy(mem + ptr, &total, 4);
+                std::memcpy(mem + ptr + 4, &avail, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_memory_get_user_memory_size") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                uint32_t total = __builtin_bswap32(256 * 1024 * 1024);
+                uint32_t avail = __builtin_bswap32(128 * 1024 * 1024);
+                std::memcpy(mem + ptr, &total, 4);
+                std::memcpy(mem + ptr + 4, &avail, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_memory_get_page_attribute") {
+            retval = 0;
+
+        // ── sys_mmapper ──────────────────────────────────────────────
+        } else if (e.name == "sys_mmapper_allocate_fixed_address") {
+            retval = 0;
+        } else if (e.name == "sys_mmapper_allocate_shared_memory") {
+            // r3 = key, r4 = size, r5 = flags, r6 = ptr to mem_id
+            uint32_t ptr = (uint32_t)st.gpr[6];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "sys_mmapper_map_shared_memory" ||
+                   e.name == "sys_mmapper_unmap_shared_memory" ||
+                   e.name == "sys_mmapper_free_shared_memory") {
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

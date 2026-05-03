@@ -922,6 +922,116 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0x7e3e3ab5, "cellHttp", "cellHttpRecvResponse" },
     { 0x4d29fb5c, "cellHttp", "cellHttpGetResponseContentLength" },
     { 0x7abb3bdf, "cellHttp", "cellHttpGetStatusCode" },
+
+    // ── cellFiber — lightweight fibers ───────────────────────────
+    { 0x0a16d843, "cellFiber", "cellFiberPpuInitialize" },
+    { 0x1e471a02, "cellFiber", "cellFiberPpuFinalize" },
+    { 0x3b3bdb7c, "cellFiber", "cellFiberPpuCreateFiber" },
+    { 0x72086315, "cellFiber", "cellFiberPpuJoinFiber" },
+    { 0x4bfb9b97, "cellFiber", "cellFiberPpuSelf" },
+    { 0x1f5e999d, "cellFiber", "cellFiberPpuYield" },
+    { 0x5f3afb12, "cellFiber", "cellFiberPpuSchedulerFinalize" },
+
+    // ── cellSubDisplay — sub-display (PSP remote play) ───────────
+    { 0xba73fe08, "cellSubDisplay", "cellSubDisplayInit" },
+    { 0x551d80a5, "cellSubDisplay", "cellSubDisplayEnd" },
+    { 0x836ce1b0, "cellSubDisplay", "cellSubDisplayGetRequiredMemory" },
+    { 0x3c189067, "cellSubDisplay", "cellSubDisplayStart" },
+    { 0xd8415c65, "cellSubDisplay", "cellSubDisplayStop" },
+
+    // ── cellStorageData — storage management ─────────────────────
+    { 0x62e0c5c1, "cellStorageData", "cellStorageDataImport" },
+    { 0x7ef67c44, "cellStorageData", "cellStorageDataExport" },
+    { 0x97b4b8e5, "cellStorageData", "cellStorageDataGetPath" },
+
+    // ── cellSysmodule extras ─────────────────────────────────────
+    { 0x5e058fbc, "cellSysmodule", "cellSysmoduleLoadModule" },
+    { 0xb498bf77, "cellSysmodule", "cellSysmoduleUnloadModule" },
+    { 0xa193143c, "cellSysmodule", "cellSysmoduleIsLoaded" },
+    { 0x0c044ee5, "cellSysmodule", "cellSysmoduleInitialize" },
+    { 0x8956f137, "cellSysmodule", "cellSysmoduleFinalize" },
+    { 0x5f2b3e4a, "cellSysmodule", "cellSysmoduleSetResumeHandler" },
+
+    // ── cellAudio extras ─────────────────────────────────────────
+    { 0x4129fe2d, "cellAudio", "cellAudioPortStart" },
+    { 0x05b7f547, "cellAudio", "cellAudioPortStop" },
+    { 0x74a66af0, "cellAudio", "cellAudioGetPortConfig" },
+    { 0x4d4db98f, "cellAudio", "cellAudioPortOpen" },
+    { 0x01aef553, "cellAudio", "cellAudioPortClose" },
+    { 0xca5ac370, "cellAudio", "cellAudioSetPortLevel" },
+    { 0xcd7bc431, "cellAudio", "cellAudioCreateNotifyEventQueue" },
+    { 0x4109d08c, "cellAudio", "cellAudioSetNotifyEventQueue" },
+    { 0x2de4c6de, "cellAudio", "cellAudioRemoveNotifyEventQueue" },
+
+    // ── sys_timer ────────────────────────────────────────────────
+    { 0x2c4a5c4c, "sys_timer", "sys_timer_create" },
+    { 0x16e39df0, "sys_timer", "sys_timer_destroy" },
+    { 0x6c8e12e0, "sys_timer", "sys_timer_start" },
+    { 0x94c7cbc0, "sys_timer", "sys_timer_stop" },
+    { 0xba7cd4ca, "sys_timer", "sys_timer_connect_event_queue" },
+    { 0x9cb2daa0, "sys_timer", "sys_timer_usleep" },
+    { 0x39c34d80, "sys_timer", "sys_timer_sleep" },
+
+    // ── sys_event ────────────────────────────────────────────────
+    { 0x5dc20964, "sys_event", "sys_event_queue_create" },
+    { 0x33b2c0e1, "sys_event", "sys_event_queue_destroy" },
+    { 0x44e72545, "sys_event", "sys_event_queue_receive" },
+    { 0x7b991b4e, "sys_event", "sys_event_queue_tryreceive" },
+    { 0x7de8a40a, "sys_event", "sys_event_port_create" },
+    { 0x0e2b75ba, "sys_event", "sys_event_port_destroy" },
+    { 0xd8140352, "sys_event", "sys_event_port_connect_local" },
+    { 0x6da044e8, "sys_event", "sys_event_port_send" },
+    { 0xaab10b22, "sys_event", "sys_event_flag_create" },
+    { 0x3690ed06, "sys_event", "sys_event_flag_destroy" },
+    { 0x10e41720, "sys_event", "sys_event_flag_wait" },
+    { 0x38ae2ce7, "sys_event", "sys_event_flag_set" },
+    { 0xfc7f7b5a, "sys_event", "sys_event_flag_clear" },
+    { 0x145b35a0, "sys_event", "sys_event_flag_trywait" },
+
+    // ── sys_semaphore ────────────────────────────────────────────
+    { 0x54e90bac, "sys_semaphore", "sys_semaphore_create" },
+    { 0x17b54a0a, "sys_semaphore", "sys_semaphore_destroy" },
+    { 0x4e1a8a04, "sys_semaphore", "sys_semaphore_wait" },
+    { 0x34a72786, "sys_semaphore", "sys_semaphore_trywait" },
+    { 0x2eb3637a, "sys_semaphore", "sys_semaphore_post" },
+
+    // ── sys_lwcond (lightweight condition) ───────────────────────
+    { 0x1b80eb8b, "sys_lwcond", "sys_lwcond_create" },
+    { 0xc862cd8c, "sys_lwcond", "sys_lwcond_destroy" },
+    { 0x8c8fce78, "sys_lwcond", "sys_lwcond_wait" },
+    { 0xdf07e2b3, "sys_lwcond", "sys_lwcond_signal" },
+    { 0x7c532280, "sys_lwcond", "sys_lwcond_signal_all" },
+
+    // ── sys_lwmutex (lightweight mutex) ──────────────────────────
+    { 0x1573dc3f, "sys_lwmutex", "sys_lwmutex_create" },
+    { 0x5b727ed6, "sys_lwmutex", "sys_lwmutex_destroy" },
+    { 0xa285fa90, "sys_lwmutex", "sys_lwmutex_lock" },
+    { 0x1a1bc780, "sys_lwmutex", "sys_lwmutex_trylock" },
+    { 0xfba04f87, "sys_lwmutex", "sys_lwmutex_unlock" },
+
+    // ── sys_ppu_thread ───────────────────────────────────────────
+    { 0x0d70ea34, "sys_ppu_thread", "sys_ppu_thread_create" },
+    { 0xa4102f57, "sys_ppu_thread", "sys_ppu_thread_exit" },
+    { 0x4a7bb945, "sys_ppu_thread", "sys_ppu_thread_join" },
+    { 0xaff080a4, "sys_ppu_thread", "sys_ppu_thread_get_id" },
+    { 0x744680a2, "sys_ppu_thread", "sys_ppu_thread_yield" },
+    { 0x1386cd6e, "sys_ppu_thread", "sys_ppu_thread_set_priority" },
+    { 0x67f9fedb, "sys_ppu_thread", "sys_ppu_thread_get_priority" },
+    { 0x350d454e, "sys_ppu_thread", "sys_ppu_thread_get_stack_information" },
+
+    // ── sys_memory extras ────────────────────────────────────────
+    { 0x4e32b8a0, "sys_memory", "sys_memory_container_create" },
+    { 0x36b2d657, "sys_memory", "sys_memory_container_destroy" },
+    { 0x2a4a3e74, "sys_memory", "sys_memory_container_get_size" },
+    { 0xe1ef7570, "sys_memory", "sys_memory_get_user_memory_size" },
+    { 0x88a93f56, "sys_memory", "sys_memory_get_page_attribute" },
+
+    // ── sys_mmapper — memory mapping ─────────────────────────────
+    { 0x409ad9c8, "sys_mmapper", "sys_mmapper_allocate_fixed_address" },
+    { 0xa31eaf11, "sys_mmapper", "sys_mmapper_allocate_shared_memory" },
+    { 0x7215b800, "sys_mmapper", "sys_mmapper_map_shared_memory" },
+    { 0x93f3c9a5, "sys_mmapper", "sys_mmapper_unmap_shared_memory" },
+    { 0x59d4584b, "sys_mmapper", "sys_mmapper_free_shared_memory" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {
