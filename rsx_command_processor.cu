@@ -988,11 +988,12 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
             case 0x00: // TEXTURE_OFFSET
                 state->textures[unit].offset  = data;
                 state->textures[unit].enabled = true;
+                state->textures[unit].dirty   = true;
                 break;
             case 0x04: // TEXTURE_FORMAT
                 state->textures[unit].format = data;
-                // Extract dimension from format: bits 4-7 → 1=1D, 2=2D, 3=3D, 6=CUBE
                 state->textures[unit].dimension = (uint8_t)((data >> 4) & 0xF);
+                state->textures[unit].dirty = true;
                 break;
             case 0x0C: // TEXTURE_CONTROL0
                 state->textures[unit].control0 = data;
@@ -1009,6 +1010,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
             case 0x18: // TEXTURE_IMAGE_RECT  (width<<16 | height)
                 state->textures[unit].width  = (data >> 16) & 0xFFFF;
                 state->textures[unit].height =  data        & 0xFFFF;
+                state->textures[unit].dirty = true;
                 break;
             default:
                 break;
@@ -1025,6 +1027,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
             state->textures[unit].depth = (data >> 20) & 0xFFF;
             if (state->textures[unit].depth == 0)
                 state->textures[unit].depth = 1;
+            state->textures[unit].dirty = true;
         }
         return;
     }

@@ -949,14 +949,18 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         if ((uint64_t)t.offset + need > vramSize_) continue;
         const uint8_t* src = vram_ + t.offset;
 
-        // Check per-unit cache
+        // Check per-unit cache: skip hash if metadata unchanged and not dirty
         auto& ce = texCache_[tu];
+        bool metaMatch = ce.valid &&
+            t.offset == ce.offset && W == ce.width &&
+            H == ce.height && t.format == ce.format;
+        if (metaMatch && !t.dirty) { texBoundForDraw = true; continue; }
+        // Content changed or metadata changed — hash to confirm
         uint64_t cHash = fnv1a_bytes(src, (size_t)need);
-        bool stale = !ce.valid ||
-            t.offset != ce.offset || W != ce.width ||
-            H != ce.height || t.format != ce.format ||
-            cHash != ce.contentHash;
-        if (!stale) { texBoundForDraw = true; continue; }
+        if (metaMatch && cHash == ce.contentHash) {
+            const_cast<RSXState::TextureUnit&>(t).dirty = false;
+            texBoundForDraw = true; continue;
+        }
 
         std::vector<uint32_t> rgba8(W * H);
         if (fmt == 0x85) {
@@ -1095,6 +1099,7 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         ce.format = t.format;
         ce.contentHash = cHash;
         ce.valid = true;
+        const_cast<RSXState::TextureUnit&>(t).dirty = false;
         texBoundForDraw = true;
     }
 

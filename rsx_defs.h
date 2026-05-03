@@ -570,6 +570,7 @@ struct RSXState {
         uint32_t control1;  // remap/swizzle
         uint8_t  dimension; // 1=1D, 2=2D, 3=3D, 6=cubemap
         bool     enabled;
+        bool     dirty;     // set when offset/format/dimensions change
     } textures[16];
 
     // Draw state
