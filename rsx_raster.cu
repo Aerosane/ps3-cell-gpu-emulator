@@ -1095,10 +1095,10 @@ __device__ bool fpExecute(
         case FP_OP_UP4: {
             // UP4UB: unpack 4 unsigned bytes from .x → 4 floats [0,1]
             uint32_t packed = __float_as_uint(s0.x);
-            result = {(packed & 0xFF) / 255.0f,
-                      ((packed >> 8) & 0xFF) / 255.0f,
-                      ((packed >> 16) & 0xFF) / 255.0f,
-                      ((packed >> 24) & 0xFF) / 255.0f};
+            result = {(packed & 0xFF) * (1.0f / 255.0f),
+                      ((packed >> 8) & 0xFF) * (1.0f / 255.0f),
+                      ((packed >> 16) & 0xFF) * (1.0f / 255.0f),
+                      ((packed >> 24) & 0xFF) * (1.0f / 255.0f)};
             fpWriteDst(temps, dst, result, mx, my, mz, mw, sat, nTemps, noDest);
             break;
         }
@@ -1440,10 +1440,10 @@ __device__ __forceinline__ void sampleTexCube(const uint32_t* tex,
     int iy = (int)floorf(fy);
     if (!bilinear) {
         uint32_t c = cubeTexelFetch(tex, faceW, faceH, face, ix, iy);
-        r = ((c >> 16) & 0xFF) / 255.0f;
-        g = ((c >>  8) & 0xFF) / 255.0f;
-        b = ((c >>  0) & 0xFF) / 255.0f;
-        a = ((c >> 24) & 0xFF) / 255.0f;
+        r = ((c >> 16) & 0xFF) * (1.0f / 255.0f);
+        g = ((c >>  8) & 0xFF) * (1.0f / 255.0f);
+        b = ((c >>  0) & 0xFF) * (1.0f / 255.0f);
+        a = ((c >> 24) & 0xFF) * (1.0f / 255.0f);
         return;
     }
     float sx = fx - ix, sy = fy - iy;
@@ -1452,11 +1452,12 @@ __device__ __forceinline__ void sampleTexCube(const uint32_t* tex,
     uint32_t c01 = cubeTexelFetch(tex, faceW, faceH, face, ix,   iy+1);
     uint32_t c11 = cubeTexelFetch(tex, faceW, faceH, face, ix+1, iy+1);
     auto lerp2 = [] __device__ (float a, float b, float t) { return a + (b - a) * t; };
+    constexpr float INV255c = 1.0f / 255.0f;
     auto ch2 = [&](int shift) {
-        float v00 = ((c00>>shift)&0xFF)/255.0f;
-        float v10 = ((c10>>shift)&0xFF)/255.0f;
-        float v01 = ((c01>>shift)&0xFF)/255.0f;
-        float v11 = ((c11>>shift)&0xFF)/255.0f;
+        float v00 = ((c00>>shift)&0xFF)*INV255c;
+        float v10 = ((c10>>shift)&0xFF)*INV255c;
+        float v01 = ((c01>>shift)&0xFF)*INV255c;
+        float v11 = ((c11>>shift)&0xFF)*INV255c;
         return lerp2(lerp2(v00, v10, sx), lerp2(v01, v11, sx), sy);
     };
     r = ch2(16); g = ch2(8); b = ch2(0); a = ch2(24);
@@ -1503,17 +1504,17 @@ __device__ __forceinline__ void sampleTex3D(const uint32_t* tex,
             int cx = texWrap(ix, (int)tw, wrapS);
             int cy = texWrap(iy, (int)sliceH, wrapT);
             if (cx < 0 || cy < 0) {
-                sr = ((borderColor >> 16) & 0xFF) / 255.0f;
-                sg = ((borderColor >>  8) & 0xFF) / 255.0f;
-                sb = ((borderColor >>  0) & 0xFF) / 255.0f;
-                sa = ((borderColor >> 24) & 0xFF) / 255.0f;
+                sr = ((borderColor >> 16) & 0xFF) * (1.0f / 255.0f);
+                sg = ((borderColor >>  8) & 0xFF) * (1.0f / 255.0f);
+                sb = ((borderColor >>  0) & 0xFF) * (1.0f / 255.0f);
+                sa = ((borderColor >> 24) & 0xFF) * (1.0f / 255.0f);
                 return;
             }
             uint32_t c = s[cy * tw + cx];
-            sr = ((c >> 16) & 0xFF) / 255.0f;
-            sg = ((c >>  8) & 0xFF) / 255.0f;
-            sb = ((c >>  0) & 0xFF) / 255.0f;
-            sa = ((c >> 24) & 0xFF) / 255.0f;
+            sr = ((c >> 16) & 0xFF) * (1.0f / 255.0f);
+            sg = ((c >>  8) & 0xFF) * (1.0f / 255.0f);
+            sb = ((c >>  0) & 0xFF) * (1.0f / 255.0f);
+            sa = ((c >> 24) & 0xFF) * (1.0f / 255.0f);
             return;
         }
         float sx = fx - ix, sy = fy - iy;
@@ -1527,10 +1528,10 @@ __device__ __forceinline__ void sampleTex3D(const uint32_t* tex,
         uint32_t c01 = fetch2(ix, iy+1), c11 = fetch2(ix+1, iy+1);
         auto lerp3 = [] __device__ (float a, float b, float t) { return a + (b - a) * t; };
         auto ch3 = [&](int shift) {
-            float v00 = ((c00>>shift)&0xFF)/255.0f;
-            float v10 = ((c10>>shift)&0xFF)/255.0f;
-            float v01 = ((c01>>shift)&0xFF)/255.0f;
-            float v11 = ((c11>>shift)&0xFF)/255.0f;
+            float v00 = ((c00>>shift)&0xFF)*(1.0f/255.0f);
+            float v10 = ((c10>>shift)&0xFF)*(1.0f/255.0f);
+            float v01 = ((c01>>shift)&0xFF)*(1.0f/255.0f);
+            float v11 = ((c11>>shift)&0xFF)*(1.0f/255.0f);
             return lerp3(lerp3(v00, v10, sx), lerp3(v01, v11, sx), sy);
         };
         sr = ch3(16); sg = ch3(8); sb = ch3(0); sa = ch3(24);
@@ -1562,10 +1563,10 @@ __device__ __forceinline__ void sampleTex(const uint32_t* tex,
     int iy = (int)floorf(fy);
     if (!bilinear) {
         uint32_t c = texFetch(tex, tw, th, ix, iy, wrapS, wrapT, borderColor);
-        r = ((c >> 16) & 0xFF) / 255.0f;
-        g = ((c >>  8) & 0xFF) / 255.0f;
-        b = ((c >>  0) & 0xFF) / 255.0f;
-        a = ((c >> 24) & 0xFF) / 255.0f;
+        r = ((c >> 16) & 0xFF) * (1.0f / 255.0f);
+        g = ((c >>  8) & 0xFF) * (1.0f / 255.0f);
+        b = ((c >>  0) & 0xFF) * (1.0f / 255.0f);
+        a = ((c >> 24) & 0xFF) * (1.0f / 255.0f);
         return;
     }
     float sx = fx - ix, sy = fy - iy;
@@ -1574,11 +1575,12 @@ __device__ __forceinline__ void sampleTex(const uint32_t* tex,
     uint32_t c01 = texFetch(tex, tw, th, ix,   iy+1, wrapS, wrapT, borderColor);
     uint32_t c11 = texFetch(tex, tw, th, ix+1, iy+1, wrapS, wrapT, borderColor);
     auto lerp = [] __device__ (float a, float b, float t) { return a + (b - a) * t; };
+    constexpr float INV255 = 1.0f / 255.0f;
     auto ch = [&](int shift) {
-        float v00 = ((c00>>shift)&0xFF)/255.0f;
-        float v10 = ((c10>>shift)&0xFF)/255.0f;
-        float v01 = ((c01>>shift)&0xFF)/255.0f;
-        float v11 = ((c11>>shift)&0xFF)/255.0f;
+        float v00 = ((c00>>shift)&0xFF)*INV255;
+        float v10 = ((c10>>shift)&0xFF)*INV255;
+        float v01 = ((c01>>shift)&0xFF)*INV255;
+        float v11 = ((c11>>shift)&0xFF)*INV255;
         return lerp(lerp(v00, v10, sx), lerp(v01, v11, sx), sy);
     };
     r = ch(16); g = ch(8); b = ch(0); a = ch(24);
@@ -2232,10 +2234,10 @@ __global__ void k_rasterLines(uint32_t* __restrict__ dst,
 
         if (blendEnable) {
             uint32_t dc = dstPx;
-            float dr = ((dc >> 16) & 0xFF) / 255.0f;
-            float dg = ((dc >>  8) & 0xFF) / 255.0f;
-            float db = ((dc >>  0) & 0xFF) / 255.0f;
-            float da = ((dc >> 24) & 0xFF) / 255.0f;
+            float dr = ((dc >> 16) & 0xFF) * (1.0f / 255.0f);
+            float dg = ((dc >>  8) & 0xFF) * (1.0f / 255.0f);
+            float db = ((dc >>  0) & 0xFF) * (1.0f / 255.0f);
+            float da = ((dc >> 24) & 0xFF) * (1.0f / 255.0f);
             float fSr = blendFactor(bfSrcRGB, r, dr, a, da, ccR, ccA, 0);
             float fSg = blendFactor(bfSrcRGB, g, dg, a, da, ccG, ccA, 0);
             float fSb = blendFactor(bfSrcRGB, b, db, a, da, ccB, ccA, 0);
@@ -2342,10 +2344,10 @@ __global__ void k_rasterPoints(uint32_t* __restrict__ dst,
             }
             if (blendEnable) {
                 uint32_t dc = dst[base];
-                float dr = ((dc >> 16) & 0xFF) / 255.0f;
-                float dg = ((dc >>  8) & 0xFF) / 255.0f;
-                float db = ((dc >>  0) & 0xFF) / 255.0f;
-                float da = ((dc >> 24) & 0xFF) / 255.0f;
+                float dr = ((dc >> 16) & 0xFF) * (1.0f / 255.0f);
+                float dg = ((dc >>  8) & 0xFF) * (1.0f / 255.0f);
+                float db = ((dc >>  0) & 0xFF) * (1.0f / 255.0f);
+                float da = ((dc >> 24) & 0xFF) * (1.0f / 255.0f);
                 float fSr = blendFactor(bfSrcRGB, r, dr, a, da, ccR, ccA, 0);
                 float fSg = blendFactor(bfSrcRGB, g, dg, a, da, ccG, ccA, 0);
                 float fSb = blendFactor(bfSrcRGB, b, db, a, da, ccB, ccA, 0);
