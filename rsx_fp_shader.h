@@ -628,11 +628,9 @@ inline void fp_disassemble(const uint32_t* fpData, uint32_t fpLen) {
 // (constants[...]) and writes outputs[0..3] (RSX allows up to 4 MRT
 // color outputs via register h0/r0, plus h2, h4, h6 or r2, r4, r6).
 //
-// The interpreter is intentionally a strict subset (the useful "90%"
-// of shipped PS3 fragment programs): MOV, MUL, ADD, MAD, DP3, DP4,
-// MIN, MAX, FRC, FLR, SLT/SGE/SLE/SGT/SNE/SEQ, RCP, RSQ, EX2, LG2,
-// POW, LRP, COS, SIN, NRM, DIV, DP2, DP2A. KIL / TEX / flow control
-// are left as TODO — they need scene or control-flow state.
+// The interpreter covers all 63 RSX FP opcodes: arithmetic, comparison,
+// texture sampling (TEX/TXP/TXB/TXL/TXD), KIL, flow control (IFE/LOOP/
+// REP/BRK/CAL/RET), pack/unpack, and bump-map stubs.
 
 struct FPFloat4 { float v[4]; };
 

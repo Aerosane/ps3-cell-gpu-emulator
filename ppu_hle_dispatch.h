@@ -3477,6 +3477,222 @@ struct PpuHleDispatcher {
                    e.fnid == 0x74c37666) {  // cellSyncQueueTryPeek
             retval = (int32_t)0x80410101;  // CELL_SYNC_ERROR_EMPTY
 
+        // ── cellSysmodule (module loader — always succeed) ──────────
+        } else if (e.fnid == 0x5e058fbc ||  // cellSysmoduleLoadModule
+                   e.fnid == 0x0c044ee5) {  // cellSysmoduleInitialize
+            retval = 0;  // CELL_OK
+        } else if (e.fnid == 0xb498bf77 ||  // cellSysmoduleUnloadModule
+                   e.fnid == 0x8956f137) {  // cellSysmoduleFinalize
+            retval = 0;
+        } else if (e.fnid == 0xa193143c) {  // cellSysmoduleIsLoaded
+            retval = 0;  // CELL_SYSMODULE_LOADED
+
+        // ── cellGcmSys extras ───────────────────────────────────────
+        } else if (e.fnid == 0xd8f88e1a) {  // _cellGcmSetFlipCommandWithWaitLabel
+            retval = 0;
+        } else if (e.fnid == 0x2a6fba9c) {  // cellGcmSetFlipMode
+            retval = 0;
+        } else if (e.fnid == 0xa7ede268) {  // cellGcmUnbindTile
+            retval = 0;
+        } else if (e.fnid == 0x626e8518) {  // cellGcmMapMainMemory
+            // r3 = addr, r4 = size, r5 = ptr to offset_out
+            // Identity mapping: offset = addr
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t be = __builtin_bswap32((uint32_t)st.gpr[3]);
+                std::memcpy(mem + ptr, &be, 4);
+            }
+            retval = 0;
+        } else if (e.fnid == 0xfce9e764) {  // cellGcmSetFlipHandler
+            retval = 0;  // handler callback — no-op in emulator
+        } else if (e.fnid == 0xc47d0812) {  // cellGcmSetWaitFlip
+            retval = 0;
+
+        // ── cellAudio extras ────────────────────────────────────────
+        } else if (e.fnid == 0x4129fe2d) {  // cellAudioPortStart
+            retval = 0;
+        } else if (e.fnid == 0x05b7f547) {  // cellAudioPortStop
+            retval = 0;
+        } else if (e.fnid == 0x74a66af0) {  // cellAudioGetPortConfig
+            // r3 = portNum, r4 = ptr to CellAudioPortConfig
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 32 <= memSize) {
+                std::memset(mem + ptr, 0, 32);
+                uint32_t ch = __builtin_bswap32(2);
+                uint32_t bl = __builtin_bswap32(8);
+                std::memcpy(mem + ptr + 4, &ch, 4);
+                std::memcpy(mem + ptr + 8, &bl, 4);
+            }
+            retval = 0;
+        } else if (e.fnid == 0x4d4db98f) {  // cellAudioPortOpen
+            // r3 = ptr to config, r4 = ptr to portNum
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t p = __builtin_bswap32(0);
+                std::memcpy(mem + ptr, &p, 4);
+            }
+            retval = 0;
+        } else if (e.fnid == 0x01aef553) {  // cellAudioPortClose
+            retval = 0;
+        } else if (e.fnid == 0x4109d08c) {  // cellAudioSetNotifyEventQueue
+            retval = 0;
+        } else if (e.fnid == 0x2de4c6de) {  // cellAudioRemoveNotifyEventQueue
+            retval = 0;
+
+        // ── cellVdec (video decoder stubs) ──────────────────────────
+        } else if (e.fnid == 0xb6bbcd5d ||  // cellVdecOpen
+                   e.fnid == 0x21a8d18c) {  // cellVdecOpenEx
+            // r3 = ptr to type, r4 = ptr to resource, r5 = ptr to cb, r6 = ptr to handle
+            uint32_t ptr = (uint32_t)st.gpr[6];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.fnid == 0x16698e83) {  // cellVdecClose
+            retval = 0;
+        } else if (e.fnid == 0xc982a84a) {  // cellVdecStartSeq
+            retval = 0;
+        } else if (e.fnid == 0x824433f0) {  // cellVdecEndSeq
+            retval = 0;
+        } else if (e.fnid == 0xb1f0b3e7) {  // cellVdecDecodeAu
+            retval = 0;
+        } else if (e.fnid == 0x807c861a ||  // cellVdecGetPicture
+                   e.fnid == 0x17c702b9) {  // cellVdecGetPictureExt
+            retval = (int32_t)0x80610103;  // CELL_VDEC_ERROR_EMPTY
+        } else if (e.fnid == 0x761b9a64) {  // cellVdecSetFrameRate
+            retval = 0;
+        } else if (e.fnid == 0xb8ab7af2) {  // cellVdecQueryAttr
+            // r3 = ptr to type, r4 = ptr to attr_out (zero-fill)
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = 0;
+
+        // ── cellJpgDec (JPEG decoder stubs) ─────────────────────────
+        } else if (e.fnid == 0xa7978f59) {  // cellJpgDecCreate
+            retval = 0;
+        } else if (e.fnid == 0x8b300f66) {  // cellJpgDecDestroy
+            retval = 0;
+        } else if (e.fnid == 0x976ca5c2) {  // cellJpgDecOpen
+            // r4 = ptr to sub_handle_out
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.fnid == 0x6d9ebccf) {  // cellJpgDecClose
+            retval = 0;
+        } else if (e.fnid == 0xe08f3910) {  // cellJpgDecReadHeader
+            // r3 = handle, r4 = sub, r5 = ptr to info
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 32 <= memSize) {
+                std::memset(mem + ptr, 0, 32);
+                // width=1, height=1 at offsets 0 and 4
+                uint32_t one = __builtin_bswap32(1);
+                std::memcpy(mem + ptr + 0, &one, 4);
+                std::memcpy(mem + ptr + 4, &one, 4);
+            }
+            retval = 0;
+        } else if (e.fnid == 0x09e4d696) {  // cellJpgDecDecodeData
+            retval = 0;
+
+        // ── cellPngDec (PNG decoder stubs) ──────────────────────────
+        } else if (e.fnid == 0x157b288e) {  // cellPngDecCreate
+            retval = 0;
+        } else if (e.fnid == 0x820daf1f) {  // cellPngDecDestroy
+            retval = 0;
+        } else if (e.fnid == 0xd2bc5bfd) {  // cellPngDecOpen
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.fnid == 0x5b3d1ff1) {  // cellPngDecClose
+            retval = 0;
+        } else if (e.fnid == 0x726fc1d0) {  // cellPngDecReadHeader
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 32 <= memSize) {
+                std::memset(mem + ptr, 0, 32);
+                uint32_t one = __builtin_bswap32(1);
+                std::memcpy(mem + ptr + 0, &one, 4);
+                std::memcpy(mem + ptr + 4, &one, 4);
+            }
+            retval = 0;
+        } else if (e.fnid == 0x9ccdcc95) {  // cellPngDecDecodeData
+            retval = 0;
+
+        // ── cellGifDec (GIF decoder stubs) ──────────────────────────
+        } else if (e.fnid == 0xb60d2bee) {  // cellGifDecCreate
+            retval = 0;
+        } else if (e.fnid == 0x41a90dc4) {  // cellGifDecDestroy
+            retval = 0;
+        } else if (e.fnid == 0xcfef41e5) {  // cellGifDecOpen
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.fnid == 0x116a7da9) {  // cellGifDecClose
+            retval = 0;
+        } else if (e.fnid == 0xe74b2cb1) {  // cellGifDecReadHeader
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 32 <= memSize) {
+                std::memset(mem + ptr, 0, 32);
+                uint32_t one = __builtin_bswap32(1);
+                std::memcpy(mem + ptr + 0, &one, 4);
+                std::memcpy(mem + ptr + 4, &one, 4);
+            }
+            retval = 0;
+        } else if (e.fnid == 0x44b1bc61) {  // cellGifDecDecodeData
+            retval = 0;
+
+        // ── cellResc (resolution scaling) ───────────────────────────
+        } else if (e.fnid == 0x7f3c66b0) {  // cellRescInit
+            retval = 0;
+        } else if (e.fnid == 0x25c107e6) {  // cellRescExit
+            retval = 0;
+        } else if (e.fnid == 0x10db5b1a) {  // cellRescSetDisplayMode
+            retval = 0;
+        } else if (e.fnid == 0x0d3c22ce) {  // cellRescSetConvertAndFlip
+            retval = 0;
+        } else if (e.fnid == 0x1d7deee6) {  // cellRescSetBufferAddress
+            retval = 0;
+        } else if (e.fnid == 0x01220224) {  // cellRescSetSrc
+            retval = 0;
+        } else if (e.fnid == 0x5a338e69) {  // cellRescSetDsts
+            retval = 0;
+        } else if (e.fnid == 0x516ee89e) {  // cellRescGetNumColorBuffers
+            retval = 2;  // 2 color buffers (double-buffered)
+
+        // ── cellMsgDialog ───────────────────────────────────────────
+        } else if (e.fnid == 0xb0fceca5) {  // cellMsgDialogOpen2
+            retval = 0;  // no UI — immediately "shown"
+        } else if (e.fnid == 0x62b0f803) {  // cellMsgDialogClose
+            retval = 0;
+        } else if (e.fnid == 0x7603d3db) {  // cellMsgDialogAbort
+            retval = 0;
+        } else if (e.fnid == 0xcb4f9ac8) {  // cellMsgDialogProgressBarInc
+            retval = 0;
+
+        // ── cellSpurs extras ────────────────────────────────────────
+        } else if (e.fnid == 0x00f6a300) {  // cellSpursCreateTask
+            retval = 0;
+        } else if (e.fnid == 0x0ef34bc5) {  // cellSpursShutdownTaskset
+            retval = 0;
+        } else if (e.fnid == 0x7e853010) {  // cellSpursTasksetAttributeSetName
+            retval = 0;
+        } else if (e.fnid == 0x53141885) {  // cellSpursEventFlagClear
+            retval = 0;
+        } else if (e.fnid == 0x9c08e879) {  // cellSpursEventFlagSet
+            retval = 0;
+        } else if (e.fnid == 0x83775282) {  // cellSpursEventFlagWait
+            retval = 0;  // single-threaded: event already set
+        } else if (e.fnid == 0x15983389) {  // cellSpursGetNumSpuThread
+            retval = 6;  // 6 SPU threads
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;
