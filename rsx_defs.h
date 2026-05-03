@@ -581,6 +581,7 @@ struct RSXState {
     uint32_t triangleCount;
     uint32_t cmdCount;
     uint32_t frameCount;
+    uint32_t unknownMethodCount;  // unhandled NV4097 methods
 
     // Optional Vulkan emitter (host-side; null in CUDA contexts).
     // Type-erased as void* so this header stays includable from both

@@ -953,6 +953,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
         return;
 
     default:
+        state->unknownMethodCount++;
         break;
     }
 
@@ -1249,6 +1250,8 @@ void rsx_print_state(const RSXState* state) {
     printf("│ Triangles:   %u                                \n", state->triangleCount);
     printf("│ Commands:    %u                                \n", state->cmdCount);
     printf("│ Frames:      %u                                \n", state->frameCount);
+    if (state->unknownMethodCount)
+        printf("│ Unknown methods: %u                            \n", state->unknownMethodCount);
     printf("└─────────────────────────────────────────────────┘\n");
 
     // Vertex arrays

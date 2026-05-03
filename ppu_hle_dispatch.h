@@ -3407,6 +3407,76 @@ struct PpuHleDispatcher {
         } else if (e.fnid == 0x42281240) {
             retval = 0;
 
+        // ── cellSync — synchronization primitives (single-threaded) ──
+        } else if (e.fnid == 0x2733a870 ||  // cellSyncMutexInitialize
+                   e.fnid == 0xa6669751) {  // cellSyncBarrierInitialize (alt)
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.fnid == 0x91e6dcb9 ||  // cellSyncMutexLock
+                   e.fnid == 0xc463ee6c ||  // cellSyncMutexTryLock
+                   e.fnid == 0xb9fbcc28) {  // cellSyncMutexUnlock
+            retval = 0;  // single-threaded: always succeeds
+        } else if (e.fnid == 0x24f80472) {  // cellSyncBarrierInitialize
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            // r3 = ptr to CellSyncBarrier, r4 = total_count
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.fnid == 0xcb40434b ||  // cellSyncBarrierNotify
+                   e.fnid == 0xbb54b37f ||  // cellSyncBarrierTryNotify
+                   e.fnid == 0x3c81b4da ||  // cellSyncBarrierTryWait
+                   e.fnid == 0xf06a6cd1 ||  // cellSyncBarrierNotify (alt)
+                   e.fnid == 0xb71d5689 ||  // cellSyncBarrierTryNotify (alt)
+                   e.fnid == 0x268edd6d ||  // cellSyncBarrierWait (alt)
+                   e.fnid == 0x0f8fdcee) {  // cellSyncBarrierTryWait (alt)
+            retval = 0;  // single-threaded: barrier always satisfied
+        } else if (e.fnid == 0xf8ef9193) {  // cellSyncLFQueueInitialize
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 128 <= memSize) std::memset(mem + ptr, 0, 128);
+            retval = 0;
+        } else if (e.fnid == 0x8c497d76 ||  // cellSyncLFQueuePush
+                   e.fnid == 0x0db15740) {  // cellSyncLFQueueTryPush
+            retval = 0;  // accept push (data discarded in single-threaded)
+        } else if (e.fnid == 0xe5c224e2 ||  // cellSyncLFQueuePop
+                   e.fnid == 0x65f2b02f) {  // cellSyncLFQueueTryPop
+            retval = (int32_t)0x80410101;  // CELL_SYNC_ERROR_EMPTY
+        } else if (e.fnid == 0x8558da70) {  // cellSyncLFQueueGetSize
+            retval = 0;  // empty queue
+        // ── cellSync RWM (reader-writer mutex) ──────────────────────
+        } else if (e.fnid == 0x6c272124) {  // cellSyncRwmInitialize
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.fnid == 0xece0e664 ||  // cellSyncRwmRead
+                   e.fnid == 0xba5bee48) {  // cellSyncRwmTryRead
+            // r3 = ptr to rwm, r4 = ptr to dst buffer, r5 = buffer_size
+            uint32_t bufPtr = (uint32_t)st.gpr[4];
+            uint32_t bufSz  = (uint32_t)st.gpr[5];
+            if (bufPtr && bufSz && bufPtr + bufSz <= memSize)
+                std::memset(mem + bufPtr, 0, bufSz);
+            retval = 0;
+        } else if (e.fnid == 0xbb73dee0 ||  // cellSyncRwmWrite
+                   e.fnid == 0x8a650722) {  // cellSyncRwmTryWrite
+            retval = 0;  // accept write (data persisted implicitly)
+        // ── cellSync Queue ──────────────────────────────────────────
+        } else if (e.fnid == 0xa5362e73) {  // cellSyncQueueInitialize
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 128 <= memSize) std::memset(mem + ptr, 0, 128);
+            retval = 0;
+        } else if (e.fnid == 0x48154c9b ||  // cellSyncQueuePush
+                   e.fnid == 0x68af923c) {  // cellSyncQueueTryPush
+            retval = 0;
+        } else if (e.fnid == 0x0c7cb9f7 ||  // cellSyncQueuePop
+                   e.fnid == 0x1bb675c2) {  // cellSyncQueueTryPop
+            retval = (int32_t)0x80410101;  // CELL_SYNC_ERROR_EMPTY
+        } else if (e.fnid == 0x4da349b2) {  // cellSyncQueueSize
+            retval = 0;
+        } else if (e.fnid == 0x167b0bfe) {  // cellSyncQueueClear
+            retval = 0;
+        } else if (e.fnid == 0xdcc99a07 ||  // cellSyncQueuePeek
+                   e.fnid == 0x74c37666) {  // cellSyncQueueTryPeek
+            retval = (int32_t)0x80410101;  // CELL_SYNC_ERROR_EMPTY
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;
