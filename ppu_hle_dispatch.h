@@ -3149,6 +3149,264 @@ struct PpuHleDispatcher {
         } else if (e.name == "cellSyncRwmWrite" || e.name == "cellSyncRwmTryWrite") {
             retval = 0;
 
+        // ── cellSync queue ───────────────────────────────────────────
+        } else if (e.name == "cellSyncQueueInitialize") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = 0;
+        } else if (e.name == "cellSyncQueuePush" || e.name == "cellSyncQueueTryPush") {
+            retval = 0;
+        } else if (e.name == "cellSyncQueuePop" || e.name == "cellSyncQueueTryPop") {
+            retval = (int32_t)0x80410101;  // CELL_SYNC_ERROR_EMPTY
+        } else if (e.name == "cellSyncQueueSize") {
+            retval = 0;
+        } else if (e.name == "cellSyncQueueClear") {
+            retval = 0;
+        } else if (e.name == "cellSyncQueuePeek" || e.name == "cellSyncQueueTryPeek") {
+            retval = (int32_t)0x80410101;
+
+        // ── cellFs extras 2 ──────────────────────────────────────────
+        } else if (e.name == "cellFsFGetBlockSize") {
+            // r3 = fd, r4 = ptr to blockSize, r5 = ptr to ioBlock
+            uint32_t p4 = (uint32_t)st.gpr[4];
+            uint32_t p5 = (uint32_t)st.gpr[5];
+            if (p4 && p4 + 8 <= memSize) {
+                uint64_t bs = 4096;
+                for (int i = 0; i < 8; ++i) mem[p4+i] = (uint8_t)(bs >> (56-8*i));
+            }
+            if (p5 && p5 + 8 <= memSize) {
+                uint64_t io = 4096;
+                for (int i = 0; i < 8; ++i) mem[p5+i] = (uint8_t)(io >> (56-8*i));
+            }
+            retval = 0;
+        } else if (e.name == "cellFsGetDirectoryEntries") {
+            // r3 = fd, r4 = ptr to entries, r5 = size, r6 = ptr to count
+            uint32_t pc = (uint32_t)st.gpr[6];
+            if (pc && pc + 4 <= memSize) {
+                uint32_t zero = 0;
+                std::memcpy(mem + pc, &zero, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellFsAioInit" || e.name == "cellFsAioFinish" ||
+                   e.name == "cellFsAioCancel") {
+            retval = 0;
+        } else if (e.name == "cellFsAioRead" || e.name == "cellFsAioWrite") {
+            retval = 0;
+        } else if (e.name == "cellFsGetFreeSize2") {
+            // r3 = path, r4 = ptr to blockSize, r5 = ptr to freeBlocks
+            uint32_t p4 = (uint32_t)st.gpr[4];
+            uint32_t p5 = (uint32_t)st.gpr[5];
+            if (p4 && p4 + 4 <= memSize) {
+                uint32_t bs = __builtin_bswap32(4096);
+                std::memcpy(mem + p4, &bs, 4);
+            }
+            if (p5 && p5 + 4 <= memSize) {
+                uint32_t fb = __builtin_bswap32(1024 * 1024);  // ~4GB free
+                std::memcpy(mem + p5, &fb, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellFsChmod" || e.name == "cellFsUtime") {
+            retval = 0;
+
+        // ── cellAtrac extras ─────────────────────────────────────────
+        } else if (e.name == "cellAtracCreateDecoder") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellAtracDeleteDecoder") {
+            retval = 0;
+        } else if (e.name == "cellAtracSetDataAndGetMemSize") {
+            retval = 0;
+        } else if (e.name == "cellAtracGetStreamDataInfo") {
+            retval = 0;
+        } else if (e.name == "cellAtracGetRemainFrame") {
+            retval = 0;
+
+        // ── cellVdec extras ──────────────────────────────────────────
+        } else if (e.name == "cellVdecOpenEx") {
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellVdecGetPictureExt2") {
+            retval = (int32_t)0x80610102;
+        } else if (e.name == "cellVdecQueryAttrEx") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 32 <= memSize) {
+                std::memset(mem + ptr, 0, 32);
+                uint32_t ms = __builtin_bswap32(4 * 1024 * 1024);
+                std::memcpy(mem + ptr + 4, &ms, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellVdecSetFrameRateExt") {
+            retval = 0;
+
+        // ── cellAdec extras ──────────────────────────────────────────
+        } else if (e.name == "cellAdecOpenEx") {
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellAdecGetPcmItem") {
+            retval = (int32_t)0x80610102;
+        } else if (e.name == "cellAdecQueryAttr") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                uint32_t ms = __builtin_bswap32(1 * 1024 * 1024);
+                std::memcpy(mem + ptr + 4, &ms, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellAdecStartSeq" || e.name == "cellAdecEndSeq") {
+            retval = 0;
+
+        // ── cellDmux extras ──────────────────────────────────────────
+        } else if (e.name == "cellDmuxOpenEx") {
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellDmuxQueryAttr" || e.name == "cellDmuxQueryEsAttr") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 16 <= memSize) std::memset(mem + ptr, 0, 16);
+            retval = 0;
+
+        // ── cellRtc extras ───────────────────────────────────────────
+        } else if (e.name == "cellRtcGetTick" || e.name == "cellRtcSetTick") {
+            retval = 0;
+        } else if (e.name == "cellRtcTickAddMinutes" ||
+                   e.name == "cellRtcTickAddHours" ||
+                   e.name == "cellRtcTickAddDays" ||
+                   e.name == "cellRtcTickAddWeeks" ||
+                   e.name == "cellRtcTickAddMonths" ||
+                   e.name == "cellRtcTickAddYears") {
+            retval = 0;
+        } else if (e.name == "cellRtcConvertLocalTimeToUtc" ||
+                   e.name == "cellRtcConvertUtcToLocalTime") {
+            retval = 0;
+        } else if (e.name == "cellRtcFormatRFC3339") {
+            // r3 = ptr to buf, r4 = ptr to CellRtcDateTime
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 32 <= memSize) {
+                const char* fixed = "2024-01-01T00:00:00Z";
+                std::memcpy(mem + ptr, fixed, 20);
+                mem[ptr + 20] = 0;
+            }
+            retval = 0;
+
+        // ── sceNpTrophy extras ───────────────────────────────────────
+        } else if (e.name == "sceNpTrophyGetRequiredDiskSpace") {
+            retval = 0;
+        } else if (e.name == "sceNpTrophyAbortHandle" ||
+                   e.name == "sceNpTrophyDestroyContext" ||
+                   e.name == "sceNpTrophyDestroyHandle") {
+            retval = 0;
+        } else if (e.name == "sceNpTrophyGetTrophyInfo") {
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+
+        // ── sceNp extras ─────────────────────────────────────────────
+        } else if (e.name == "sceNpBasicGetEvent") {
+            retval = (int32_t)0x80550d04;  // no events
+        } else if (e.name == "sceNpBasicGetFriendListEntryCount") {
+            retval = 0;
+        } else if (e.name == "sceNpBasicGetFriendListEntry") {
+            retval = 0;
+        } else if (e.name == "sceNpBasicRegisterHandler" ||
+                   e.name == "sceNpBasicUnregisterHandler") {
+            retval = 0;
+
+        // ── cellNetCtl extras ────────────────────────────────────────
+        } else if (e.name == "cellNetCtlGetInfo2") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.name == "cellNetCtlGetNatInfo2") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                mem[ptr] = 3;  // NAT type 3
+            }
+            retval = 0;
+        } else if (e.name == "cellNetCtlAddHandler2" ||
+                   e.name == "cellNetCtlRemoveHandler2") {
+            retval = 0;
+
+        // ── cellSsl extras ───────────────────────────────────────────
+        } else if (e.name == "cellSslCertGetSerialNumber" ||
+                   e.name == "cellSslCertGetPublicKey" ||
+                   e.name == "cellSslCertGetNotBefore" ||
+                   e.name == "cellSslCertGetNotAfter" ||
+                   e.name == "cellSslCertGetSubjectName") {
+            retval = 0;
+
+        // ── cellHttps ────────────────────────────────────────────────
+        } else if (e.name == "cellHttpsInit" || e.name == "cellHttpsEnd") {
+            retval = 0;
+        } else if (e.name == "cellHttpsEnableOption" ||
+                   e.name == "cellHttpsDisableOption") {
+            retval = 0;
+
+        // ── cellPadFilter ────────────────────────────────────────────
+        } else if (e.name == "cellPadFilterIIRInit" ||
+                   e.name == "cellPadFilterIIRFilter") {
+            retval = 0;
+
+        // ── cellImeJp extras ─────────────────────────────────────────
+        } else if (e.name == "cellImeJpOpen2" || e.name == "cellImeJpClose2") {
+            retval = 0;
+        } else if (e.name == "cellImeJpAddWord" ||
+                   e.name == "cellImeJpSetKanaInputMode" ||
+                   e.name == "cellImeJpConfirmPrediction") {
+            retval = 0;
+
+        // ── sys_trace ────────────────────────────────────────────────
+        } else if (e.name == "sys_trace_create" || e.name == "sys_trace_destroy" ||
+                   e.name == "sys_trace_start" || e.name == "sys_trace_stop") {
+            retval = 0;
+
+        // ── sys_interrupt ────────────────────────────────────────────
+        } else if (e.name == "sys_interrupt_thread_establish" ||
+                   e.name == "sys_interrupt_thread_disestablish" ||
+                   e.name == "sys_interrupt_thread_eoi") {
+            retval = 0;
+
+        // ── sys_overlay ──────────────────────────────────────────────
+        } else if (e.name == "sys_overlay_load_module") {
+            retval = nextHandleId++;
+        } else if (e.name == "sys_overlay_unload_module") {
+            retval = 0;
+
+        // ── cellSpurs workload ───────────────────────────────────────
+        } else if (e.name == "cellSpursAddWorkload" ||
+                   e.name == "cellSpursRemoveWorkload") {
+            retval = 0;
+        } else if (e.name == "cellSpursReadyCountStore" ||
+                   e.name == "cellSpursReadyCountSwap") {
+            retval = 0;
+        } else if (e.name == "cellSpursWorkloadAttributeSetName") {
+            retval = 0;
+
+        // ── sceNpManager extras ──────────────────────────────────────
+        } else if (e.name == "sceNpManagerGetAccountAge") {
+            retval = 18;
+        } else if (e.name == "sceNpManagerGetContentRatingFlag") {
+            retval = 0;  // no restriction
+        } else if (e.name == "sceNpManagerGetAccountRegion") {
+            retval = 0;
+        } else if (e.name == "sceNpManagerSubSignin") {
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;

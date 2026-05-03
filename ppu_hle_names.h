@@ -1211,6 +1211,139 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0xbb73dee0, "cellSync", "cellSyncRwmWrite" },
     { 0xba5bee48, "cellSync", "cellSyncRwmTryRead" },
     { 0x8a650722, "cellSync", "cellSyncRwmTryWrite" },
+
+    // ── cellSync queue ───────────────────────────────────────────
+    { 0xa5362e73, "cellSync", "cellSyncQueueInitialize" },
+    { 0x48154c9b, "cellSync", "cellSyncQueuePush" },
+    { 0x68af923c, "cellSync", "cellSyncQueueTryPush" },
+    { 0x0c7cb9f7, "cellSync", "cellSyncQueuePop" },
+    { 0x1bb675c2, "cellSync", "cellSyncQueueTryPop" },
+    { 0x4da349b2, "cellSync", "cellSyncQueueSize" },
+    { 0x167b0bfe, "cellSync", "cellSyncQueueClear" },
+    { 0xdcc99a07, "cellSync", "cellSyncQueuePeek" },
+    { 0x74c37666, "cellSync", "cellSyncQueueTryPeek" },
+
+    // ── cellFs extras 2 ──────────────────────────────────────────
+    { 0x967a162b, "cellFs", "cellFsFGetBlockSize" },
+    { 0xd86d2c67, "cellFs", "cellFsGetDirectoryEntries" },
+    { 0x9b19b22e, "cellFs", "cellFsAioInit" },
+    { 0x58a17470, "cellFs", "cellFsAioFinish" },
+    { 0x4cef342e, "cellFs", "cellFsAioRead" },
+    { 0x8f71c5b2, "cellFs", "cellFsAioWrite" },
+    { 0x1cf98800, "cellFs", "cellFsAioCancel" },
+    { 0x1a108ab7, "cellFs", "cellFsGetFreeSize2" },
+    { 0x7a7b98c4, "cellFs", "cellFsChmod" },
+    { 0xc1c507e7, "cellFs", "cellFsUtime" },
+
+    // ── cellAtrac extras ─────────────────────────────────────────
+    { 0x761cb0be, "cellAtrac", "cellAtracCreateDecoder" },
+    { 0x2bfff084, "cellAtrac", "cellAtracDeleteDecoder" },
+    { 0x99fb73d1, "cellAtrac", "cellAtracSetDataAndGetMemSize" },
+    { 0x4f2b6e63, "cellAtrac", "cellAtracGetStreamDataInfo" },
+    { 0xdfab73aa, "cellAtrac", "cellAtracGetRemainFrame" },
+
+    // ── cellVdec extras ──────────────────────────────────────────
+    { 0x21a8d18c, "cellVdec", "cellVdecOpenEx" },
+    { 0x4e4ae73c, "cellVdec", "cellVdecGetPictureExt2" },
+    { 0x807c86f4, "cellVdec", "cellVdecQueryAttrEx" },
+    { 0xc460cd15, "cellVdec", "cellVdecSetFrameRateExt" },
+
+    // ── cellAdec extras ──────────────────────────────────────────
+    { 0xf0e6e1df, "cellAdec", "cellAdecOpenEx" },
+    { 0xe2ea9fde, "cellAdec", "cellAdecGetPcmItem" },
+    { 0x1b0fc008, "cellAdec", "cellAdecQueryAttr" },
+    { 0xc82a4e71, "cellAdec", "cellAdecStartSeq" },
+    { 0xb3dc0089, "cellAdec", "cellAdecEndSeq" },
+
+    // ── cellDmux extras ──────────────────────────────────────────
+    { 0xa2d4189b, "cellDmux", "cellDmuxOpenEx" },
+    { 0xf19f7887, "cellDmux", "cellDmuxQueryAttr" },
+    { 0x11bc3a6c, "cellDmux", "cellDmuxQueryEsAttr" },
+
+    // ── cellRtc extras ───────────────────────────────────────────
+    { 0x7f1086e6, "cellRtc", "cellRtcGetTick" },
+    { 0x0498b78c, "cellRtc", "cellRtcSetTick" },
+    { 0xe7086f05, "cellRtc", "cellRtcTickAddMinutes" },
+    { 0x26f2c987, "cellRtc", "cellRtcTickAddHours" },
+    { 0x42b9316f, "cellRtc", "cellRtcTickAddDays" },
+    { 0xc2d8cf95, "cellRtc", "cellRtcTickAddWeeks" },
+    { 0x5316b4a6, "cellRtc", "cellRtcTickAddMonths" },
+    { 0xd41d3bd2, "cellRtc", "cellRtcTickAddYears" },
+    { 0x1b2c39d0, "cellRtc", "cellRtcConvertLocalTimeToUtc" },
+    { 0xc7bdb7eb, "cellRtc", "cellRtcConvertUtcToLocalTime" },
+    { 0xa92c8e5d, "cellRtc", "cellRtcFormatRFC3339" },
+
+    // ── sceNpTrophy extras ───────────────────────────────────────
+    { 0xb397f5cc, "sceNpTrophy", "sceNpTrophyGetRequiredDiskSpace" },
+    { 0x5ce3c18f, "sceNpTrophy", "sceNpTrophyAbortHandle" },
+    { 0xf036b0f5, "sceNpTrophy", "sceNpTrophyDestroyContext" },
+    { 0xfce6d30a, "sceNpTrophy", "sceNpTrophyDestroyHandle" },
+    { 0x29038ca7, "sceNpTrophy", "sceNpTrophyGetTrophyInfo" },
+
+    // ── sceNp extras ─────────────────────────────────────────────
+    { 0xab73f551, "sceNp", "sceNpBasicGetEvent" },
+    { 0xbda9fdc1, "sceNp", "sceNpBasicGetFriendListEntryCount" },
+    { 0x16a488a8, "sceNp", "sceNpBasicGetFriendListEntry" },
+    { 0x726b3b91, "sceNp", "sceNpBasicRegisterHandler" },
+    { 0xf1cbf5b0, "sceNp", "sceNpBasicUnregisterHandler" },
+
+    // ── cellNetCtl extras ────────────────────────────────────────
+    { 0xbd5a59fc, "cellNetCtl", "cellNetCtlGetInfo2" },
+    { 0x1e585b5d, "cellNetCtl", "cellNetCtlGetNatInfo2" },
+    { 0xf9a26fb5, "cellNetCtl", "cellNetCtlAddHandler2" },
+    { 0xa42c2d7e, "cellNetCtl", "cellNetCtlRemoveHandler2" },
+
+    // ── cellSsl extras ───────────────────────────────────────────
+    { 0x571afaca, "cellSsl", "cellSslCertGetSerialNumber" },
+    { 0x1b0bba65, "cellSsl", "cellSslCertGetPublicKey" },
+    { 0x7a9ccf22, "cellSsl", "cellSslCertGetNotBefore" },
+    { 0x32c61bdc, "cellSsl", "cellSslCertGetNotAfter" },
+    { 0x5d9a9e24, "cellSsl", "cellSslCertGetSubjectName" },
+
+    // ── cellHttps (HTTPS) ────────────────────────────────────────
+    { 0x1b5b3d2e, "cellHttps", "cellHttpsInit" },
+    { 0xd17fc413, "cellHttps", "cellHttpsEnd" },
+    { 0x9f9702c6, "cellHttps", "cellHttpsEnableOption" },
+    { 0x74f97476, "cellHttps", "cellHttpsDisableOption" },
+
+    // ── cellPadFilter ────────────────────────────────────────────
+    { 0xaa54cfae, "cellPadFilter", "cellPadFilterIIRInit" },
+    { 0x0fb7a6bb, "cellPadFilter", "cellPadFilterIIRFilter" },
+
+    // ── cellImeJp extras ─────────────────────────────────────────
+    { 0x2619237f, "cellImeJp", "cellImeJpOpen2" },
+    { 0x8c358fd3, "cellImeJp", "cellImeJpClose2" },
+    { 0x7f4e3c55, "cellImeJp", "cellImeJpAddWord" },
+    { 0xea1d1638, "cellImeJp", "cellImeJpSetKanaInputMode" },
+    { 0xa3c3ae0e, "cellImeJp", "cellImeJpConfirmPrediction" },
+
+    // ── sys_trace (performance trace) ────────────────────────────
+    { 0x6c71cc3c, "sys_trace", "sys_trace_create" },
+    { 0x1a83a714, "sys_trace", "sys_trace_start" },
+    { 0x3c0b3ba0, "sys_trace", "sys_trace_stop" },
+    { 0x5f532aa3, "sys_trace", "sys_trace_destroy" },
+
+    // ── sys_interrupt ────────────────────────────────────────────
+    { 0x5c1b6e32, "sys_interrupt", "sys_interrupt_thread_establish" },
+    { 0xdf36ccc6, "sys_interrupt", "sys_interrupt_thread_disestablish" },
+    { 0xa1b8cc63, "sys_interrupt", "sys_interrupt_thread_eoi" },
+
+    // ── sys_overlay ──────────────────────────────────────────────
+    { 0xd7aa07b0, "sys_overlay", "sys_overlay_load_module" },
+    { 0x6396bdd6, "sys_overlay", "sys_overlay_unload_module" },
+
+    // ── cellSpursWorkload ────────────────────────────────────────
+    { 0x2e07e92f, "cellSpurs", "cellSpursAddWorkload" },
+    { 0x1656a731, "cellSpurs", "cellSpursReadyCountStore" },
+    { 0x25957ef8, "cellSpurs", "cellSpursReadyCountSwap" },
+    { 0x1e76a16b, "cellSpurs", "cellSpursWorkloadAttributeSetName" },
+    { 0x9fcb6beb, "cellSpurs", "cellSpursRemoveWorkload" },
+
+    // ── sceNpManager extras ──────────────────────────────────────
+    { 0x25b41bc1, "sceNpManager", "sceNpManagerGetAccountAge" },
+    { 0xbac7287f, "sceNpManager", "sceNpManagerGetContentRatingFlag" },
+    { 0x311d4297, "sceNpManager", "sceNpManagerGetAccountRegion" },
+    { 0x42281240, "sceNpManager", "sceNpManagerSubSignin" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {
