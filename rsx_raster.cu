@@ -2217,6 +2217,7 @@ void CudaRasterizer::shutdown() {
     fpInsnCount_ = 0; fpConstCount_ = 0;
     fb_.width = fb_.height = 0;
     asyncFifo_ = false;
+    scratch_.freeAll();
 }
 
 void CudaRasterizer::setAsyncFifo(bool enable) {
@@ -2411,16 +2412,17 @@ uint32_t CudaRasterizer::drawIndexed(const RasterVertex* verts,
         uint32_t triVerts = (indexCount / 3) * 3;
         if (triVerts == 0) return 0;
 
-        RasterVertex* d_verts = nullptr;
-        uint32_t* d_indices = nullptr;
-        RasterVertex* d_expanded = nullptr;
         size_t vbBytes = size_t(vertexCount) * sizeof(RasterVertex);
         size_t ibBytes = size_t(triVerts) * sizeof(uint32_t);
-        size_t exBytes = size_t(triVerts) * sizeof(RasterVertex);
 
-        bool gpuOk = (cudaMalloc(&d_verts, vbBytes) == cudaSuccess);
-        if (gpuOk) gpuOk = (cudaMalloc(&d_indices, ibBytes) == cudaSuccess);
-        if (gpuOk) gpuOk = (cudaMalloc(&d_expanded, exBytes) == cudaSuccess);
+        scratch_.ensureVerts(vertexCount);
+        scratch_.ensureIndices(triVerts);
+        scratch_.ensureXformed(triVerts);
+        RasterVertex* d_verts = scratch_.d_verts;
+        uint32_t* d_indices = scratch_.d_indices;
+        RasterVertex* d_expanded = scratch_.d_xformed;
+
+        bool gpuOk = (d_verts && d_indices && d_expanded);
 
         if (gpuOk) {
             cudaMemcpy(d_verts, verts, vbBytes, cudaMemcpyHostToDevice);
@@ -2431,8 +2433,6 @@ uint32_t CudaRasterizer::drawIndexed(const RasterVertex* verts,
                 uint32_t bs = 256, gs = (triVerts + bs - 1) / bs;
                 k_indexGather<<<gs, bs>>>(d_verts, d_indices, d_expanded, triVerts, vertexCount);
             }
-            cudaFree(d_verts);
-            cudaFree(d_indices);
 
             // Stage 2: Transform
             if (useMVP_) {
@@ -2449,10 +2449,11 @@ uint32_t CudaRasterizer::drawIndexed(const RasterVertex* verts,
             // Stage 3: Cull
             uint32_t tris = triVerts / 3;
             if (cullMode_ != CullMode::None) {
-                RasterVertex* d_culled = nullptr;
-                uint32_t* d_count = nullptr;
-                if (cudaMalloc(&d_culled, exBytes) == cudaSuccess &&
-                    cudaMalloc(&d_count, sizeof(uint32_t)) == cudaSuccess) {
+                scratch_.ensureSurvived(triVerts);
+                scratch_.ensureTriCount();
+                RasterVertex* d_culled = scratch_.d_survived;
+                uint32_t* d_count = scratch_.d_triCount;
+                if (d_culled && d_count) {
                     cudaMemset(d_count, 0, sizeof(uint32_t));
                     uint32_t bs = 256, gs = (tris + bs - 1) / bs;
                     k_cullTriangles<<<gs, bs>>>(d_expanded, d_culled, tris,
@@ -2461,26 +2462,15 @@ uint32_t CudaRasterizer::drawIndexed(const RasterVertex* verts,
                                                 d_count);
                     uint32_t hostCount = 0;
                     cudaMemcpy(&hostCount, d_count, sizeof(uint32_t), cudaMemcpyDeviceToHost);
-                    cudaFree(d_count);
-                    cudaFree(d_expanded);
                     stats.triangleSkipped += (tris - hostCount);
-                    if (hostCount == 0) { cudaFree(d_culled); return 0; }
+                    if (hostCount == 0) return 0;
                     return drawTrianglesDevice(d_culled, hostCount, nullptr, 0);
                 }
-                // Cull alloc failed — clean up
-                if (d_culled) cudaFree(d_culled);
-                if (d_count) cudaFree(d_count);
-                cudaFree(d_expanded);
                 // Fall through to CPU path
             } else {
                 // No culling — rasterize directly
                 return drawTrianglesDevice(d_expanded, tris, nullptr, 0);
             }
-        } else {
-            // GPU alloc failed — clean up any partial allocs
-            if (d_verts) cudaFree(d_verts);
-            if (d_indices) cudaFree(d_indices);
-            if (d_expanded) cudaFree(d_expanded);
         }
     }
 
@@ -2513,8 +2503,9 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     // back-face cull as GPU kernels to avoid CPU vertex iteration.
     if (count >= 768 && (useMVP_ || cullMode_ != CullMode::None)) {
         size_t bytes = size_t(count) * sizeof(RasterVertex);
-        RasterVertex* d_v = nullptr;
-        if (cudaMalloc(&d_v, bytes) == cudaSuccess) {
+        scratch_.ensureVerts(count);
+        RasterVertex* d_v = scratch_.d_verts;
+        if (d_v) {
             cudaMemcpy(d_v, verts, bytes, cudaMemcpyHostToDevice);
 
             if (useMVP_) {
@@ -2529,10 +2520,11 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
             }
 
             if (cullMode_ != CullMode::None) {
-                RasterVertex* d_culled = nullptr;
-                uint32_t* d_cnt = nullptr;
-                if (cudaMalloc(&d_culled, bytes) == cudaSuccess &&
-                    cudaMalloc(&d_cnt, sizeof(uint32_t)) == cudaSuccess) {
+                scratch_.ensureSurvived(count);
+                scratch_.ensureTriCount();
+                RasterVertex* d_culled = scratch_.d_survived;
+                uint32_t* d_cnt = scratch_.d_triCount;
+                if (d_culled && d_cnt) {
                     cudaMemset(d_cnt, 0, sizeof(uint32_t));
                     uint32_t bs = 256, gs = (tris + bs - 1) / bs;
                     k_cullTriangles<<<gs, bs>>>(d_v, d_culled, tris,
@@ -2541,16 +2533,10 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                                 d_cnt);
                     uint32_t survived = 0;
                     cudaMemcpy(&survived, d_cnt, sizeof(uint32_t), cudaMemcpyDeviceToHost);
-                    cudaFree(d_cnt);
-                    cudaFree(d_v);
                     stats.triangleSkipped += (tris - survived);
-                    if (survived == 0) { cudaFree(d_culled); return 0; }
+                    if (survived == 0) return 0;
                     return drawTrianglesDevice(d_culled, survived, nullptr, 0);
                 }
-                // Alloc failed — clean up and fall through to CPU
-                if (d_culled) cudaFree(d_culled);
-                if (d_cnt) cudaFree(d_cnt);
-                cudaFree(d_v);
             } else {
                 // Transform only, no cull
                 return drawTrianglesDevice(d_v, tris, nullptr, 0);
@@ -2613,12 +2599,13 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
         if (tris == 0) return 0;
     }
 
-    RasterVertex* d_v = nullptr;
+    uint32_t vertCount = tris * 3;
+    scratch_.ensureXformed(vertCount);
+    RasterVertex* d_v = scratch_.d_xformed;
+    if (!d_v) return 0;
     if (asyncFifo_ && stream_) {
-        if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
         cudaMemcpyAsync(d_v, d_src, bytes, cudaMemcpyHostToDevice, stream_);
     } else {
-        if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
         cudaMemcpy(d_v, d_src, bytes, cudaMemcpyHostToDevice);
     }
 
@@ -2640,7 +2627,7 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     if (tileY1 > fb_.height) tileY1 = fb_.height;
     uint32_t regionW = tileX1 - tileX0;
     uint32_t regionH = tileY1 - tileY0;
-    if (regionW == 0 || regionH == 0) { cudaFree(d_v); return 0; }
+    if (regionW == 0 || regionH == 0) { return 0; }
 
     int origScX = scX_, origScY = scY_;
     uint32_t origScW = scW_, origScH = scH_;
@@ -2657,7 +2644,7 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
             int y1b = scY_ + (int)scH_;
             int x1 = (x1a < x1b) ? x1a : x1b;
             int y1 = (y1a < y1b) ? y1a : y1b;
-            if (x1 <= x0 || y1 <= y0) { cudaFree(d_v); return 0; }
+            if (x1 <= x0 || y1 <= y0) { return 0; }
             newScX = x0; newScY = y0;
             newScW = (uint32_t)(x1 - x0);
             newScH = (uint32_t)(y1 - y0);
@@ -2738,11 +2725,9 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                    shaderWindowHeight_,
                                    clipPlaneControl_,
                                    sRGBWrite_ ? 1 : 0);
-    if (asyncFifo_ && stream_) {
-        cudaFreeAsync(d_v, stream_);
-    } else {
+    // d_v from scratch pool — just sync, no free
+    if (!(asyncFifo_ && stream_)) {
         cudaDeviceSynchronize();
-        cudaFree(d_v);
     }
 
     if (useTileScissor) {
@@ -2882,11 +2867,9 @@ uint32_t CudaRasterizer::drawTrianglesDevice(RasterVertex* d_v, uint32_t tris,
                                    shaderWindowHeight_,
                                    clipPlaneControl_,
                                    sRGBWrite_ ? 1 : 0);
-    if (asyncFifo_ && stream_) {
-        cudaFreeAsync(d_v, stream_);
-    } else {
+    // d_v comes from scratch pool — do not free. Just sync.
+    if (!(asyncFifo_ && stream_)) {
         cudaDeviceSynchronize();
-        cudaFree(d_v);
     }
 
     if (useTileScissor) {
@@ -3006,8 +2989,9 @@ uint32_t CudaRasterizer::drawLines(const RasterVertex* verts, uint32_t count) {
         xf[i] = xformOne(verts[i], useMVP_, mvp_, vpX, vpY, vpW, vpH);
 
     size_t bytes = xf.size() * sizeof(RasterVertex);
-    RasterVertex* d_v = nullptr;
-    if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
+    scratch_.ensureXformed(segs * 2);
+    RasterVertex* d_v = scratch_.d_xformed;
+    if (!d_v) return 0;
     cudaMemcpy(d_v, xf.data(), bytes, cudaMemcpyHostToDevice);
 
     dim3 bs(16, 16);
@@ -3032,7 +3016,6 @@ uint32_t CudaRasterizer::drawLines(const RasterVertex* verts, uint32_t count) {
                               blendConstR_, blendConstG_,
                               blendConstB_, blendConstA_);
     cudaDeviceSynchronize();
-    cudaFree(d_v);
     return segs;
 }
 
@@ -3084,8 +3067,9 @@ uint32_t CudaRasterizer::drawPoints(const RasterVertex* verts, uint32_t count) {
 
     // Non-sprite path: rasterize points directly with point kernel
     size_t bytes = xf.size() * sizeof(RasterVertex);
-    RasterVertex* d_v = nullptr;
-    if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
+    scratch_.ensureXformed(count);
+    RasterVertex* d_v = scratch_.d_xformed;
+    if (!d_v) return 0;
     cudaMemcpy(d_v, xf.data(), bytes, cudaMemcpyHostToDevice);
 
     dim3 bs(256);
@@ -3110,7 +3094,6 @@ uint32_t CudaRasterizer::drawPoints(const RasterVertex* verts, uint32_t count) {
                                pointSize_,
                                pointSpriteEnable_ ? 1 : 0);
     cudaDeviceSynchronize();
-    cudaFree(d_v);
     return count;
 }
 

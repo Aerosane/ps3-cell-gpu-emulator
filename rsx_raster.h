@@ -552,6 +552,59 @@ private:
     BlendEquation beRGB_ {BlendEquation::Add};
     BlendEquation beA_   {BlendEquation::Add};
     float blendConstR_{0}, blendConstG_{0}, blendConstB_{0}, blendConstA_{0};
+
+    // ─── GPU scratch buffer pool ────────────────────────────────
+    // Persistent device allocations reused across draw calls.
+    // Grow-only: reallocated only when a draw exceeds current capacity.
+    struct ScratchPool {
+        RasterVertex* d_verts{nullptr};
+        uint32_t      vertsCap{0};       // capacity in RasterVertex count
+        uint32_t*     d_indices{nullptr};
+        uint32_t      indicesCap{0};     // capacity in uint32_t count
+        RasterVertex* d_xformed{nullptr}; // transformed/gathered verts
+        uint32_t      xformedCap{0};
+        RasterVertex* d_survived{nullptr}; // post-cull output
+        uint32_t      survivedCap{0};
+        uint32_t*     d_triCount{nullptr}; // atomic counter (1 element)
+        bool          triCountAlloced{false};
+
+        void ensureVerts(uint32_t n) {
+            if (n <= vertsCap) return;
+            if (d_verts) cudaFree(d_verts);
+            vertsCap = n + (n >> 2) + 256; // 25% headroom
+            cudaMalloc(&d_verts, vertsCap * sizeof(RasterVertex));
+        }
+        void ensureIndices(uint32_t n) {
+            if (n <= indicesCap) return;
+            if (d_indices) cudaFree(d_indices);
+            indicesCap = n + (n >> 2) + 256;
+            cudaMalloc(&d_indices, indicesCap * sizeof(uint32_t));
+        }
+        void ensureXformed(uint32_t n) {
+            if (n <= xformedCap) return;
+            if (d_xformed) cudaFree(d_xformed);
+            xformedCap = n + (n >> 2) + 256;
+            cudaMalloc(&d_xformed, xformedCap * sizeof(RasterVertex));
+        }
+        void ensureSurvived(uint32_t n) {
+            if (n <= survivedCap) return;
+            if (d_survived) cudaFree(d_survived);
+            survivedCap = n + (n >> 2) + 256;
+            cudaMalloc(&d_survived, survivedCap * sizeof(RasterVertex));
+        }
+        void ensureTriCount() {
+            if (triCountAlloced) return;
+            cudaMalloc(&d_triCount, sizeof(uint32_t));
+            triCountAlloced = true;
+        }
+        void freeAll() {
+            if (d_verts)    { cudaFree(d_verts);    d_verts = nullptr;    vertsCap = 0; }
+            if (d_indices)  { cudaFree(d_indices);  d_indices = nullptr;  indicesCap = 0; }
+            if (d_xformed)  { cudaFree(d_xformed);  d_xformed = nullptr;  xformedCap = 0; }
+            if (d_survived) { cudaFree(d_survived); d_survived = nullptr; survivedCap = 0; }
+            if (d_triCount) { cudaFree(d_triCount); d_triCount = nullptr; triCountAlloced = false; }
+        }
+    } scratch_;
 };
 
 } // namespace rsx
