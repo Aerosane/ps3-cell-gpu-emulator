@@ -1133,6 +1133,84 @@ static const PpuHleEntry PPU_HLE_NAMES[] = {
     { 0x33195de0, "sys_ss", "sys_ss_random_number_generator" },
     { 0xa1c9f3e3, "sys_ss", "sys_ss_get_console_id" },
     { 0x8a4f7605, "sys_ss", "sys_ss_access_control_engine" },
+
+    // ── cellJpgDec extras ────────────────────────────────────────
+    { 0xa7978f59, "cellJpgDec", "cellJpgDecCreate" },
+    { 0x8b300f66, "cellJpgDec", "cellJpgDecDestroy" },
+    { 0x976ca5c2, "cellJpgDec", "cellJpgDecOpen" },
+    { 0x6d9ebccf, "cellJpgDec", "cellJpgDecClose" },
+    { 0xe08f3910, "cellJpgDec", "cellJpgDecReadHeader" },
+    { 0x09e4d696, "cellJpgDec", "cellJpgDecDecodeData" },
+    { 0xaf8bb012, "cellJpgDec", "cellJpgDecSetParameter" },
+
+    // ── cellPngDec extras ────────────────────────────────────────
+    { 0x157b288e, "cellPngDec", "cellPngDecCreate" },
+    { 0x820daf1f, "cellPngDec", "cellPngDecDestroy" },
+    { 0xd2bc5bfd, "cellPngDec", "cellPngDecOpen" },
+    { 0x5b3d1ff1, "cellPngDec", "cellPngDecClose" },
+    { 0x726fc1d0, "cellPngDec", "cellPngDecReadHeader" },
+    { 0x9ccdcc95, "cellPngDec", "cellPngDecDecodeData" },
+    { 0x32b3b60d, "cellPngDec", "cellPngDecSetParameter" },
+
+    // ── cellGifDec extras ────────────────────────────────────────
+    { 0xb60d2bee, "cellGifDec", "cellGifDecCreate" },
+    { 0x41a90dc4, "cellGifDec", "cellGifDecDestroy" },
+    { 0xcfef41e5, "cellGifDec", "cellGifDecOpen" },
+    { 0x116a7da9, "cellGifDec", "cellGifDecClose" },
+    { 0xe74b2cb1, "cellGifDec", "cellGifDecReadHeader" },
+    { 0x44b1bc61, "cellGifDec", "cellGifDecDecodeData" },
+    { 0xb3b69ad7, "cellGifDec", "cellGifDecSetParameter" },
+
+    // ── cellSaveData extras ──────────────────────────────────────
+    { 0x27cb8bc2, "cellSaveData", "cellSaveDataFixedLoad2" },
+    { 0x2ea09ae8, "cellSaveData", "cellSaveDataFixedSave2" },
+    { 0xf6482036, "cellSaveData", "cellSaveDataFixedDelete" },
+    { 0x6c9c5fac, "cellSaveData", "cellSaveDataUserGetListItem" },
+    { 0xa3f30630, "cellSaveData", "cellSaveDataUserListAutoLoad" },
+
+    // ── cellGcmSys extras 2 ──────────────────────────────────────
+    { 0x21397818, "cellGcmSys", "cellGcmSetPrepareFlip" },
+    { 0xc47d0812, "cellGcmSys", "cellGcmSetWaitFlip" },
+    { 0xd9b7653e, "cellGcmSys", "cellGcmSetFlipCommand" },
+    { 0x4ae8d215, "cellGcmSys", "cellGcmSetTileInfo" },
+    { 0x9a0159af, "cellGcmSys", "cellGcmGetReportDataAddressLocation" },
+    { 0x3b9bd5bd, "cellGcmSys", "cellGcmGetReportDataLocation" },
+    { 0xdc09357e, "cellGcmSys", "cellGcmSetFlipStatus" },
+    { 0x51c9d62b, "cellGcmSys", "cellGcmGetCurrentField" },
+    { 0xbb42a3ff, "cellGcmSys", "cellGcmGetNotifyDataAddress" },
+    { 0xa114ec67, "cellGcmSys", "cellGcmMapEaIoAddress" },
+    { 0x2922aed0, "cellGcmSys", "cellGcmMapEaIoAddressWithFlags" },
+    { 0xbecb3dab, "cellGcmSys", "cellGcmSetCursorImageOffset" },
+    { 0x4524cccd, "cellGcmSys", "cellGcmBindZcull" },
+    { 0xa75640e8, "cellGcmSys", "cellGcmUnbindZcull" },
+
+    // ── cellSpurs extras 2 ───────────────────────────────────────
+    { 0xb9bc6207, "cellSpurs", "cellSpursEventFlagDetachLv2EventQueue" },
+    { 0x0a27c45e, "cellSpurs", "cellSpursEventFlagGetDirection" },
+    { 0x15983389, "cellSpurs", "cellSpursGetNumSpuThread" },
+    { 0x9a92c01a, "cellSpurs", "cellSpursAttributeSetMemoryContainerForSpuThread" },
+    { 0xbdeaeff1, "cellSpurs", "cellSpursRequestIdleSpu" },
+
+    // ── sys_tty (debug TTY) ──────────────────────────────────────
+    { 0xde3a9bf4, "sys_tty", "sys_tty_read" },
+    { 0x17d6a9e1, "sys_tty", "sys_tty_write" },
+
+    // ── sys_time ─────────────────────────────────────────────────
+    { 0x01a2f171, "sys_time", "sys_time_get_current_time" },
+    { 0x35168520, "sys_time", "sys_time_get_timebase_frequency" },
+    { 0xa1c2ec4d, "sys_time", "sys_time_get_system_time" },
+
+    // ── cellSync extras ──────────────────────────────────────────
+    { 0xa6669751, "cellSync", "cellSyncBarrierInitialize" },
+    { 0xf06a6cd1, "cellSync", "cellSyncBarrierNotify" },
+    { 0xb71d5689, "cellSync", "cellSyncBarrierTryNotify" },
+    { 0x268edd6d, "cellSync", "cellSyncBarrierWait" },
+    { 0x0f8fdcee, "cellSync", "cellSyncBarrierTryWait" },
+    { 0x6c272124, "cellSync", "cellSyncRwmInitialize" },
+    { 0xece0e664, "cellSync", "cellSyncRwmRead" },
+    { 0xbb73dee0, "cellSync", "cellSyncRwmWrite" },
+    { 0xba5bee48, "cellSync", "cellSyncRwmTryRead" },
+    { 0x8a650722, "cellSync", "cellSyncRwmTryWrite" },
 };
 
 static inline const PpuHleEntry* ppu_hle_lookup(uint32_t fnid) {

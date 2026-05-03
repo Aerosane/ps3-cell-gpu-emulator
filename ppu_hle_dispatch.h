@@ -2969,6 +2969,186 @@ struct PpuHleDispatcher {
         } else if (e.name == "sys_ss_access_control_engine") {
             retval = 0;
 
+        // ── cellJpgDec extras ────────────────────────────────────────
+        } else if (e.name == "cellJpgDecCreate") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellJpgDecDestroy" || e.name == "cellJpgDecClose") {
+            retval = 0;
+        } else if (e.name == "cellJpgDecOpen") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellJpgDecReadHeader") {
+            // r3 = mainHandle, r4 = subHandle, r5 = ptr to CellJpgDecInfo
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                // width=1, height=1, components=3 (minimal)
+                uint32_t one = __builtin_bswap32(1);
+                std::memcpy(mem + ptr, &one, 4);
+                std::memcpy(mem + ptr + 4, &one, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellJpgDecDecodeData") {
+            retval = 0;
+        } else if (e.name == "cellJpgDecSetParameter") {
+            retval = 0;
+
+        // ── cellPngDec extras ────────────────────────────────────────
+        } else if (e.name == "cellPngDecCreate") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellPngDecDestroy" || e.name == "cellPngDecClose") {
+            retval = 0;
+        } else if (e.name == "cellPngDecOpen") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellPngDecReadHeader") {
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                uint32_t one = __builtin_bswap32(1);
+                std::memcpy(mem + ptr, &one, 4);
+                std::memcpy(mem + ptr + 4, &one, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellPngDecDecodeData" ||
+                   e.name == "cellPngDecSetParameter") {
+            retval = 0;
+
+        // ── cellGifDec extras ────────────────────────────────────────
+        } else if (e.name == "cellGifDecCreate") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellGifDecDestroy" || e.name == "cellGifDecClose") {
+            retval = 0;
+        } else if (e.name == "cellGifDecOpen") {
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 4 <= memSize) {
+                uint32_t h = __builtin_bswap32(nextHandleId++);
+                std::memcpy(mem + ptr, &h, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellGifDecReadHeader") {
+            uint32_t ptr = (uint32_t)st.gpr[5];
+            if (ptr && ptr + 16 <= memSize) {
+                std::memset(mem + ptr, 0, 16);
+                uint32_t one = __builtin_bswap32(1);
+                std::memcpy(mem + ptr, &one, 4);
+                std::memcpy(mem + ptr + 4, &one, 4);
+            }
+            retval = 0;
+        } else if (e.name == "cellGifDecDecodeData" ||
+                   e.name == "cellGifDecSetParameter") {
+            retval = 0;
+
+        // ── cellSaveData extras 2 ────────────────────────────────────
+        } else if (e.name == "cellSaveDataFixedLoad2" ||
+                   e.name == "cellSaveDataFixedSave2" ||
+                   e.name == "cellSaveDataFixedDelete") {
+            retval = 0;
+        } else if (e.name == "cellSaveDataUserGetListItem" ||
+                   e.name == "cellSaveDataUserListAutoLoad") {
+            retval = 0;
+
+        // ── cellGcmSys extras 2 ──────────────────────────────────────
+        } else if (e.name == "cellGcmSetPrepareFlip" ||
+                   e.name == "cellGcmSetWaitFlip" ||
+                   e.name == "cellGcmSetFlipCommand") {
+            retval = 0;
+        } else if (e.name == "cellGcmSetTileInfo") {
+            retval = 0;
+        } else if (e.name == "cellGcmGetReportDataAddressLocation" ||
+                   e.name == "cellGcmGetReportDataLocation") {
+            retval = 0;
+        } else if (e.name == "cellGcmSetFlipStatus") {
+            retval = 0;
+        } else if (e.name == "cellGcmGetCurrentField") {
+            retval = 0;
+        } else if (e.name == "cellGcmGetNotifyDataAddress") {
+            retval = 0;
+        } else if (e.name == "cellGcmMapEaIoAddress" ||
+                   e.name == "cellGcmMapEaIoAddressWithFlags") {
+            retval = 0;
+        } else if (e.name == "cellGcmSetCursorImageOffset") {
+            retval = 0;
+        } else if (e.name == "cellGcmBindZcull" || e.name == "cellGcmUnbindZcull") {
+            retval = 0;
+
+        // ── cellSpurs extras 2 ───────────────────────────────────────
+        } else if (e.name == "cellSpursEventFlagDetachLv2EventQueue" ||
+                   e.name == "cellSpursEventFlagGetDirection") {
+            retval = 0;
+        } else if (e.name == "cellSpursGetNumSpuThread") {
+            retval = 6;  // 6 SPU threads
+        } else if (e.name == "cellSpursAttributeSetMemoryContainerForSpuThread" ||
+                   e.name == "cellSpursRequestIdleSpu") {
+            retval = 0;
+
+        // ── sys_tty ──────────────────────────────────────────────────
+        } else if (e.name == "sys_tty_read") {
+            retval = 0;  // no input
+        } else if (e.name == "sys_tty_write") {
+            // r3 = channel, r4 = ptr, r5 = len — debug print (ignore)
+            retval = 0;
+
+        // ── sys_time ─────────────────────────────────────────────────
+        } else if (e.name == "sys_time_get_current_time") {
+            // r3 = ptr to sec, r4 = ptr to nsec
+            uint32_t ps = (uint32_t)st.gpr[3];
+            uint32_t pn = (uint32_t)st.gpr[4];
+            if (ps && ps + 8 <= memSize) {
+                uint64_t sec = 1700000000ULL;  // fixed epoch
+                for (int i = 0; i < 8; ++i)
+                    mem[ps + i] = (uint8_t)(sec >> (56 - 8*i));
+            }
+            if (pn && pn + 8 <= memSize) std::memset(mem + pn, 0, 8);
+            retval = 0;
+        } else if (e.name == "sys_time_get_timebase_frequency") {
+            retval = 79800000;  // 79.8 MHz (PS3 timebase)
+        } else if (e.name == "sys_time_get_system_time") {
+            retval = 0;
+
+        // ── cellSync extras ──────────────────────────────────────────
+        } else if (e.name == "cellSyncBarrierInitialize") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 16 <= memSize) std::memset(mem + ptr, 0, 16);
+            retval = 0;
+        } else if (e.name == "cellSyncBarrierNotify" ||
+                   e.name == "cellSyncBarrierTryNotify") {
+            retval = 0;
+        } else if (e.name == "cellSyncBarrierWait" ||
+                   e.name == "cellSyncBarrierTryWait") {
+            retval = 0;  // single-threaded: barrier passed
+        } else if (e.name == "cellSyncRwmInitialize") {
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            if (ptr && ptr + 32 <= memSize) std::memset(mem + ptr, 0, 32);
+            retval = 0;
+        } else if (e.name == "cellSyncRwmRead" || e.name == "cellSyncRwmTryRead") {
+            retval = 0;
+        } else if (e.name == "cellSyncRwmWrite" || e.name == "cellSyncRwmTryWrite") {
+            retval = 0;
+
         } else {
             // No handler yet — acknowledge, log, continue with r3=0.
             unknownCount++;
