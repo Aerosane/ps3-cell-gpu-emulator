@@ -1482,7 +1482,6 @@ __device__ __forceinline__ void sampleTex3D(const uint32_t* tex,
     if (iz1 < 0) iz1 = 0;
 
     // Sample two adjacent slices as 2D textures
-    uint32_t totalH = sliceH * texDepth;
     float r0, g0, b0, a0, r1, g1, b1, a1;
 
     // Slice 0: offset into the vertical stack

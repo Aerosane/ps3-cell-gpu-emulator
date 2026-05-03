@@ -391,7 +391,9 @@ static void decode_vertex_stream(const RSXState& s,
                                  std::vector<RasterVertex>& out,
                                  uint32_t instanceId = 0) {
     out.resize(count);
-    uint32_t freqDiv = s.freqDividerOp;  // bit N set = slot N uses instance index
+    // Zero-init all vertices in one memset instead of per-vertex
+    if (count > 0) memset(out.data(), 0, count * sizeof(RasterVertex));
+    uint32_t freqDiv = s.freqDividerOp;
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t idx = first + i;
         float pos[4]   = { 0, 0, 0, 1 };
@@ -415,7 +417,6 @@ static void decode_vertex_stream(const RSXState& s,
         }
 
         RasterVertex& v = out[i];
-        memset(&v, 0, sizeof(v));
         v.x = pos[0]; v.y = pos[1]; v.z = pos[2];
         v.w = 1.0f;  // pre-transformed vertices: W=1 (no perspective)
         v.r = color[0]; v.g = color[1]; v.b = color[2]; v.a = color[3];

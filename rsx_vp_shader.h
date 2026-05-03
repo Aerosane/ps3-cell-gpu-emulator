@@ -692,14 +692,23 @@ inline void vp_execute(const uint32_t* vpData, uint32_t vpLen, uint32_t vpStart,
             if (effectiveConstIdx > 511) effectiveConstIdx = 0;
         }
 
-        // Read sources
-        float src0[4], src1[4], src2[4];
-        vp_read_src(insn.src[0], insn.inputIdx, effectiveConstIdx,
-                    inputs, constants, temps, src0);
-        vp_read_src(insn.src[1], insn.inputIdx, effectiveConstIdx,
-                    inputs, constants, temps, src1);
-        vp_read_src(insn.src[2], insn.inputIdx, effectiveConstIdx,
-                    inputs, constants, temps, src2);
+        // Lazy source loading: vec ops primarily use src0/src1, sca ops use src2.
+        // Only decode sources that are actually needed to avoid wasted work.
+        float src0[4] = {0,0,0,0}, src1[4] = {0,0,0,0}, src2[4] = {0,0,0,0};
+        bool needSrc0 = (insn.vecOp != VP_VEC_NOP);
+        bool needSrc1 = (insn.vecOp != VP_VEC_NOP && insn.vecOp != VP_VEC_MOV &&
+                         insn.vecOp != VP_VEC_FRC && insn.vecOp != VP_VEC_FLR &&
+                         insn.vecOp != VP_VEC_SFL && insn.vecOp != VP_VEC_STR &&
+                         insn.vecOp != VP_VEC_SSG && insn.vecOp != VP_VEC_ARL &&
+                         insn.vecOp != VP_VEC_TXL);
+        bool needSrc2 = (insn.scaOp != VP_SCA_NOP) ||
+                         (insn.vecOp == VP_VEC_ADD || insn.vecOp == VP_VEC_MAD);
+        if (needSrc0) vp_read_src(insn.src[0], insn.inputIdx, effectiveConstIdx,
+                                   inputs, constants, temps, src0);
+        if (needSrc1) vp_read_src(insn.src[1], insn.inputIdx, effectiveConstIdx,
+                                   inputs, constants, temps, src1);
+        if (needSrc2) vp_read_src(insn.src[2], insn.inputIdx, effectiveConstIdx,
+                                   inputs, constants, temps, src2);
 
         // Vector op
         if (insn.vecOp != VP_VEC_NOP) {
