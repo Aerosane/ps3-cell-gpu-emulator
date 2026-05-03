@@ -512,6 +512,11 @@ private:
 
     uint32_t  clipPlaneControl_{0};  // 6 planes × 2 bits each
 
+    // Internal: rasterize device-resident vertices (already transformed+culled).
+    // tris = triangle count. d_v is device memory, caller must free.
+    uint32_t drawTrianglesDevice(RasterVertex* d_v, uint32_t tris,
+                                 const RasterVertex* hostVerts, uint32_t hostCount);
+
     bool      sRGBWrite_{false};   // gamma encode on FB write
     uint32_t  aaMode_{0};          // 0=none, 4=2x, 12=4x
 

@@ -56,6 +56,66 @@ __global__ void k_indexGather(const RasterVertex* __restrict__ verts,
         memset(&out[tid], 0, sizeof(RasterVertex));
 }
 
+// ─── GPU MVP transform kernel ────────────────────────────────
+// Applies column-major MVP * (x,y,z,1), perspective divide, and
+// viewport mapping. One thread per vertex — fully parallel.
+struct TransformParams {
+    float m[4][4];  // column-major MVP
+    float vpX, vpY, vpW, vpH;
+};
+
+__global__ void k_transformVertices(RasterVertex* __restrict__ verts,
+                                    uint32_t count,
+                                    TransformParams params) {
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= count) return;
+
+    RasterVertex v = verts[tid];
+    float cx = params.m[0][0]*v.x + params.m[1][0]*v.y + params.m[2][0]*v.z + params.m[3][0];
+    float cy = params.m[0][1]*v.x + params.m[1][1]*v.y + params.m[2][1]*v.z + params.m[3][1];
+    float cz = params.m[0][2]*v.x + params.m[1][2]*v.y + params.m[2][2]*v.z + params.m[3][2];
+    float cw = params.m[0][3]*v.x + params.m[1][3]*v.y + params.m[2][3]*v.z + params.m[3][3];
+    if (cw == 0.0f) cw = 1e-30f;
+    float nx = cx / cw, ny = cy / cw, nz = cz / cw;
+
+    verts[tid].x = params.vpX + (nx * 0.5f + 0.5f) * params.vpW;
+    verts[tid].y = params.vpY + (1.0f - (ny * 0.5f + 0.5f)) * params.vpH;
+    verts[tid].z = nz * 0.5f + 0.5f;
+    verts[tid].w = cw;
+}
+
+// ─── GPU back-face cull kernel ───────────────────────────────
+// One thread per triangle. Computes signed area, culls based on
+// cull mode / front face. Surviving triangles are compacted via
+// atomicAdd into the output buffer.
+__global__ void k_cullTriangles(const RasterVertex* __restrict__ in,
+                                RasterVertex* __restrict__ out,
+                                uint32_t triCount,
+                                uint32_t cullMode,   // 0=None,1=Front,2=Back,3=FrontAndBack
+                                uint32_t frontFaceCCW,
+                                uint32_t* __restrict__ outCount) {
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= triCount) return;
+
+    const RasterVertex& a = in[tid * 3 + 0];
+    const RasterVertex& b = in[tid * 3 + 1];
+    const RasterVertex& c = in[tid * 3 + 2];
+
+    float area = (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x);
+    bool isFront = frontFaceCCW ? (area > 0) : (area < 0);
+    bool drop = false;
+    if (cullMode == 1) drop = isFront;       // Front
+    else if (cullMode == 2) drop = !isFront;  // Back
+    else if (cullMode == 3) drop = true;      // FrontAndBack
+
+    if (!drop) {
+        uint32_t slot = atomicAdd(outCount, 1);
+        out[slot * 3 + 0] = a;
+        out[slot * 3 + 1] = b;
+        out[slot * 3 + 2] = c;
+    }
+}
+
 // ─── MSAA box-filter resolve kernel ───────────────────────────
 // filter. scaleX/scaleY are integer (1, 2, or 4).
 __global__ void k_resolveAA(const uint32_t* __restrict__ src,
@@ -2268,11 +2328,11 @@ uint32_t CudaRasterizer::drawIndexed(const RasterVertex* verts,
                                      bool indexIs32) {
     if (!verts || !indices || indexCount < 3) return 0;
 
-    // Fast GPU path: when no primitive restart is active and indices are
-    // large enough to amortize kernel dispatch, gather on device.
-    // Threshold: 256 indices (~85 triangles) — below this CPU expand is faster.
+    // ── GPU zero-copy path ──────────────────────────────────────
+    // Chain: index gather -> MVP transform -> cull -> rasterize, all
+    // on device. No host readback between stages.
     if (!restartIndexEnable_ && indexCount >= 256) {
-        // Convert all indices to uint32 on host (cheap for 16-bit upcast)
+        // Convert 16-bit indices to 32-bit on host (cheap upcast)
         std::vector<uint32_t> idx32(indexCount);
         if (indexIs32) {
             std::memcpy(idx32.data(), indices, indexCount * sizeof(uint32_t));
@@ -2281,44 +2341,83 @@ uint32_t CudaRasterizer::drawIndexed(const RasterVertex* verts,
             for (uint32_t i = 0; i < indexCount; ++i) idx32[i] = src16[i];
         }
 
-        // Upload vertex buffer + index buffer to device
+        uint32_t triVerts = (indexCount / 3) * 3;
+        if (triVerts == 0) return 0;
+
         RasterVertex* d_verts = nullptr;
         uint32_t* d_indices = nullptr;
         RasterVertex* d_expanded = nullptr;
         size_t vbBytes = size_t(vertexCount) * sizeof(RasterVertex);
-        size_t ibBytes = size_t(indexCount) * sizeof(uint32_t);
-        size_t exBytes = size_t(indexCount) * sizeof(RasterVertex);
-        if (cudaMalloc(&d_verts, vbBytes) != cudaSuccess) goto cpu_fallback;
-        if (cudaMalloc(&d_indices, ibBytes) != cudaSuccess) { cudaFree(d_verts); goto cpu_fallback; }
-        if (cudaMalloc(&d_expanded, exBytes) != cudaSuccess) { cudaFree(d_verts); cudaFree(d_indices); goto cpu_fallback; }
+        size_t ibBytes = size_t(triVerts) * sizeof(uint32_t);
+        size_t exBytes = size_t(triVerts) * sizeof(RasterVertex);
 
-        cudaMemcpy(d_verts, verts, vbBytes, cudaMemcpyHostToDevice);
-        cudaMemcpy(d_indices, idx32.data(), ibBytes, cudaMemcpyHostToDevice);
+        bool gpuOk = (cudaMalloc(&d_verts, vbBytes) == cudaSuccess);
+        if (gpuOk) gpuOk = (cudaMalloc(&d_indices, ibBytes) == cudaSuccess);
+        if (gpuOk) gpuOk = (cudaMalloc(&d_expanded, exBytes) == cudaSuccess);
 
-        // Launch gather kernel — 1 thread per index
-        uint32_t bs = 256;
-        uint32_t gs = (indexCount + bs - 1) / bs;
-        k_indexGather<<<gs, bs>>>(d_verts, d_indices, d_expanded,
-                                  indexCount, vertexCount);
-        cudaDeviceSynchronize();
+        if (gpuOk) {
+            cudaMemcpy(d_verts, verts, vbBytes, cudaMemcpyHostToDevice);
+            cudaMemcpy(d_indices, idx32.data(), ibBytes, cudaMemcpyHostToDevice);
 
-        // Read back expanded vertices for transform+cull on host
-        // (transform+cull will move to GPU in a future pass)
-        std::vector<RasterVertex> expanded(indexCount);
-        cudaMemcpy(expanded.data(), d_expanded, exBytes, cudaMemcpyDeviceToHost);
-        cudaFree(d_verts);
-        cudaFree(d_indices);
-        cudaFree(d_expanded);
+            // Stage 1: Gather
+            {
+                uint32_t bs = 256, gs = (triVerts + bs - 1) / bs;
+                k_indexGather<<<gs, bs>>>(d_verts, d_indices, d_expanded, triVerts, vertexCount);
+            }
+            cudaFree(d_verts);
+            cudaFree(d_indices);
 
-        // Trim to complete triangles
-        uint32_t triCount = (uint32_t)expanded.size() / 3;
-        if (triCount == 0) return 0;
-        expanded.resize(triCount * 3);
-        return drawTriangles(expanded.data(), (uint32_t)expanded.size());
+            // Stage 2: Transform
+            if (useMVP_) {
+                TransformParams tp;
+                memcpy(tp.m, mvp_.m, sizeof(tp.m));
+                tp.vpX = (vpW_ > 0) ? vpX_ : 0.0f;
+                tp.vpY = (vpH_ > 0) ? vpY_ : 0.0f;
+                tp.vpW = (vpW_ > 0) ? vpW_ : (float)fb_.width;
+                tp.vpH = (vpH_ > 0) ? vpH_ : (float)fb_.height;
+                uint32_t bs = 256, gs = (triVerts + bs - 1) / bs;
+                k_transformVertices<<<gs, bs>>>(d_expanded, triVerts, tp);
+            }
+
+            // Stage 3: Cull
+            uint32_t tris = triVerts / 3;
+            if (cullMode_ != CullMode::None) {
+                RasterVertex* d_culled = nullptr;
+                uint32_t* d_count = nullptr;
+                if (cudaMalloc(&d_culled, exBytes) == cudaSuccess &&
+                    cudaMalloc(&d_count, sizeof(uint32_t)) == cudaSuccess) {
+                    cudaMemset(d_count, 0, sizeof(uint32_t));
+                    uint32_t bs = 256, gs = (tris + bs - 1) / bs;
+                    k_cullTriangles<<<gs, bs>>>(d_expanded, d_culled, tris,
+                                                uint32_t(cullMode_),
+                                                (frontFace_ == FrontFace::CCW) ? 1 : 0,
+                                                d_count);
+                    uint32_t hostCount = 0;
+                    cudaMemcpy(&hostCount, d_count, sizeof(uint32_t), cudaMemcpyDeviceToHost);
+                    cudaFree(d_count);
+                    cudaFree(d_expanded);
+                    stats.triangleSkipped += (tris - hostCount);
+                    if (hostCount == 0) { cudaFree(d_culled); return 0; }
+                    return drawTrianglesDevice(d_culled, hostCount, nullptr, 0);
+                }
+                // Cull alloc failed — clean up
+                if (d_culled) cudaFree(d_culled);
+                if (d_count) cudaFree(d_count);
+                cudaFree(d_expanded);
+                // Fall through to CPU path
+            } else {
+                // No culling — rasterize directly
+                return drawTrianglesDevice(d_expanded, tris, nullptr, 0);
+            }
+        } else {
+            // GPU alloc failed — clean up any partial allocs
+            if (d_verts) cudaFree(d_verts);
+            if (d_indices) cudaFree(d_indices);
+            if (d_expanded) cudaFree(d_expanded);
+        }
     }
 
-cpu_fallback:
-    // CPU path — handles primitive restart, small draws, and OOM fallback
+    // CPU fallback — handles primitive restart, small draws, and OOM
     std::vector<RasterVertex> expanded;
     expanded.reserve(indexCount);
     for (uint32_t i = 0; i < indexCount; ++i) {
@@ -2340,10 +2439,60 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
                                        uint32_t count) {
     if (!fb_.d_color || count < 3) return 0;
     uint32_t tris = count / 3;
+    count = tris * 3;  // trim to complete triangles
 
-    // Transform to pixel/NDC-z space on host. For small vertex counts
-    // this is well under GPU dispatch overhead; a dedicated transform
-    // kernel is a later optimization once we're pushing 100k+ verts.
+    // ── GPU fast path: transform + cull on device ───────────────
+    // For draws with enough triangles (≥256), run MVP transform and
+    // back-face cull as GPU kernels to avoid CPU vertex iteration.
+    if (count >= 768 && (useMVP_ || cullMode_ != CullMode::None)) {
+        size_t bytes = size_t(count) * sizeof(RasterVertex);
+        RasterVertex* d_v = nullptr;
+        if (cudaMalloc(&d_v, bytes) == cudaSuccess) {
+            cudaMemcpy(d_v, verts, bytes, cudaMemcpyHostToDevice);
+
+            if (useMVP_) {
+                TransformParams tp;
+                memcpy(tp.m, mvp_.m, sizeof(tp.m));
+                tp.vpX = (vpW_ > 0) ? vpX_ : 0.0f;
+                tp.vpY = (vpH_ > 0) ? vpY_ : 0.0f;
+                tp.vpW = (vpW_ > 0) ? vpW_ : (float)fb_.width;
+                tp.vpH = (vpH_ > 0) ? vpH_ : (float)fb_.height;
+                uint32_t bs = 256, gs = (count + bs - 1) / bs;
+                k_transformVertices<<<gs, bs>>>(d_v, count, tp);
+            }
+
+            if (cullMode_ != CullMode::None) {
+                RasterVertex* d_culled = nullptr;
+                uint32_t* d_cnt = nullptr;
+                if (cudaMalloc(&d_culled, bytes) == cudaSuccess &&
+                    cudaMalloc(&d_cnt, sizeof(uint32_t)) == cudaSuccess) {
+                    cudaMemset(d_cnt, 0, sizeof(uint32_t));
+                    uint32_t bs = 256, gs = (tris + bs - 1) / bs;
+                    k_cullTriangles<<<gs, bs>>>(d_v, d_culled, tris,
+                                                uint32_t(cullMode_),
+                                                (frontFace_ == FrontFace::CCW) ? 1 : 0,
+                                                d_cnt);
+                    uint32_t survived = 0;
+                    cudaMemcpy(&survived, d_cnt, sizeof(uint32_t), cudaMemcpyDeviceToHost);
+                    cudaFree(d_cnt);
+                    cudaFree(d_v);
+                    stats.triangleSkipped += (tris - survived);
+                    if (survived == 0) { cudaFree(d_culled); return 0; }
+                    return drawTrianglesDevice(d_culled, survived, nullptr, 0);
+                }
+                // Alloc failed — clean up and fall through to CPU
+                if (d_culled) cudaFree(d_culled);
+                if (d_cnt) cudaFree(d_cnt);
+                cudaFree(d_v);
+            } else {
+                // Transform only, no cull
+                return drawTrianglesDevice(d_v, tris, nullptr, 0);
+            }
+        }
+        // GPU alloc failed — fall through to CPU path
+    }
+
+    // ── CPU path: small draws or GPU alloc failure ──────────────
     std::vector<RasterVertex> transformed;
     const RasterVertex* d_src = verts;
     if (useMVP_) {
@@ -2354,29 +2503,23 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
         float vpH = (vpH_ > 0) ? vpH_ : (float)fb_.height;
         for (uint32_t i = 0; i < count; ++i) {
             const auto& v = verts[i];
-            // clip = M * (x,y,z,1) using column-major convention.
             float cx = mvp_.m[0][0]*v.x + mvp_.m[1][0]*v.y + mvp_.m[2][0]*v.z + mvp_.m[3][0];
             float cy = mvp_.m[0][1]*v.x + mvp_.m[1][1]*v.y + mvp_.m[2][1]*v.z + mvp_.m[3][1];
             float cz = mvp_.m[0][2]*v.x + mvp_.m[1][2]*v.y + mvp_.m[2][2]*v.z + mvp_.m[3][2];
             float cw = mvp_.m[0][3]*v.x + mvp_.m[1][3]*v.y + mvp_.m[2][3]*v.z + mvp_.m[3][3];
             if (cw == 0.0f) cw = 1e-30f;
             float nx = cx / cw, ny = cy / cw, nz = cz / cw;
-            // NDC [-1,1] -> viewport pixels. Y flip to screen-down.
             transformed[i] = v;
             transformed[i].x = vpX + (nx * 0.5f + 0.5f) * vpW;
             transformed[i].y = vpY + (1.0f - (ny * 0.5f + 0.5f)) * vpH;
-            transformed[i].z = nz * 0.5f + 0.5f;  // NDC z [-1,1] -> [0,1]
-            transformed[i].w = cw;  // preserve clip W for perspective correction
+            transformed[i].z = nz * 0.5f + 0.5f;
+            transformed[i].w = cw;
         }
         d_src = transformed.data();
     }
 
     size_t bytes = size_t(tris) * 3 * sizeof(RasterVertex);
 
-    // Back-face cull: compute screen-space signed area; drop triangles
-    // whose facing matches cullMode_ given frontFace_. Runs on host
-    // after transform — for high triangle counts a GPU pass would be
-    // faster but this keeps the code self-contained.
     std::vector<RasterVertex> culled;
     if (cullMode_ != CullMode::None) {
         culled.reserve(count);
@@ -2386,7 +2529,6 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
             const auto& c = d_src[t*3 + 2];
             float area = (c.x - a.x) * (b.y - a.y)
                        - (c.y - a.y) * (b.x - a.x);
-            // area > 0 = CCW in our kernel convention; area < 0 = CW.
             bool isFront = (frontFace_ == FrontFace::CCW) ? (area > 0)
                                                           : (area < 0);
             bool drop = false;
@@ -2406,7 +2548,6 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
 
     RasterVertex* d_v = nullptr;
     if (asyncFifo_ && stream_) {
-        // Async path: allocate + upload + launch on stream — no CPU block.
         if (cudaMalloc(&d_v, bytes) != cudaSuccess) return 0;
         cudaMemcpyAsync(d_v, d_src, bytes, cudaMemcpyHostToDevice, stream_);
     } else {
@@ -2414,9 +2555,7 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
         cudaMemcpy(d_v, d_src, bytes, cudaMemcpyHostToDevice);
     }
 
-    // ── Tile optimization: compute bounding box of all triangles and
-    // restrict kernel launch to that screen region. This avoids launching
-    // threads for pixels that can't possibly be covered.
+    // Tile optimization bounding box
     float bboxMinX = (float)fb_.width, bboxMinY = (float)fb_.height;
     float bboxMaxX = 0.0f, bboxMaxY = 0.0f;
     for (uint32_t i = 0; i < tris * 3; ++i) {
@@ -2426,7 +2565,6 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
         if (vy < bboxMinY) bboxMinY = vy;
         if (vy > bboxMaxY) bboxMaxY = vy;
     }
-    // Clamp to framebuffer bounds and align to tile boundaries (16px)
     uint32_t tileX0 = (bboxMinX > 0) ? ((uint32_t)bboxMinX & ~15u) : 0;
     uint32_t tileY0 = (bboxMinY > 0) ? ((uint32_t)bboxMinY & ~15u) : 0;
     uint32_t tileX1 = ((uint32_t)bboxMaxX + 16u) & ~15u;
@@ -2437,14 +2575,10 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     uint32_t regionH = tileY1 - tileY0;
     if (regionW == 0 || regionH == 0) { cudaFree(d_v); return 0; }
 
-    // If region covers most of the screen, just launch full grid
-    // (avoids pixel offset computation in kernel). Otherwise, apply
-    // scissor to restrict the kernel to the bounding region.
     int origScX = scX_, origScY = scY_;
     uint32_t origScW = scW_, origScH = scH_;
     bool useTileScissor = (regionW < fb_.width || regionH < fb_.height);
     if (useTileScissor) {
-        // Intersect with existing scissor if active
         int newScX = (int)tileX0, newScY = (int)tileY0;
         uint32_t newScW = regionW, newScH = regionH;
         if (scW_ > 0 && scH_ > 0) {
@@ -2484,69 +2618,210 @@ uint32_t CudaRasterizer::drawTriangles(const RasterVertex* verts,
     }
     cudaStream_t launchStream = (asyncFifo_ && stream_) ? stream_ : nullptr;
     k_rasterTriangles<<<gs, bs, 0, launchStream>>>(fb_.d_color, fb_.d_depth, fb_.d_stencil,
-                                  fb_.width, fb_.height,
-                                  d_v, tris,
-                                  blendEnable_ ? 1 : 0,
-                                  depthTest_ ? 1 : 0,
-                                  depthWrite_ ? 1 : 0,
-                                  uint32_t(depthFunc_),
-                                  tb,
-                                  scX_, scY_, scW_, scH_,
-                                  alphaTestEnable_ ? 1 : 0,
-                                  uint32_t(alphaRef_),
-                                  uint32_t(alphaFunc_),
-                                  colorMask_,
-                                  polyOffsetFactor_, polyOffsetUnits_,
-                                  depthClip_ ? 1 : 0,
-                                  stencilTest_ ? 1 : 0,
-                                  uint32_t(stencilFunc_),
-                                  uint32_t(stencilRef_),
-                                  uint32_t(stencilMask_),
-                                  uint32_t(stencilWriteMask_),
-                                  uint32_t(stencilSFail_),
-                                  uint32_t(stencilZFail_),
-                                  uint32_t(stencilZPass_),
-                                  uint32_t(bfSrcRGB_), uint32_t(bfDstRGB_),
-                                  uint32_t(bfSrcA_),   uint32_t(bfDstA_),
-                                  uint32_t(beRGB_),    uint32_t(beA_),
-                                  blendConstR_, blendConstG_,
-                                  blendConstB_, blendConstA_,
-                                  d_fpInsns_, fpInsnCount_,
-                                  d_fpConsts_, fpConstCount_,
-                                  d_colorB_, d_colorC_, d_colorD_,
-                                  flatShade_ ? 1 : 0,
-                                  logicOpEnable_ ? 1 : 0,
-                                  logicOp_,
-                                  ditherEnable_ ? 1 : 0,
-                                  twoSidedStencil_ ? 1 : 0,
-                                  uint32_t(backStencilFunc_),
-                                  uint32_t(backStencilRef_),
-                                  uint32_t(backStencilMask_),
-                                  uint32_t(backStencilWriteMask_),
-                                  uint32_t(backStencilSFail_),
-                                  uint32_t(backStencilZFail_),
-                                  uint32_t(backStencilZPass_),
-                                  (frontFace_ == FrontFace::CCW) ? 1 : 0,
-                                  fogMode_,
-                                  fogParam0_, fogParam1_,
-                                  depthBoundsTestEnable_ ? 1 : 0,
-                                  depthBoundsMin_, depthBoundsMax_,
-                                  twoSidedColor_ ? 1 : 0,
-                                  fpDepthReplace_ ? 1 : 0,
-                                  shaderWindowOrigin_,
-                                  shaderWindowHeight_,
-                                  clipPlaneControl_,
-                                  sRGBWrite_ ? 1 : 0);
+                                   fb_.width, fb_.height,
+                                   d_v, tris,
+                                   blendEnable_ ? 1 : 0,
+                                   depthTest_ ? 1 : 0,
+                                   depthWrite_ ? 1 : 0,
+                                   uint32_t(depthFunc_),
+                                   tb,
+                                   scX_, scY_, scW_, scH_,
+                                   alphaTestEnable_ ? 1 : 0,
+                                   uint32_t(alphaRef_),
+                                   uint32_t(alphaFunc_),
+                                   colorMask_,
+                                   polyOffsetFactor_, polyOffsetUnits_,
+                                   depthClip_ ? 1 : 0,
+                                   stencilTest_ ? 1 : 0,
+                                   uint32_t(stencilFunc_),
+                                   uint32_t(stencilRef_),
+                                   uint32_t(stencilMask_),
+                                   uint32_t(stencilWriteMask_),
+                                   uint32_t(stencilSFail_),
+                                   uint32_t(stencilZFail_),
+                                   uint32_t(stencilZPass_),
+                                   uint32_t(bfSrcRGB_), uint32_t(bfDstRGB_),
+                                   uint32_t(bfSrcA_),   uint32_t(bfDstA_),
+                                   uint32_t(beRGB_),    uint32_t(beA_),
+                                   blendConstR_, blendConstG_,
+                                   blendConstB_, blendConstA_,
+                                   d_fpInsns_, fpInsnCount_,
+                                   d_fpConsts_, fpConstCount_,
+                                   d_colorB_, d_colorC_, d_colorD_,
+                                   flatShade_ ? 1 : 0,
+                                   logicOpEnable_ ? 1 : 0,
+                                   logicOp_,
+                                   ditherEnable_ ? 1 : 0,
+                                   twoSidedStencil_ ? 1 : 0,
+                                   uint32_t(backStencilFunc_),
+                                   uint32_t(backStencilRef_),
+                                   uint32_t(backStencilMask_),
+                                   uint32_t(backStencilWriteMask_),
+                                   uint32_t(backStencilSFail_),
+                                   uint32_t(backStencilZFail_),
+                                   uint32_t(backStencilZPass_),
+                                   (frontFace_ == FrontFace::CCW) ? 1 : 0,
+                                   fogMode_,
+                                   fogParam0_, fogParam1_,
+                                   depthBoundsTestEnable_ ? 1 : 0,
+                                   depthBoundsMin_, depthBoundsMax_,
+                                   twoSidedColor_ ? 1 : 0,
+                                   fpDepthReplace_ ? 1 : 0,
+                                   shaderWindowOrigin_,
+                                   shaderWindowHeight_,
+                                   clipPlaneControl_,
+                                   sRGBWrite_ ? 1 : 0);
     if (asyncFifo_ && stream_) {
-        // Non-blocking: free d_v after kernel completes on the stream.
-        // cudaFreeAsync is CUDA 11.2+ — fall back to event-based free.
         cudaFreeAsync(d_v, stream_);
     } else {
         cudaDeviceSynchronize();
         cudaFree(d_v);
     }
 
-    // Restore original scissor if we narrowed it for tile optimization
+    if (useTileScissor) {
+        scX_ = origScX; scY_ = origScY;
+        scW_ = origScW; scH_ = origScH;
+    }
+
+    stats.triangles += tris;
+    return tris;
+}
+
+// ─── drawTrianglesDevice: rasterize device-resident vertices ──
+// Vertices must already be transformed (screen-space) and culled.
+// hostVerts/hostCount are used ONLY for bbox computation; if null,
+// a device→host copy is done for the bbox.
+uint32_t CudaRasterizer::drawTrianglesDevice(RasterVertex* d_v, uint32_t tris,
+                                              const RasterVertex* hostVerts,
+                                              uint32_t hostCount) {
+    if (!fb_.d_color || tris == 0) return 0;
+
+    uint32_t count = tris * 3;
+
+    // Compute bounding box — need host-side vertex positions for this.
+    // If caller doesn't provide host verts, read back just positions.
+    std::vector<RasterVertex> tmpHost;
+    const RasterVertex* bboxSrc = hostVerts;
+    if (!bboxSrc || hostCount < count) {
+        tmpHost.resize(count);
+        cudaMemcpy(tmpHost.data(), d_v, count * sizeof(RasterVertex), cudaMemcpyDeviceToHost);
+        bboxSrc = tmpHost.data();
+        hostCount = count;
+    }
+
+    float bboxMinX = (float)fb_.width, bboxMinY = (float)fb_.height;
+    float bboxMaxX = 0.0f, bboxMaxY = 0.0f;
+    for (uint32_t i = 0; i < count; ++i) {
+        float vx = bboxSrc[i].x, vy = bboxSrc[i].y;
+        if (vx < bboxMinX) bboxMinX = vx;
+        if (vx > bboxMaxX) bboxMaxX = vx;
+        if (vy < bboxMinY) bboxMinY = vy;
+        if (vy > bboxMaxY) bboxMaxY = vy;
+    }
+
+    uint32_t tileX0 = (bboxMinX > 0) ? ((uint32_t)bboxMinX & ~15u) : 0;
+    uint32_t tileY0 = (bboxMinY > 0) ? ((uint32_t)bboxMinY & ~15u) : 0;
+    uint32_t tileX1 = ((uint32_t)bboxMaxX + 16u) & ~15u;
+    uint32_t tileY1 = ((uint32_t)bboxMaxY + 16u) & ~15u;
+    if (tileX1 > fb_.width)  tileX1 = fb_.width;
+    if (tileY1 > fb_.height) tileY1 = fb_.height;
+    uint32_t regionW = tileX1 - tileX0;
+    uint32_t regionH = tileY1 - tileY0;
+    if (regionW == 0 || regionH == 0) return 0;
+
+    int origScX = scX_, origScY = scY_;
+    uint32_t origScW = scW_, origScH = scH_;
+    bool useTileScissor = (regionW < fb_.width || regionH < fb_.height);
+    if (useTileScissor) {
+        int newScX = (int)tileX0, newScY = (int)tileY0;
+        uint32_t newScW = regionW, newScH = regionH;
+        if (scW_ > 0 && scH_ > 0) {
+            int x0 = (newScX > scX_) ? newScX : scX_;
+            int y0 = (newScY > scY_) ? newScY : scY_;
+            int x1 = ((newScX+(int)newScW) < (scX_+(int)scW_)) ? (newScX+(int)newScW) : (scX_+(int)scW_);
+            int y1 = ((newScY+(int)newScH) < (scY_+(int)scH_)) ? (newScY+(int)newScH) : (scY_+(int)scH_);
+            if (x1 <= x0 || y1 <= y0) return 0;
+            newScX = x0; newScY = y0;
+            newScW = (uint32_t)(x1 - x0); newScH = (uint32_t)(y1 - y0);
+        }
+        scX_ = newScX; scY_ = newScY;
+        scW_ = newScW; scH_ = newScH;
+    }
+
+    dim3 bs(16, 16);
+    dim3 gs((fb_.width + bs.x - 1) / bs.x, (fb_.height + bs.y - 1) / bs.y);
+    TexBank tb;
+    memset(&tb, 0, sizeof(tb));
+    for (int i = 0; i < MAX_TEX_UNITS; ++i) {
+        tb.tex[i] = d_tex_[i]; tb.w[i] = texW_[i]; tb.h[i] = texH_[i];
+        tb.depth[i] = texDepth_[i]; tb.remap[i] = texRemap_[i];
+        tb.wrapS[i] = wrapS_[i]; tb.wrapT[i] = wrapT_[i]; tb.wrapR[i] = wrapR_[i];
+        tb.magFilter[i] = magFilter_[i]; tb.borderColor[i] = borderColor_[i];
+        tb.dimension[i] = texDimension_[i]; tb.mipLevels[i] = (uint8_t)texMipLevels_[i];
+        tb.minFilter[i] = minFilter_[i]; tb.lodBias[i] = texLodBias_[i];
+    }
+    cudaStream_t launchStream = (asyncFifo_ && stream_) ? stream_ : nullptr;
+    k_rasterTriangles<<<gs, bs, 0, launchStream>>>(fb_.d_color, fb_.d_depth, fb_.d_stencil,
+                                   fb_.width, fb_.height,
+                                   d_v, tris,
+                                   blendEnable_ ? 1 : 0,
+                                   depthTest_ ? 1 : 0,
+                                   depthWrite_ ? 1 : 0,
+                                   uint32_t(depthFunc_),
+                                   tb,
+                                   scX_, scY_, scW_, scH_,
+                                   alphaTestEnable_ ? 1 : 0,
+                                   uint32_t(alphaRef_),
+                                   uint32_t(alphaFunc_),
+                                   colorMask_,
+                                   polyOffsetFactor_, polyOffsetUnits_,
+                                   depthClip_ ? 1 : 0,
+                                   stencilTest_ ? 1 : 0,
+                                   uint32_t(stencilFunc_),
+                                   uint32_t(stencilRef_),
+                                   uint32_t(stencilMask_),
+                                   uint32_t(stencilWriteMask_),
+                                   uint32_t(stencilSFail_),
+                                   uint32_t(stencilZFail_),
+                                   uint32_t(stencilZPass_),
+                                   uint32_t(bfSrcRGB_), uint32_t(bfDstRGB_),
+                                   uint32_t(bfSrcA_),   uint32_t(bfDstA_),
+                                   uint32_t(beRGB_),    uint32_t(beA_),
+                                   blendConstR_, blendConstG_,
+                                   blendConstB_, blendConstA_,
+                                   d_fpInsns_, fpInsnCount_,
+                                   d_fpConsts_, fpConstCount_,
+                                   d_colorB_, d_colorC_, d_colorD_,
+                                   flatShade_ ? 1 : 0,
+                                   logicOpEnable_ ? 1 : 0,
+                                   logicOp_,
+                                   ditherEnable_ ? 1 : 0,
+                                   twoSidedStencil_ ? 1 : 0,
+                                   uint32_t(backStencilFunc_),
+                                   uint32_t(backStencilRef_),
+                                   uint32_t(backStencilMask_),
+                                   uint32_t(backStencilWriteMask_),
+                                   uint32_t(backStencilSFail_),
+                                   uint32_t(backStencilZFail_),
+                                   uint32_t(backStencilZPass_),
+                                   (frontFace_ == FrontFace::CCW) ? 1 : 0,
+                                   fogMode_,
+                                   fogParam0_, fogParam1_,
+                                   depthBoundsTestEnable_ ? 1 : 0,
+                                   depthBoundsMin_, depthBoundsMax_,
+                                   twoSidedColor_ ? 1 : 0,
+                                   fpDepthReplace_ ? 1 : 0,
+                                   shaderWindowOrigin_,
+                                   shaderWindowHeight_,
+                                   clipPlaneControl_,
+                                   sRGBWrite_ ? 1 : 0);
+    if (asyncFifo_ && stream_) {
+        cudaFreeAsync(d_v, stream_);
+    } else {
+        cudaDeviceSynchronize();
+        cudaFree(d_v);
+    }
+
     if (useTileScissor) {
         scX_ = origScX; scY_ = origScY;
         scW_ = origScW; scH_ = origScH;
