@@ -104,10 +104,8 @@ __global__ void k_cullTriangles(const RasterVertex* __restrict__ in,
 
     float area = (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x);
     bool isFront = frontFaceCCW ? (area > 0) : (area < 0);
-    bool drop = false;
-    if (cullMode == 1) drop = isFront;       // Front
-    else if (cullMode == 2) drop = !isFront;  // Back
-    else if (cullMode == 3) drop = true;      // FrontAndBack
+    // Branchless cull: mode 1=front, 2=back, 3=both
+    bool drop = (cullMode == 3) | ((cullMode == 1) & isFront) | ((cullMode == 2) & !isFront);
 
     if (!drop) {
         uint32_t slot = atomicAdd(outCount, 1);
@@ -255,6 +253,7 @@ __device__ __forceinline__ void texRemap(uint16_t remap16,
     if (remap16 == 0xAAE4 || remap16 == 0) return;  // identity or unset
     float src[4] = {a, r, g, b};  // order: A=0, R=1, G=2, B=3
     float out[4];
+    #pragma unroll
     for (int ch = 0; ch < 4; ++ch) {
         uint8_t ctrl = (remap16 >> (8 + ch * 2)) & 3;
         uint8_t from = (remap16 >> (ch * 2)) & 3;

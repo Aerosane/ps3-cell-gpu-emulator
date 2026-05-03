@@ -718,11 +718,8 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
         static int gpuVPEnabled = -1;
         if (gpuVPEnabled < 0) gpuVPEnabled = (getenv("RSX_GPU_VP") && atoi(getenv("RSX_GPU_VP")) > 0) ? 1 : 0;
         if (gpuVPEnabled && count >= 3 && ensureGPUVP(s, g_vpCache)) {
-            // Count active input attributes
-            int numAttribs = 0;
-            for (int va = 0; va < 16; ++va) {
-                if (s.vertexArrays[va].enabled) numAttribs = va + 1;
-            }
+            // Count active input attributes using bitmask (highest set bit + 1)
+            int numAttribs = s.activeVAMask ? (32 - __builtin_clz((unsigned)s.activeVAMask)) : 0;
             if (numAttribs < 1) numAttribs = 1;
 
             // Prepare input vertex data as flat float4 array: count × numAttribs
