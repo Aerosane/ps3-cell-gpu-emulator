@@ -3914,9 +3914,85 @@ struct PpuHleDispatcher {
             retval = 0;
 
         // ── cellDmux extra ──────────────────────────────────────────
-        } else if (e.fnid == 0x1b8a5c6a) {  // cellDmuxQueryAttr (guess)
+        } else if (e.fnid == 0x1b8a5c6a ||  // cellDmuxQueryAttr (guess)
+                   e.fnid == 0xf19f7887) {  // cellDmuxQueryAttr
             uint32_t ptr = (uint32_t)st.gpr[4];
             if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = 0;
+
+        // ── sceNpTrophy extras ──────────────────────────────────────
+        } else if (e.fnid == 0xf036b0f5 ||  // sceNpTrophyDestroyContext
+                   e.fnid == 0xfce6d30a) {  // sceNpTrophyDestroyHandle
+            retval = 0;
+        } else if (e.fnid == 0xb397f5cc) {  // sceNpTrophyGetRequiredDiskSpace
+            // r4 = ptr to size_out
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 8 <= memSize) std::memset(mem + ptr, 0, 8);
+            retval = 0;
+        } else if (e.fnid == 0x29038ca7) {  // sceNpTrophyGetTrophyInfo
+            uint32_t ptr = (uint32_t)st.gpr[4];
+            if (ptr && ptr + 64 <= memSize) std::memset(mem + ptr, 0, 64);
+            retval = 0;
+
+        // ── cellCamera ──────────────────────────────────────────────
+        } else if (e.fnid == 0x36e1e930) {  // cellCameraInit
+            retval = 0;
+        } else if (e.fnid == 0x20f3f498) {  // cellCameraEnd
+            retval = 0;
+
+        // ── cellOskDialog ───────────────────────────────────────────
+        } else if (e.fnid == 0x7f9a95e9) {  // cellOskDialogLoadAsync
+            retval = 0;
+        } else if (e.fnid == 0x3d1e17e0) {  // cellOskDialogUnloadAsync
+            retval = 0;
+
+        // ── cellHttp (stub — no network) ────────────────────────────
+        } else if (e.fnid == 0xeb6a0568) {  // cellHttpCreateTransaction
+            retval = 0;
+        } else if (e.fnid == 0xf6f6afbe) {  // cellHttpDestroyTransaction
+            retval = 0;
+        } else if (e.fnid == 0x67254157) {  // cellHttpSendRequest
+            retval = (int32_t)0x80710002;  // CELL_HTTP_ERROR_NO_CONNECTION
+        } else if (e.fnid == 0x7e3e3ab5) {  // cellHttpRecvResponse
+            retval = (int32_t)0x80710002;
+
+        // ── cellSubDisplay ──────────────────────────────────────────
+        } else if (e.fnid == 0xba73fe08) {  // cellSubDisplayInit
+            retval = 0;
+        } else if (e.fnid == 0x551d80a5) {  // cellSubDisplayEnd
+            retval = 0;
+        } else if (e.fnid == 0x836ce1b0) {  // cellSubDisplayGetRequiredMemory
+            retval = 0;  // 0 bytes required
+
+        // ── cellAtrac (ATRAC3+ audio decoder) ───────────────────────
+        } else if (e.fnid == 0x761cb0be) {  // cellAtracCreateDecoder
+            retval = 0;
+        } else if (e.fnid == 0x2bfff084) {  // cellAtracDeleteDecoder
+            retval = 0;
+        } else if (e.fnid == 0x4f2b6e63) {  // cellAtracGetStreamDataInfo
+            retval = (int32_t)0x80610103;  // CELL_ATRAC_ERROR_EMPTY
+
+        // ── cellSsl ─────────────────────────────────────────────────
+        } else if (e.fnid == 0x571afaca ||  // cellSslCertGetSerialNumber
+                   e.fnid == 0x1b0bba65) {  // cellSslCertGetPublicKey
+            retval = (int32_t)0x80710101;  // CELL_SSL_ERROR
+
+        // ── Misc remaining stubs ────────────────────────────────────
+        } else if (e.fnid == 0x2ff6e155) {  // cellPhotoRegistFromFile
+            retval = 0;
+        } else if (e.fnid == 0x7ef67c44) {  // cellStorageDataExport
+            retval = 0;
+        } else if (e.fnid == 0x315ac861) {  // cellGameGetLocalWebContentPath
+            uint32_t ptr = (uint32_t)st.gpr[3];
+            uint32_t sz  = (uint32_t)st.gpr[4];
+            if (ptr && sz && ptr + sz <= memSize) {
+                std::memset(mem + ptr, 0, sz);
+                if (sz >= 16) std::memcpy(mem + ptr, "/dev_hdd0/web/", 14);
+            }
+            retval = 0;
+        } else if (e.fnid == 0xa2c7ba64) {  // sys_prx_exitspawn_with_level
+            retval = 0;
+        } else if (e.fnid == 0xd04c52ff) {  // sys_prx_register_library
             retval = 0;
 
         } else {
