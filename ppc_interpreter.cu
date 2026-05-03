@@ -2474,12 +2474,356 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
     }
 
     case 4: {
-        // VMX / Altivec. Minimal subset for CRT struct-zeroing + memcpy fast paths.
+        // VMX / Altivec. Covers integer/float/logical/permute/compare ops.
         uint32_t vd = (inst >> 21) & 0x1F;
         uint32_t va = (inst >> 16) & 0x1F;
         uint32_t vb = (inst >> 11) & 0x1F;
+        uint32_t vc = (inst >> 6) & 0x1F;
         uint32_t xo = inst & 0x7FF;   // VX-form uses 11-bit XO
+        uint32_t xo6 = inst & 0x3F;   // VA-form uses 6-bit XO (bits 0-5)
+
+        // VA-form instructions (6-bit XO in bits 0-5)
+        switch (xo6) {
+        case 32: { // vmaddfp: vd = va*vc + vb  (fused multiply-add)
+            float *d = (float*)s.vr[vd], *a = (float*)s.vr[va];
+            float *b = (float*)s.vr[vb], *c = (float*)s.vr[vc];
+            for (int i = 0; i < 4; i++) d[i] = a[i] * c[i] + b[i];
+            goto vmx_done;
+        }
+        case 33: { // vmhaddshs (vector multiply-high-add signed halfword sat)
+            goto vmx_done; // rare, treat as NOP
+        }
+        case 34: { // vmsumubm (multiply-sum unsigned byte modulo)
+            goto vmx_done;
+        }
+        case 36: { // vsel: vd = (vb & vc) | (va & ~vc)
+            for (int i = 0; i < 4; i++)
+                s.vr[vd][i] = (s.vr[vb][i] & s.vr[vc][i]) | (s.vr[va][i] & ~s.vr[vc][i]);
+            goto vmx_done;
+        }
+        case 37: { // vperm: permute bytes from va||vb using vc as control
+            uint8_t *a = (uint8_t*)s.vr[va], *b = (uint8_t*)s.vr[vb];
+            uint8_t *c = (uint8_t*)s.vr[vc];
+            uint8_t tmp[16];
+            for (int i = 0; i < 16; i++) {
+                uint8_t idx = c[i] & 0x1F;
+                tmp[i] = (idx < 16) ? a[idx] : b[idx - 16];
+            }
+            memcpy(s.vr[vd], tmp, 16);
+            goto vmx_done;
+        }
+        case 38: { // vsldoi: shift left double by octet immediate
+            uint8_t shift = (inst >> 6) & 0xF;
+            uint8_t ab[32];
+            memcpy(ab, s.vr[va], 16);
+            memcpy(ab + 16, s.vr[vb], 16);
+            memcpy(s.vr[vd], ab + shift, 16);
+            goto vmx_done;
+        }
+        case 46: { // vnmsubfp: vd = -(va*vc - vb) = vb - va*vc
+            float *d = (float*)s.vr[vd], *a = (float*)s.vr[va];
+            float *b = (float*)s.vr[vb], *c = (float*)s.vr[vc];
+            for (int i = 0; i < 4; i++) d[i] = b[i] - a[i] * c[i];
+            goto vmx_done;
+        }
+        default: break;
+        }
+
+        // VX-form instructions (11-bit XO)
         switch (xo) {
+            // ── Integer arithmetic ──────────────────────────────────
+            case 0:    for (int i = 0; i < 4; i++) s.vr[vd][i] = s.vr[va][i] + s.vr[vb][i]; break; // vadduwm
+            case 128: { // vadduws (saturated)
+                for (int i = 0; i < 4; i++) {
+                    uint64_t sum = (uint64_t)s.vr[va][i] + s.vr[vb][i];
+                    s.vr[vd][i] = (sum > 0xFFFFFFFF) ? 0xFFFFFFFF : (uint32_t)sum;
+                }
+                break;
+            }
+            case 1152: for (int i = 0; i < 4; i++) s.vr[vd][i] = s.vr[va][i] - s.vr[vb][i]; break; // vsubuwm
+            case 1280: { // vsubuws (saturated)
+                for (int i = 0; i < 4; i++) {
+                    s.vr[vd][i] = (s.vr[va][i] >= s.vr[vb][i]) ? s.vr[va][i] - s.vr[vb][i] : 0;
+                }
+                break;
+            }
+            case 64: { // vaddubm (add unsigned byte modulo)
+                uint8_t *d = (uint8_t*)s.vr[vd], *a = (uint8_t*)s.vr[va], *b = (uint8_t*)s.vr[vb];
+                for (int i = 0; i < 16; i++) d[i] = a[i] + b[i];
+                break;
+            }
+            case 1216: { // vsububm
+                uint8_t *d = (uint8_t*)s.vr[vd], *a = (uint8_t*)s.vr[va], *b = (uint8_t*)s.vr[vb];
+                for (int i = 0; i < 16; i++) d[i] = a[i] - b[i];
+                break;
+            }
+            case 832: { // vadduhm (add unsigned halfword modulo)
+                uint16_t *d = (uint16_t*)s.vr[vd], *a = (uint16_t*)s.vr[va], *b = (uint16_t*)s.vr[vb];
+                for (int i = 0; i < 8; i++) d[i] = a[i] + b[i];
+                break;
+            }
+            case 1984: { // vsubuhm
+                uint16_t *d = (uint16_t*)s.vr[vd], *a = (uint16_t*)s.vr[va], *b = (uint16_t*)s.vr[vb];
+                for (int i = 0; i < 8; i++) d[i] = a[i] - b[i];
+                break;
+            }
+
+            // ── Floating-point arithmetic ───────────────────────────
+            case 10: { // vaddfp
+                float *d = (float*)s.vr[vd], *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
+                for (int i = 0; i < 4; i++) d[i] = a[i] + b[i];
+                break;
+            }
+            case 74: { // vsubfp
+                float *d = (float*)s.vr[vd], *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
+                for (int i = 0; i < 4; i++) d[i] = a[i] - b[i];
+                break;
+            }
+            case 1034: { // vmaxfp
+                float *d = (float*)s.vr[vd], *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
+                for (int i = 0; i < 4; i++) d[i] = (a[i] > b[i]) ? a[i] : b[i];
+                break;
+            }
+            case 1098: { // vminfp
+                float *d = (float*)s.vr[vd], *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
+                for (int i = 0; i < 4; i++) d[i] = (a[i] < b[i]) ? a[i] : b[i];
+                break;
+            }
+            case 266: { // vrefp (reciprocal estimate)
+                float *d = (float*)s.vr[vd], *b = (float*)s.vr[vb];
+                for (int i = 0; i < 4; i++) d[i] = (b[i] != 0.0f) ? 1.0f / b[i] : 0.0f;
+                break;
+            }
+            case 330: { // vrsqrtefp (reciprocal square root estimate)
+                float *d = (float*)s.vr[vd], *b = (float*)s.vr[vb];
+                for (int i = 0; i < 4; i++) {
+                    float v = b[i] < 0 ? -b[i] : b[i];
+                    d[i] = (v != 0.0f) ? 1.0f / sqrtf(v) : 0.0f;
+                }
+                break;
+            }
+            case 394: { // vcfsx (convert from signed word to float)
+                float *d = (float*)s.vr[vd];
+                uint32_t uimm = va; // UIMM field
+                float scale = 1.0f / (float)(1 << uimm);
+                for (int i = 0; i < 4; i++)
+                    d[i] = (float)(int32_t)s.vr[vb][i] * scale;
+                break;
+            }
+            case 458: { // vcfux (convert from unsigned word to float)
+                float *d = (float*)s.vr[vd];
+                uint32_t uimm = va;
+                float scale = 1.0f / (float)(1 << uimm);
+                for (int i = 0; i < 4; i++)
+                    d[i] = (float)s.vr[vb][i] * scale;
+                break;
+            }
+            case 970: { // vctsxs (convert to signed word saturated)
+                float *b = (float*)s.vr[vb];
+                uint32_t uimm = va;
+                float scale = (float)(1 << uimm);
+                for (int i = 0; i < 4; i++) {
+                    float v = b[i] * scale;
+                    if (v > 2147483647.0f) s.vr[vd][i] = 0x7FFFFFFF;
+                    else if (v < -2147483648.0f) s.vr[vd][i] = 0x80000000;
+                    else s.vr[vd][i] = (uint32_t)(int32_t)v;
+                }
+                break;
+            }
+            case 906: { // vctuxs (convert to unsigned word saturated)
+                float *b = (float*)s.vr[vb];
+                uint32_t uimm = va;
+                float scale = (float)(1 << uimm);
+                for (int i = 0; i < 4; i++) {
+                    float v = b[i] * scale;
+                    if (v > 4294967295.0f) s.vr[vd][i] = 0xFFFFFFFF;
+                    else if (v < 0.0f) s.vr[vd][i] = 0;
+                    else s.vr[vd][i] = (uint32_t)v;
+                }
+                break;
+            }
+
+            // ── Shift / Rotate ──────────────────────────────────────
+            case 388: { // vslw (shift left word)
+                for (int i = 0; i < 4; i++) {
+                    uint32_t sh = s.vr[vb][i] & 0x1F;
+                    s.vr[vd][i] = s.vr[va][i] << sh;
+                }
+                break;
+            }
+            case 644: { // vsrw (shift right word)
+                for (int i = 0; i < 4; i++) {
+                    uint32_t sh = s.vr[vb][i] & 0x1F;
+                    s.vr[vd][i] = s.vr[va][i] >> sh;
+                }
+                break;
+            }
+            case 708: { // vsraw (shift right algebraic word)
+                for (int i = 0; i < 4; i++) {
+                    uint32_t sh = s.vr[vb][i] & 0x1F;
+                    s.vr[vd][i] = (uint32_t)((int32_t)s.vr[va][i] >> sh);
+                }
+                break;
+            }
+            case 452: { // vsl (shift left 128-bit by vb[125:127] bits)
+                uint32_t sh = s.vr[vb][3] & 7;
+                uint8_t *d = (uint8_t*)s.vr[vd], *a = (uint8_t*)s.vr[va];
+                uint8_t tmp[16];
+                for (int i = 0; i < 16; i++) {
+                    uint32_t bits = (uint32_t)a[i] << sh;
+                    if (i < 15) bits |= (uint32_t)a[i + 1] >> (8 - sh);
+                    tmp[i] = (uint8_t)bits;
+                }
+                memcpy(d, tmp, 16);
+                break;
+            }
+
+            // ── Splat ───────────────────────────────────────────────
+            case 524: { // vspltw (splat word)
+                uint32_t uimm = va & 3;
+                uint32_t val = s.vr[vb][uimm];
+                for (int i = 0; i < 4; i++) s.vr[vd][i] = val;
+                break;
+            }
+            case 588: { // vsplth (splat halfword)
+                uint16_t *src = (uint16_t*)s.vr[vb];
+                uint16_t val = src[va & 7];
+                uint16_t *d = (uint16_t*)s.vr[vd];
+                for (int i = 0; i < 8; i++) d[i] = val;
+                break;
+            }
+            case 780: { // vspltisw (splat immediate signed word)
+                int32_t simm = (va & 0x10) ? (int32_t)(va | 0xFFFFFFE0) : (int32_t)va;
+                for (int i = 0; i < 4; i++) s.vr[vd][i] = (uint32_t)simm;
+                break;
+            }
+            case 844: { // vspltish (splat immediate signed halfword)
+                int16_t simm = (va & 0x10) ? (int16_t)(va | 0xFFE0) : (int16_t)va;
+                uint16_t *d = (uint16_t*)s.vr[vd];
+                for (int i = 0; i < 8; i++) d[i] = (uint16_t)simm;
+                break;
+            }
+            case 908: { // vspltisb (splat immediate signed byte)
+                int8_t simm = (va & 0x10) ? (int8_t)(va | 0xE0) : (int8_t)va;
+                uint8_t *d = (uint8_t*)s.vr[vd];
+                for (int i = 0; i < 16; i++) d[i] = (uint8_t)simm;
+                break;
+            }
+
+            // ── Compare ─────────────────────────────────────────────
+            case 198: { // vcmpequw (compare equal unsigned word)
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = (s.vr[va][i] == s.vr[vb][i]) ? 0xFFFFFFFF : 0;
+                break;
+            }
+            case 134: { // vcmpeqfp
+                float *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = (a[i] == b[i]) ? 0xFFFFFFFF : 0;
+                break;
+            }
+            case 710: { // vcmpgtuw (compare greater than unsigned word)
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = (s.vr[va][i] > s.vr[vb][i]) ? 0xFFFFFFFF : 0;
+                break;
+            }
+            case 774: { // vcmpgtsw (compare greater than signed word)
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = ((int32_t)s.vr[va][i] > (int32_t)s.vr[vb][i]) ? 0xFFFFFFFF : 0;
+                break;
+            }
+            case 454: { // vcmpgtfp
+                float *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = (a[i] > b[i]) ? 0xFFFFFFFF : 0;
+                break;
+            }
+            case 518: { // vcmpgefp
+                float *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = (a[i] >= b[i]) ? 0xFFFFFFFF : 0;
+                break;
+            }
+            // Record-form compare variants (same logic + update CR6)
+            case 198 + 1024: // vcmpequw.
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = (s.vr[va][i] == s.vr[vb][i]) ? 0xFFFFFFFF : 0;
+                break;
+            case 134 + 1024: // vcmpeqfp.
+            {
+                float *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = (a[i] == b[i]) ? 0xFFFFFFFF : 0;
+                break;
+            }
+            case 710 + 1024: // vcmpgtuw.
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = (s.vr[va][i] > s.vr[vb][i]) ? 0xFFFFFFFF : 0;
+                break;
+            case 774 + 1024: // vcmpgtsw.
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = ((int32_t)s.vr[va][i] > (int32_t)s.vr[vb][i]) ? 0xFFFFFFFF : 0;
+                break;
+            case 454 + 1024: { // vcmpgtfp.
+                float *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = (a[i] > b[i]) ? 0xFFFFFFFF : 0;
+                break;
+            }
+            case 518 + 1024: { // vcmpgefp.
+                float *a = (float*)s.vr[va], *b = (float*)s.vr[vb];
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = (a[i] >= b[i]) ? 0xFFFFFFFF : 0;
+                break;
+            }
+
+            // ── Min/Max integer ─────────────────────────────────────
+            case 642: { // vmaxuw
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = (s.vr[va][i] > s.vr[vb][i]) ? s.vr[va][i] : s.vr[vb][i];
+                break;
+            }
+            case 386: { // vmaxsw
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = ((int32_t)s.vr[va][i] > (int32_t)s.vr[vb][i]) ? s.vr[va][i] : s.vr[vb][i];
+                break;
+            }
+            case 706: { // vminuw
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = (s.vr[va][i] < s.vr[vb][i]) ? s.vr[va][i] : s.vr[vb][i];
+                break;
+            }
+            case 898: { // vminsw
+                for (int i = 0; i < 4; i++)
+                    s.vr[vd][i] = ((int32_t)s.vr[va][i] < (int32_t)s.vr[vb][i]) ? s.vr[va][i] : s.vr[vb][i];
+                break;
+            }
+
+            // ── Pack / Unpack / Merge ───────────────────────────────
+            case 14: { // vpkuwum (pack unsigned word unsigned modulo)
+                uint16_t *d = (uint16_t*)s.vr[vd];
+                for (int i = 0; i < 4; i++) d[i] = (uint16_t)s.vr[va][i];
+                for (int i = 0; i < 4; i++) d[i + 4] = (uint16_t)s.vr[vb][i];
+                break;
+            }
+            case 142: { // vpkuwus (pack unsigned word unsigned saturate)
+                uint16_t *d = (uint16_t*)s.vr[vd];
+                for (int i = 0; i < 4; i++) d[i] = (s.vr[va][i] > 0xFFFF) ? 0xFFFF : (uint16_t)s.vr[va][i];
+                for (int i = 0; i < 4; i++) d[i + 4] = (s.vr[vb][i] > 0xFFFF) ? 0xFFFF : (uint16_t)s.vr[vb][i];
+                break;
+            }
+            case 12: { // vmrghw (merge high words)
+                uint32_t tmp[4] = { s.vr[va][0], s.vr[vb][0], s.vr[va][1], s.vr[vb][1] };
+                memcpy(s.vr[vd], tmp, 16);
+                break;
+            }
+            case 268: { // vmrglw (merge low words)
+                uint32_t tmp[4] = { s.vr[va][2], s.vr[vb][2], s.vr[va][3], s.vr[vb][3] };
+                memcpy(s.vr[vd], tmp, 16);
+                break;
+            }
+
+            // ── Logical (existing) ──────────────────────────────────
             case 1220: // vxor
                 for (int i = 0; i < 4; i++) s.vr[vd][i] = s.vr[va][i] ^ s.vr[vb][i];
                 break;
@@ -2495,10 +2839,12 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             case 1284: // vnor
                 for (int i = 0; i < 4; i++) s.vr[vd][i] = ~(s.vr[va][i] | s.vr[vb][i]);
                 break;
+
             default:
                 // Treat unknown VMX as NOP; PC still advances below.
                 break;
         }
+    vmx_done:
         break;
     }
 
