@@ -114,6 +114,6 @@ Phase 2c — Turbo JIT (register promotion + SPURS):
 
 ## Lineage
 
-Architectural patterns borrowed from the [VK_RT](../VK_RT/) Vulkan interception
+Architectural patterns borrowed from the [VK_RT](https://github.com/Aerosane/vk-rt-cuda-raytracing) Vulkan interception
 layer — specifically `rt_ir_exec.cu`'s per-thread slot bank + switch dispatch loop,
 and the CUDA↔Vulkan fd-import interop pipeline.
