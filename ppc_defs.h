@@ -253,6 +253,8 @@ enum XO31 : uint32_t {
     XO_LHZUX   = 311,
     XO_XOR     = 316,
     XO_MFSPR   = 339,
+    XO_POPCNTB = 122,   // Population Count Bytes
+    XO_POPCNTW = 378,   // Population Count Words
     XO_LWAX    = 341,    // Load Word Algebraic Indexed
     XO_LHAX    = 343,
     XO_MFTB    = 371,    // Move From Time Base

@@ -36,6 +36,14 @@ struct GPUVPCache {
 
 static GPUVPCache g_vpCache;
 
+// FP decode cache — skip full FP decode when fpOffset+content unchanged
+struct FPCache {
+    uint32_t offset{0};
+    uint64_t hash{0};
+    bool     valid{false};
+};
+static FPCache g_fpCache;
+
 static uint64_t fnv1a_hash(const uint32_t* data, size_t count) {
     uint64_t h = 14695981039346656037ULL;
     const uint8_t* p = reinterpret_cast<const uint8_t*>(data);
@@ -1121,6 +1129,17 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
             uint32_t fpMaxWords = (uint32_t)((vramSize_ - fpOff) / 4);
             if (fpMaxWords > 16384) fpMaxWords = 16384;
 
+            // Skip full FP decode when program hasn't changed
+            bool fpNeedDecode = true;
+            if (!s.fpDirty && g_fpCache.valid && g_fpCache.offset == fpOff) {
+                // Quick hash check on first 256 words (1KB sample)
+                uint32_t hashWords = (fpMaxWords < 256) ? fpMaxWords : 256;
+                uint64_t h = fnv1a_hash(fpData, hashWords);
+                if (h == g_fpCache.hash) fpNeedDecode = false;
+            }
+
+            if (fpNeedDecode) {
+
             // Decode and pack FP instructions.
             // RSX FP embeds constants inline: when any source uses type=CONST,
             // the next 4 words after that instruction are the constant's 4 floats
@@ -1265,6 +1284,14 @@ void RasterBridge::onDrawArrays(const RSXState& s, uint32_t first, uint32_t coun
                                           constCount > 0 ? fpConstants.data() : nullptr,
                                           constCount);
             }
+
+            // Update FP cache
+            uint32_t hashWords = (fpMaxWords < 256) ? fpMaxWords : 256;
+            g_fpCache.offset = fpOff;
+            g_fpCache.hash   = fnv1a_hash(fpData, hashWords);
+            g_fpCache.valid  = true;
+            const_cast<rsx::RSXState&>(s).fpDirty = false;
+            } // end fpNeedDecode
         }
     }
 

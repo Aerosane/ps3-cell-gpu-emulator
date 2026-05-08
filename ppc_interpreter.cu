@@ -1577,6 +1577,23 @@ __device__ static int execOne(PPEState& s, uint8_t* mem,
             if (RC(inst)) setCRField64(s.cr, 0, (int64_t)s.gpr[ra], s.xer);
             break;
         }
+        case XO_POPCNTB: {
+            // Population count per byte: each byte replaced by its popcount
+            uint64_t v = s.gpr[rd], r = 0;
+            for (int i = 0; i < 8; ++i) {
+                uint32_t b = (v >> (i * 8)) & 0xFF;
+                r |= (uint64_t)__popc(b) << (i * 8);
+            }
+            s.gpr[ra] = r;
+            break;
+        }
+        case XO_POPCNTW: {
+            // Population count per word: each 32-bit word replaced by its popcount
+            uint32_t lo = __popc((uint32_t)s.gpr[rd]);
+            uint32_t hi = __popc((uint32_t)(s.gpr[rd] >> 32));
+            s.gpr[ra] = ((uint64_t)hi << 32) | lo;
+            break;
+        }
 
         // ── 32-bit Shifts ──────────────────────────────────────
         case XO_SLW: {

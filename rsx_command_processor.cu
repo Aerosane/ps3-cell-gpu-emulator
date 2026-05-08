@@ -696,6 +696,7 @@ static void dispatchMethod(RSXState* state, uint8_t* vram,
     case NV4097_SET_SHADER_PROGRAM:
         state->fpOffset  = data & 0xFFFFFFF0;  // bits [31:4] = offset
         state->fpControl = data & 0x0F;
+        state->fpDirty   = true;
         return;
     case NV4097_SET_SHADER_WINDOW:
         state->shaderWindow = data;
